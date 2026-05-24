@@ -158,3 +158,72 @@ fed there is the **normalized correlation** form (`1/sqrt(diag)`
 scaling), not the raw error matrix.
 """
 sym_eigvals(S::Symmetric{Float64,Matrix{Float64}}) = eigvals(S)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Symmetric utilities used by the DFP update + EDM estimator
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    sum_sym(S) -> Float64
+
+Sum of *unique* elements of a symmetric matrix — the authoritative
+triangle plus diagonal. Equivalent to C++ Minuit2's
+`sum_of_elements(LASymMatrix)` (the packed-lower variant): both sum
+the n(n+1)/2 mathematically-distinct entries.
+
+NOT the same as `sum(parent(S))`, because `parent(S)` may carry
+garbage in the non-authoritative triangle after `BLAS.syr!` /
+`sym_rank1_update!` writes.
+
+Used by `DavidonErrorUpdator` (Phase 0 day 13–18) for the
+`dcov = 0.5·(prev + sum_upd/sum_newV)` quality estimator.
+"""
+function sum_sym(S::Symmetric{Float64,Matrix{Float64}})
+    M = parent(S)
+    n = size(M, 1)
+    s = 0.0
+    if S.uplo == 'U'
+        @inbounds for j in 1:n, i in 1:j
+            s += M[i, j]
+        end
+    else
+        @inbounds for j in 1:n, i in j:n
+            s += M[i, j]
+        end
+    end
+    return s
+end
+
+"""
+    add_sym!(A, B) -> A
+
+In-place add of two `Symmetric{Float64,Matrix{Float64}}` matrices:
+`A ← A + B`. Only the authoritative triangle is touched on each side
+(the non-authoritative triangle of the parent matrices may differ;
+Symmetric still reads correctly).
+
+Both matrices must share the same `uplo`. Used by
+`DavidonErrorUpdator` for the `vUpd += V` step.
+"""
+function add_sym!(
+    A::Symmetric{Float64,Matrix{Float64}},
+    B::Symmetric{Float64,Matrix{Float64}},
+)
+    A.uplo == B.uplo ||
+        throw(ArgumentError("triangle mismatch: A.uplo=$(A.uplo), B.uplo=$(B.uplo)"))
+    MA = parent(A)
+    MB = parent(B)
+    n = LinearAlgebra.checksquare(MA)
+    LinearAlgebra.checksquare(MB) == n ||
+        throw(DimensionMismatch("size(A)=$n vs size(B)=$(LinearAlgebra.checksquare(MB))"))
+    if A.uplo == 'U'
+        @inbounds for j in 1:n, i in 1:j
+            MA[i, j] += MB[i, j]
+        end
+    else
+        @inbounds for j in 1:n, i in j:n
+            MA[i, j] += MB[i, j]
+        end
+    end
+    return A
+end

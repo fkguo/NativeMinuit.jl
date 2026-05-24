@@ -32,6 +32,8 @@ include("state.jl")
 include("fcn.jl")
 include("linalg.jl")
 include("gradient.jl")
+include("davidon.jl")
+include("edm.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
@@ -46,5 +48,6 @@ export is_made_pos_def, hesse_failed, invert_failed, is_available
 export has_parameters, has_covariance, fval, edm, nfcn
 export initial_gradient, initial_gradient!
 export numerical_gradient, numerical_gradient!
+export estimate_edm, estimate_edm!
 
 end # module JuMinuit

@@ -10,4 +10,6 @@ using Test
     include("test_fcn.jl")
     include("test_linalg.jl")
     include("test_gradient.jl")
+    include("test_davidon.jl")
+    include("test_edm.jl")
 end
