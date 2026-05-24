@@ -31,6 +31,7 @@ include("strategy.jl")
 include("state.jl")
 include("fcn.jl")
 include("linalg.jl")
+include("gradient.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
@@ -43,5 +44,7 @@ export ncalls, reset_ncalls!, errordef
 export is_valid, has_step_size, is_analytical, is_accurate, is_pos_def
 export is_made_pos_def, hesse_failed, invert_failed, is_available
 export has_parameters, has_covariance, fval, edm, nfcn
+export initial_gradient, initial_gradient!
+export numerical_gradient, numerical_gradient!
 
 end # module JuMinuit

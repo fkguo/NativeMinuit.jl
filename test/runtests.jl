@@ -9,4 +9,5 @@ using Test
     include("test_state.jl")
     include("test_fcn.jl")
     include("test_linalg.jl")
+    include("test_gradient.jl")
 end
