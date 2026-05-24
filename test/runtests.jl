@@ -8,4 +8,5 @@ using Test
     include("test_strategy.jl")
     include("test_state.jl")
     include("test_fcn.jl")
+    include("test_linalg.jl")
 end

@@ -30,6 +30,7 @@ include("precision.jl")
 include("strategy.jl")
 include("state.jl")
 include("fcn.jl")
+include("linalg.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
