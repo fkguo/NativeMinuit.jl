@@ -838,17 +838,10 @@ ends.
   CI badge. The ≤ 1.5× claim is reproducible only against this
   baseline. **Suggestion**: pick an x86_64 Linux machine the user owns
   + an Apple Silicon dev laptop as the two pinned environments.
-- **Q11 License — LGPL 2.1 (literal port) vs MIT (clean-room from
-  algorithmic descriptions)**. C++ Minuit2 is LGPL 2.1. A line-by-line
-  port creates derivative work that may require LGPL compatibility,
-  which is unusual for Julia packages (typical: MIT). Options:
-  (a) accept LGPL 2.1 for JuMinuit.jl;
-  (b) clean-room from the FORTRAN-Minuit / MIGRAD papers
-  (Fred James 1975) and the iminuit Python sources only, avoiding the
-  C++ source — but the C++ remains the only complete numerical oracle;
-  (c) consult with copyright counsel.
-  **Blocking before Phase 0 code lands** — affects every file under
-  `src/`.
+- **Q11 License — [DECIDED 2026-05-25: LGPL 2.1+]**. Mirrors upstream
+  C++ Minuit2. See DR-010 in `docs/DESIGN.md`. `LICENSE` file added
+  (full LGPL 2.1 text); every Julia source carries `# SPDX-License-
+  Identifier: LGPL-2.1-or-later`.
 - **Q12 Phase 1 trace mechanism**. The line-by-line iteration-
   equivalence test (Phase 1 exit) needs C++ traces. Options:
   (a) `MnTraceObject` (requires CMake rebuild + minor C++);

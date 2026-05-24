@@ -162,23 +162,34 @@ trace explicit about it; matches the spirit of the C++ default
 
 ---
 
-## (Open) DR-010: License — LGPL 2.1 vs MIT
+## DR-010: License — LGPL 2.1+ — DECIDED 2026-05-25
 
-**Context**: ROADMAP § 10 Q13. C++ Minuit2 is LGPL 2.1. A literal line-
-by-line port creates derivative work; Julia ecosystem default is MIT.
+**Context**: ROADMAP § 10 Q13. C++ Minuit2 is LGPL 2.1+ (`reference/
+Minuit2_cpp/inc/Minuit2/*.h` headers carry `version 2.1 of the License,
+or (at your option) any later version`). A line-by-line port creates
+derivative work under copyright translation doctrine.
 
-**Status**: open. Requires user decision before src/ code lands.
+**Decision**: **LGPL 2.1 or later** for JuMinuit.jl. Mirrors upstream.
 
-**Options under consideration**:
-- (a) LGPL 2.1 for JuMinuit.jl (preserves derivative-work rules)
-- (b) Clean-room from FORTRAN Minuit paper (James 1975) + iminuit Python
-  source only, NOT reading the C++ — but the C++ remains the only
-  complete numerical oracle
-- (c) Mixed: oracle data via C++ build (gitignored, not redistributed),
-  Julia source written from algorithmic descriptions
+**Why not MIT**: would require clean-room rewrite from FORTRAN-Minuit
+paper (James 1975) + iminuit Python sources without reading the C++ —
+weeks of work, and the C++ remains the only complete numerical oracle
+for the test suite anyway. LGPL's only real Julia-ecosystem cost is
+"cannot be vendored into MIT package source" — JuMinuit.jl is a
+standalone package, so this is moot. iminuit/IMinuit.jl user code
+remains unaffected (LGPL does not infect dependents).
 
-**Blocks**: Phase 0 src/ code. Reference data generation is unblocked
-since reference data is computed output, not source.
+**Consequences**:
+- `LICENSE` file is the full GNU LGPL 2.1 text (copied from upstream
+  `reference/Minuit2_cpp/LGPL2_1.txt`).
+- Every Julia source file under `src/` and `test/` carries a SPDX
+  header: `# SPDX-License-Identifier: LGPL-2.1-or-later`.
+- Bumping to LGPL 3.0+ is permitted by the "or later" clause but
+  should be a user-confirmed decision.
+
+**Revisit when**: A user submits a use case where LGPL blocks them in
+a way MIT wouldn't, AND the relicense is feasible (would require
+consent from all contributors at relicense time).
 
 ---
 
