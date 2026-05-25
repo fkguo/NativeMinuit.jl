@@ -40,6 +40,19 @@ sin/sqrt transform via [`Transformation`](@ref) on the same call boundary.
   see a clear runtime error at first call, not silent type instability
   in the MIGRAD inner loop.
 
+# Aliasing contract
+
+The argument vector `x` passed to your FCN is a **borrowed reference**
+to JuMinuit's internal workspace. The same `Vector{Float64}` instance
+is reused across line-search and gradient-calculation calls within a
+single MIGRAD iteration. Your FCN MUST NOT:
+
+- **Retain** the vector (e.g. push into a captured array). It will be
+  overwritten by the next call.
+- **Mutate** the vector. Treat it as read-only.
+
+If you need the values later, copy them: `xcopy = copy(x)`.
+
 # Examples
 
 ```julia

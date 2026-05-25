@@ -137,16 +137,15 @@ function negative_g2_line_search(
                 step[i] *= pp.x
                 x[i] += step[i]
                 fval = pp.y
-                # Recompute the full gradient at the new point
+                # Recompute the full gradient at the new point. Reuse
+                # `work_g` as both the previous-gradient input and the output
+                # (numerical_gradient! uses copyto! for the prev-fields,
+                # which is a safe no-op for `prev === out` aliasing — verified
+                # at src/gradient.jl:186-188). Parallel-review #2 C4 — saves
+                # one fresh FunctionGradient allocation per inner fix.
                 new_par = MinimumParameters(x, fval)
-                new_grad = FunctionGradient(zeros(n), zeros(n), zeros(n))
-                numerical_gradient!(new_grad, x_work, new_par, work_g,
+                numerical_gradient!(work_g, x_work, new_par, work_g,
                                      cf, strategy, prec)
-                # Move the refreshed gradient into work_g (preserve
-                # workspace ownership for subsequent inner iters).
-                copyto!(work_g.grad,  new_grad.grad)
-                copyto!(work_g.g2,    new_grad.g2)
-                copyto!(work_g.gstep, new_grad.gstep)
                 iterate_flag = true
                 break
             end

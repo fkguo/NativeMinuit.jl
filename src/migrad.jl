@@ -98,8 +98,25 @@ function _migrad_loop(
 )
     n = length(seed)
 
-    # Tolerance multiplier matches C++ VariableMetricBuilder.cxx:66 exactly.
-    edmval = Float64(tol) * 0.002
+    # Tolerance handling matches C++ exactly:
+    # - ModularFunctionMinimizer.cxx:175 scales by Up()
+    #   then floors at MnMachinePrecision().Eps2().
+    # - VariableMetricBuilder.cxx:66 multiplies by 0.002.
+    edmval = Float64(tol) * Float64(cf.up)
+    if edmval < prec.eps2
+        edmval = prec.eps2
+    end
+    edmval *= 0.002
+
+    # Pre-loop call-limit check (matches C++ ModularFunctionMinimizer.cxx:182-187:
+    # "Stop before iterating - call limit already exceeded").
+    if ncalls(cf) >= maxfcn
+        return FunctionMinimum(
+            seed, seed, cf.up;
+            is_valid = false,
+            reached_call_limit = true,
+        )
+    end
 
     if n == 0
         return FunctionMinimum(seed, seed, cf.up; is_valid = false)
@@ -191,7 +208,11 @@ function _migrad_loop(
         new_V = Symmetric(copy(parent(s0.error.inv_hessian)), :U)
         new_dcov, _ = davidon_update!(new_V, dx, dg, s0.error.dcovar,
                                        vg_work, vUpd_work)
-        new_err = MinimumError(new_V, new_dcov, s0.error.status, true)
+        # Reset status to MnHesseValid (matches C++ DavidonErrorUpdator.cxx:67-72
+        # which constructs MinimumError(vUpd, dcov) — the regular dcov ctor,
+        # not the tag ctor, so status implicitly clears to valid). Without this
+        # reset, a transient MnMadePosDef from earlier sticks indefinitely.
+        new_err = MinimumError(new_V, new_dcov, MnHesseValid, true)
 
         # ── Step 9: build new state, correct edm
         s0 = MinimumState(new_par, new_err, new_grad, new_edm, ncalls(cf))
@@ -200,7 +221,10 @@ function _migrad_loop(
 
     # ── Determine final status
     final = s0
-    reached_limit = ncalls(cf) >= maxfcn && edm_corrected > edmval
+    # C++ VariableMetricBuilder.cxx:350 marks reached-call-limit UNCONDITIONALLY
+    # when nfcn ≥ maxfcn — even if EDM happens to be at convergence. Drop the
+    # v1 AND-gate with edm_corrected > edmval (parallel-review #2 E5).
+    reached_limit = ncalls(cf) >= maxfcn
     above_max = edm_corrected > 10 * edmval
 
     is_valid_final = !reached_limit && !above_max && is_valid(final)

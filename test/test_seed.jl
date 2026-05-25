@@ -64,10 +64,9 @@
 
     @testset "Type stability" begin
         cf = CostFunction(x -> sum(abs2, x))
-        # Note: not @inferred-clean for ALL cases because the function
-        # may take the negative_g2 branch which returns from a different
-        # constructor path; but for the no-negative-g2 case it should be.
-        st = seed_state(cf, [1.0, 2.0], [0.1, 0.1])
-        @test st isa MinimumState
+        # @inferred-clean on the no-negative-g2 path (Quad FCN, g2 = 2 > 0).
+        # parallel-review #2 D4 — without this, a Symbol-typed return path
+        # could sneak in and be invisible to the non-inferred test.
+        @test (@inferred seed_state(cf, [1.0, 2.0], [0.1, 0.1])) isa MinimumState
     end
 end

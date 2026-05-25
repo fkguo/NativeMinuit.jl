@@ -196,15 +196,29 @@ function MinimumError(M::AbstractMatrix{<:Real}, status::CovStatus)
     n = LinearAlgebra.checksquare(M)
     sm = M isa Symmetric ? convert(Symmetric{Float64,Matrix{Float64}}, M) :
                            Symmetric(Matrix{Float64}(M), :U)
-    MinimumError(sm, 0.0, status, true)
+    # C++ BasicMinimumError tag constructors all set fDCovar = 1.0 (see
+    # reference/Minuit2_cpp/inc/Minuit2/BasicMinimumError.h:55-75). This
+    # propagates into the EDM correction `edm *= (1 + 3·dcov)` which makes
+    # MIGRAD iterate harder after a MnPosDef event. v1 of state.jl
+    # incorrectly set dcov=0.0 here (codex/Opus parallel-review #2 A1).
+    MinimumError(sm, 1.0, status, true)
 end
 
-# Derived predicates — mirror C++ MinimumError accessors line-for-line
-# (reference/Minuit2_cpp/inc/Minuit2/MinimumError.h:66–72).
+# Derived predicates — mirror C++ BasicMinimumError accessors line-for-line
+# (reference/Minuit2_cpp/inc/Minuit2/BasicMinimumError.h:55-75 tag ctors
+# determine the per-status (fValid, fPosDef) pairs; review #2 A1).
+#
+# Status   → fValid  fPosDef  fMadePosDef  fHesseFailed  fInvertFailed
+# Valid    → true    true     false        false         false
+# Hesse-F  → false   false    false        true          false
+# MadePD   → true    false    true         false         false
+# InvertF  → false   true     false        false         true
+# NotPD    → false   false    false        false         false
 is_valid(e::MinimumError) =
-    e.available && e.status != MnInvertFailed && e.status != MnNotPosDef
-is_accurate(e::MinimumError) = e.status == MnHesseValid && e.available
-is_pos_def(e::MinimumError) = e.status != MnNotPosDef && is_valid(e)
+    e.available && (e.status == MnHesseValid || e.status == MnMadePosDef)
+is_accurate(e::MinimumError) = e.dcovar < 0.1
+is_pos_def(e::MinimumError) =
+    e.available && (e.status == MnHesseValid || e.status == MnInvertFailed)
 is_made_pos_def(e::MinimumError) = e.status == MnMadePosDef
 hesse_failed(e::MinimumError) = e.status == MnHesseFailed
 invert_failed(e::MinimumError) = e.status == MnInvertFailed

@@ -128,24 +128,37 @@ using LinearAlgebra: Symmetric
         # Symmetric inv_hessian: writing the wrapper reads symmetrically
         @test e_ok.inv_hessian[1, 2] == e_ok.inv_hessian[2, 1]
 
-        # Failure modes
+        # Failure modes — predicates match C++ BasicMinimumError tag-ctor
+        # semantics (parallel-review #2 A1). Per BasicMinimumError.h:55-75:
+        # tag (fValid, fPosDef, fDCovar):
+        #   MnHesseFailed   (false, false, 1.0)
+        #   MnMadePosDef    (true,  false, 1.0)
+        #   MnInvertFailed  (false, true,  1.0)
+        #   MnNotPosDef     (false, false, 1.0)
         e_hesse_failed = MinimumError(M, MnHesseFailed)
         @test hesse_failed(e_hesse_failed)
-        @test !is_accurate(e_hesse_failed)
-        @test is_valid(e_hesse_failed)  # still valid; just inaccurate
+        @test !is_valid(e_hesse_failed)   # fValid=false per C++
+        @test !is_pos_def(e_hesse_failed) # fPosDef=false per C++
+        @test e_hesse_failed.dcovar == 1.0
+        @test !is_accurate(e_hesse_failed) # dcov ≥ 0.1
 
         e_invert = MinimumError(M, MnInvertFailed)
         @test invert_failed(e_invert)
         @test !is_valid(e_invert)
+        @test is_pos_def(e_invert)        # fPosDef=true per C++
+        @test e_invert.dcovar == 1.0
 
         e_posdef = MinimumError(M, MnMadePosDef)
         @test is_made_pos_def(e_posdef)
+        @test is_valid(e_posdef)          # fValid=true per C++
+        @test !is_pos_def(e_posdef)       # fPosDef=false per C++
+        @test e_posdef.dcovar == 1.0
         @test !is_accurate(e_posdef)
-        @test is_pos_def(e_posdef)
 
         e_notpd = MinimumError(M, MnNotPosDef)
         @test !is_pos_def(e_notpd)
         @test !is_valid(e_notpd)
+        @test e_notpd.dcovar == 1.0
 
         # Already-Symmetric input passes through (no double-wrap)
         Ms = Symmetric(M, :U)
