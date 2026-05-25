@@ -26,4 +26,5 @@ using Test
     include("test_minos.jl")
     include("test_contours.jl")
     include("test_migrad_bounded.jl")
+    include("test_minuit.jl")
 end
