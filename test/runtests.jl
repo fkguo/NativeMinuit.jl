@@ -16,4 +16,5 @@ using Test
     include("test_linesearch.jl")
     include("test_negative_g2.jl")
     include("test_seed.jl")
+    include("test_migrad.jl")
 end

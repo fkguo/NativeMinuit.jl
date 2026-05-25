@@ -38,6 +38,8 @@ include("posdef.jl")
 include("linesearch.jl")
 include("negative_g2.jl")
 include("seed.jl")
+include("result.jl")
+include("migrad.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
@@ -57,5 +59,8 @@ export make_posdef, is_posdef_enough
 export ParabolaPoint, line_search
 export has_negative_g2, negative_g2_line_search
 export seed_state
+export FunctionMinimum, migrad
+export parameters, errors, gradient, covariance
+export reached_call_limit, above_max_edm
 
 end # module JuMinuit
