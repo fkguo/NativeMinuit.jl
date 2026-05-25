@@ -40,6 +40,7 @@ include("negative_g2.jl")
 include("seed.jl")
 include("result.jl")
 include("migrad.jl")
+include("transform.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
