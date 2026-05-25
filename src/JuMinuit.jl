@@ -51,6 +51,7 @@ include("migrad_bounded.jl")
 include("minuit.jl")
 include("ad_gradient.jl")
 include("serialize.jl")
+include("precompile_workload.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
