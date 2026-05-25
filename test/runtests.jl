@@ -28,4 +28,5 @@ using Test
     include("test_migrad_bounded.jl")
     include("test_minuit.jl")
     include("test_ad_gradient.jl")
+    include("test_serialize.jl")
 end
