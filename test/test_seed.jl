@@ -51,10 +51,16 @@
         @test is_valid(state.error)
     end
 
-    @testset "Strategy ≠ 0 throws" begin
+    @testset "Strategy ≥ 1 now produces a seed (Phase 1 exit gate)" begin
+        # Phase 1 removed the Strategy(1)/(2) seed-stage throw; the MIGRAD
+        # outer loop now ships the inner-Hesse refinement so Strategy ≥ 1
+        # works end-to-end. The seed-stage MnHesse bootstrap (Strategy 2
+        # path) is intentionally deferred (see src/seed.jl note).
         cf = CostFunction(x -> sum(abs2, x))
-        @test_throws ArgumentError seed_state(cf, [1.0, 2.0], [0.1, 0.1], Strategy(1))
-        @test_throws ArgumentError seed_state(cf, [1.0, 2.0], [0.1, 0.1], Strategy(2))
+        s1 = seed_state(cf, [1.0, 2.0], [0.1, 0.1], Strategy(1))
+        @test is_valid(s1.error)
+        s2 = seed_state(cf, [1.0, 2.0], [0.1, 0.1], Strategy(2))
+        @test is_valid(s2.error)
     end
 
     @testset "Dimension mismatch throws" begin

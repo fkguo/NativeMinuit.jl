@@ -161,83 +161,149 @@ function _migrad_loop(
     vUpd_work = Symmetric(zeros(Float64, n, n), :U)
 
     made_pos_def_flag = false
+    hessian_computed = false
+    hesse_failed_flag = false
 
-    while edm_corrected > edmval && ncalls(cf) < maxfcn
-        # ── Step 1: step = -V·g
-        sym_mul!(step, s0.error.inv_hessian, s0.gradient.grad, -1.0, 0.0)
+    # ─────────────────────────────────────────────────────────────────────
+    # Outer do-while loop (C++ VariableMetricBuilder.cxx:111-185).
+    #
+    # First pass uses `maxfcn_eff = maxfcn`. After the first pass, the
+    # budget grows to `int(maxfcn * 1.3)` so the optional Hesse-after-MIGRAD
+    # refinement + re-iteration can finish (C++ line 182-184).
+    #
+    # Strategy ≥ 1 triggers MnHesse on the converged inner state:
+    #   - Strategy 2: ALWAYS
+    #   - Strategy 1: when Dcovar > 0.05 (DFP approximation is loose)
+    # If the post-Hesse edm > edmval (and above machine accuracy), the
+    # outer loop re-iterates the inner DFP loop with the refined state.
+    # ─────────────────────────────────────────────────────────────────────
+    maxfcn_eff = Int(maxfcn)
+    ipass = 0
+    iterate = true
 
-        # ── Check zero gradient (C++ line 247-250)
-        if dot(s0.gradient.grad, s0.gradient.grad) <= 0
-            break
-        end
+    while iterate
+        iterate = false
 
-        gdel = dot(step, s0.gradient.grad)
-
-        # ── Step 2: if gdel > 0, matrix not pos-def — try MnPosDef
-        if gdel > 0
-            s0 = make_posdef(s0, prec)
-            made_pos_def_flag = true
+        # ── Inner DFP variable-metric loop ────────────────────────────
+        while edm_corrected > edmval && ncalls(cf) < maxfcn_eff
+            # ── Step 1: step = -V·g
             sym_mul!(step, s0.error.inv_hessian, s0.gradient.grad, -1.0, 0.0)
-            gdel = dot(step, s0.gradient.grad)
-            if gdel > 0
-                break  # still bad — bail
-            end
-        end
 
-        # ── Step 3: line search
-        pp = line_search(cf, s0.parameters, step, gdel, prec; work_x = ls_work)
-
-        # ── Step 4: no-improvement check (C++ line 278)
-        if abs(pp.y - s0.parameters.fval) <= abs(s0.parameters.fval) * prec.eps
-            # Accept latest fval but keep error/gradient unchanged
-            s0 = MinimumState(s0.parameters, s0.error, s0.gradient,
-                              s0.edm, ncalls(cf))
-            break
-        end
-
-        # ── Step 5: accept new point, compute new gradient
-        new_x = Vector{Float64}(undef, n)
-        @inbounds @. new_x = s0.parameters.x + pp.x * step
-        new_par = MinimumParameters(new_x, pp.y)
-        new_grad = FunctionGradient(zeros(Float64, n), zeros(Float64, n), zeros(Float64, n))
-        numerical_gradient!(new_grad, grad_work, new_par, s0.gradient,
-                             cf, strategy, prec)
-
-        # ── Step 6: EDM using OLD error matrix (C++ line 300)
-        new_edm = estimate_edm(new_grad, s0.error)
-
-        if isnan(new_edm)
-            break
-        end
-
-        # ── Step 7: if EDM < 0, try MnPosDef on s0's error
-        if new_edm < 0
-            s0 = make_posdef(s0, prec)
-            made_pos_def_flag = true
-            new_edm = estimate_edm(new_grad, s0.error)
-            if new_edm < 0
+            # ── Check zero gradient (C++ line 247-250)
+            if dot(s0.gradient.grad, s0.gradient.grad) <= 0
                 break
             end
+
+            gdel = dot(step, s0.gradient.grad)
+
+            # ── Step 2: if gdel > 0, matrix not pos-def — try MnPosDef
+            if gdel > 0
+                s0 = make_posdef(s0, prec)
+                made_pos_def_flag = true
+                sym_mul!(step, s0.error.inv_hessian, s0.gradient.grad, -1.0, 0.0)
+                gdel = dot(step, s0.gradient.grad)
+                if gdel > 0
+                    break  # still bad — bail
+                end
+            end
+
+            # ── Step 3: line search
+            pp = line_search(cf, s0.parameters, step, gdel, prec; work_x = ls_work)
+
+            # ── Step 4: no-improvement check (C++ line 278)
+            if abs(pp.y - s0.parameters.fval) <= abs(s0.parameters.fval) * prec.eps
+                # Accept latest fval but keep error/gradient unchanged
+                s0 = MinimumState(s0.parameters, s0.error, s0.gradient,
+                                  s0.edm, ncalls(cf))
+                break
+            end
+
+            # ── Step 5: accept new point, compute new gradient
+            new_x = Vector{Float64}(undef, n)
+            @inbounds @. new_x = s0.parameters.x + pp.x * step
+            new_par = MinimumParameters(new_x, pp.y)
+            new_grad = FunctionGradient(zeros(Float64, n), zeros(Float64, n), zeros(Float64, n))
+            numerical_gradient!(new_grad, grad_work, new_par, s0.gradient,
+                                 cf, strategy, prec)
+
+            # ── Step 6: EDM using OLD error matrix (C++ line 300)
+            new_edm = estimate_edm(new_grad, s0.error)
+
+            if isnan(new_edm)
+                break
+            end
+
+            # ── Step 7: if EDM < 0, try MnPosDef on s0's error
+            if new_edm < 0
+                s0 = make_posdef(s0, prec)
+                made_pos_def_flag = true
+                new_edm = estimate_edm(new_grad, s0.error)
+                if new_edm < 0
+                    break
+                end
+            end
+
+            # ── Step 8: DFP update
+            dx = Vector{Float64}(undef, n)
+            dg = Vector{Float64}(undef, n)
+            @inbounds @. dx = new_par.x - s0.parameters.x
+            @inbounds @. dg = new_grad.grad - s0.gradient.grad
+
+            new_V = Symmetric(copy(parent(s0.error.inv_hessian)), :U)
+            new_dcov, _ = davidon_update!(new_V, dx, dg, s0.error.dcovar,
+                                           vg_work, vUpd_work)
+            # Reset status to MnHesseValid (matches C++ DavidonErrorUpdator.cxx:67-72
+            # which constructs MinimumError(vUpd, dcov) — the regular dcov ctor,
+            # not the tag ctor, so status implicitly clears to valid). Without this
+            # reset, a transient MnMadePosDef from earlier sticks indefinitely.
+            new_err = MinimumError(new_V, new_dcov, MnHesseValid, true)
+
+            # ── Step 9: build new state, correct edm
+            s0 = MinimumState(new_par, new_err, new_grad, new_edm, ncalls(cf))
+            edm_corrected = new_edm * (1.0 + 3.0 * new_err.dcovar)
         end
 
-        # ── Step 8: DFP update
-        dx = Vector{Float64}(undef, n)
-        dg = Vector{Float64}(undef, n)
-        @inbounds @. dx = new_par.x - s0.parameters.x
-        @inbounds @. dg = new_grad.grad - s0.gradient.grad
+        # ── Strategy ≥ 1 inner-Hesse refinement (C++ lines 138-173) ─────
+        # Bail out before Hesse if we already hit call limit, otherwise
+        # Hesse will fail/be wasted.
+        if ncalls(cf) >= maxfcn_eff
+            break
+        end
 
-        new_V = Symmetric(copy(parent(s0.error.inv_hessian)), :U)
-        new_dcov, _ = davidon_update!(new_V, dx, dg, s0.error.dcovar,
-                                       vg_work, vUpd_work)
-        # Reset status to MnHesseValid (matches C++ DavidonErrorUpdator.cxx:67-72
-        # which constructs MinimumError(vUpd, dcov) — the regular dcov ctor,
-        # not the tag ctor, so status implicitly clears to valid). Without this
-        # reset, a transient MnMadePosDef from earlier sticks indefinitely.
-        new_err = MinimumError(new_V, new_dcov, MnHesseValid, true)
+        if strategy.level == 2 ||
+           (strategy.level == 1 && s0.error.dcovar > 0.05)
+            # Compute remaining budget for Hesse. C++ passes maxfcn (the
+            # full original budget) but we have ncalls already; let Hesse
+            # use the leftover up to maxfcn_eff. Hesse internally floors
+            # at its own default budget.
+            budget_left = maxfcn_eff - ncalls(cf)
+            s_hesse = hesse(cf, s0, strategy;
+                             prec = prec, maxcalls = max(budget_left, 1))
+            hessian_computed = true
+            if !is_valid(s_hesse)
+                hesse_failed_flag = true
+                # Keep s0 as-is (C++ comment line 152: "Invalid Hessian - exit")
+                break
+            end
+            s0 = s_hesse
+            new_edm_h = s0.edm
 
-        # ── Step 9: build new state, correct edm
-        s0 = MinimumState(new_par, new_err, new_grad, new_edm, ncalls(cf))
-        edm_corrected = new_edm * (1.0 + 3.0 * new_err.dcovar)
+            # Re-iterate the outer loop if Hesse moved edm above tolerance
+            # AND above machine accuracy (C++ lines 160-168)
+            if new_edm_h > edmval
+                machine_limit = abs(prec.eps2 * s0.parameters.fval)
+                if new_edm_h >= machine_limit
+                    iterate = true
+                end
+            end
+            edm_corrected = new_edm_h * (1.0 + 3.0 * s0.error.dcovar)
+        end
+
+        # Second-pass budget bump (C++ lines 182-184)
+        if ipass == 0
+            maxfcn_eff = floor(Int, maxfcn * 1.3)
+        end
+        ipass += 1
     end
 
     # ── Determine final status
@@ -245,17 +311,18 @@ function _migrad_loop(
     # C++ VariableMetricBuilder.cxx:350 marks reached-call-limit UNCONDITIONALLY
     # when nfcn ≥ maxfcn — even if EDM happens to be at convergence. Drop the
     # v1 AND-gate with edm_corrected > edmval (parallel-review #2 E5).
-    reached_limit = ncalls(cf) >= maxfcn
+    # Use the EFFECTIVE budget (post-bump) for the check, not the original.
+    reached_limit = ncalls(cf) >= maxfcn_eff
     above_max = edm_corrected > 10 * edmval
 
-    is_valid_final = !reached_limit && !above_max && is_valid(final)
+    is_valid_final = !reached_limit && !above_max && !hesse_failed_flag && is_valid(final)
 
     return FunctionMinimum(
         final, seed, cf.up;
         is_valid = is_valid_final,
         reached_call_limit = reached_limit,
         above_max_edm = above_max,
-        hesse_failed = false,  # Phase 1
+        hesse_failed = hesse_failed_flag,
         made_pos_def = made_pos_def_flag,
     )
 end
