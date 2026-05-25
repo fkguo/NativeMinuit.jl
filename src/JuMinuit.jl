@@ -34,6 +34,10 @@ include("linalg.jl")
 include("gradient.jl")
 include("davidon.jl")
 include("edm.jl")
+include("posdef.jl")
+include("linesearch.jl")
+include("negative_g2.jl")
+include("seed.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
@@ -49,5 +53,9 @@ export has_parameters, has_covariance, fval, edm, nfcn
 export initial_gradient, initial_gradient!
 export numerical_gradient, numerical_gradient!
 export estimate_edm, estimate_edm!
+export make_posdef, is_posdef_enough
+export ParabolaPoint, line_search
+export has_negative_g2, negative_g2_line_search
+export seed_state
 
 end # module JuMinuit

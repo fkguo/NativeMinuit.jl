@@ -12,4 +12,8 @@ using Test
     include("test_gradient.jl")
     include("test_davidon.jl")
     include("test_edm.jl")
+    include("test_posdef.jl")
+    include("test_linesearch.jl")
+    include("test_negative_g2.jl")
+    include("test_seed.jl")
 end
