@@ -65,6 +65,19 @@ Phase 0 — see ROADMAP §3:
 - `reached_call_limit=true` if `nfcn ≥ maxfcn` before convergence.
 - `above_max_edm=true` if final EDM > 10·(tol·0.002).
 - `made_pos_def=true` if MnPosDef perturbed the matrix at any point.
+
+# Thread safety
+
+All internal scratch buffers (ping-pong state buffers, line-search
+scratch, etc.) are stack-local to each `migrad` call, so multiple
+threads running `migrad` concurrently on **different** `CostFunction`
+objects are safe.
+
+`CostFunction` carries a mutable `Base.RefValue{Int}` call counter,
+so sharing one `CostFunction` across threads causes a benign race
+on the counter (no memory corruption, but `nfcn` will be undercounted).
+Best practice: one `CostFunction` per thread (cheap — the wrapped
+function is reused).
 """
 function migrad(
     cf::CostFunction,
@@ -169,7 +182,11 @@ function _migrad_loop(
     # zero matrices — only four ~48-byte immutable struct wrappers
     # (MinimumParameters/FunctionGradient/MinimumError/MinimumState).
     # ─────────────────────────────────────────────────────────────────────
-    step      = zeros(Float64, n)
+    # `step` is fully written by `sym_mul!(step, V, g, -1.0, 0.0)` (β=0
+    # → step is not read) before each use, so `undef` is safe.
+    # `vUpd_work` stays `zeros` because `davidon_update!` reads its
+    # initial state in some branches.
+    step      = Vector{Float64}(undef, n)
     ls_work   = Vector{Float64}(undef, n)
     grad_work = Vector{Float64}(undef, n)
     vg_work   = Vector{Float64}(undef, n)
@@ -177,7 +194,16 @@ function _migrad_loop(
     dx_buf    = Vector{Float64}(undef, n)
     dg_buf    = Vector{Float64}(undef, n)
 
-    # Ping-pong state buffer sets (A and B)
+    # Ping-pong state buffer sets (A and B).
+    #
+    # V_a / V_b allocated `undef` — the lower triangle starts as garbage.
+    # First use: `copyto!(parent(nV_buf), parent(s0.error.inv_hessian))`
+    # copies the FULL parent matrix from the seed (which is `zeros(n,n)`
+    # in `seed.jl:88`), so the lower triangle becomes 0 on first use.
+    # Subsequent ops (davidon_update! via BLAS `syr!`, make_posdef via
+    # full `copy`) preserve the zero lower triangle. This invariant
+    # means we don't need `zeros(n,n)` here — saves one n²·8-byte fill
+    # per fit.
     x_a   = Vector{Float64}(undef, n);  x_b   = Vector{Float64}(undef, n)
     g_a   = Vector{Float64}(undef, n);  g_b   = Vector{Float64}(undef, n)
     g2_a  = Vector{Float64}(undef, n);  g2_b  = Vector{Float64}(undef, n)

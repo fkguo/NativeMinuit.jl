@@ -175,6 +175,11 @@ indicator, and the status enum.
 - `MinimumError(M, status)` — explicit failure status.
 """
 struct MinimumError
+    # WARNING: `inv_hessian` is stored BY REFERENCE — the 4-arg
+    # constructor at line 188+ does NOT copy. The MIGRAD ping-pong
+    # buffer reuse (`migrad.jl` `_migrad_loop` lines ~280-300) relies
+    # on this. Any future "defensive copy" added here would silently
+    # regress allocations by `n*(n+1)/2` doubles per inner iteration.
     inv_hessian::Symmetric{Float64,Matrix{Float64}}
     dcovar::Float64
     status::CovStatus
