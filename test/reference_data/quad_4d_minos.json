@@ -1,0 +1,58 @@
+{
+  "name": "quad_4d",
+  "_meta": {
+    "source": "GooFit/Minuit2 @ 57dc936a2b74d0b4dda1254c3dd63e7c61a97c84",
+    "version": "6.24.0",
+    "strategy_level": 1,
+    "err_def": 1,
+    "generator": "tools/cpp_trace_harness.cxx :: run_minos_case"
+  },
+  "fval": 7.8150030444638188e-20,
+  "params": [1.3977663471109736e-10, 1.3977663471109736e-10, 1.3977663471109736e-10, 1.3977663471109736e-10],
+  "minos": [
+    {
+      "par": 0,
+      "min_value": 1.3977663471109736e-10,
+      "upper": 0.99999999986022325,
+      "lower": -1.0000000001397764,
+      "upper_valid": true,
+      "lower_valid": true,
+      "upper_new_min": false,
+      "lower_new_min": false,
+      "nfcn": 48
+    },
+    {
+      "par": 1,
+      "min_value": 1.3977663471109736e-10,
+      "upper": 0.99999999986022325,
+      "lower": -1.0000000001397764,
+      "upper_valid": true,
+      "lower_valid": true,
+      "upper_new_min": false,
+      "lower_new_min": false,
+      "nfcn": 48
+    },
+    {
+      "par": 2,
+      "min_value": 1.3977663471109736e-10,
+      "upper": 0.99999999986022325,
+      "lower": -1.0000000001397764,
+      "upper_valid": true,
+      "lower_valid": true,
+      "upper_new_min": false,
+      "lower_new_min": false,
+      "nfcn": 48
+    },
+    {
+      "par": 3,
+      "min_value": 1.3977663471109736e-10,
+      "upper": 0.99999999986022325,
+      "lower": -1.0000000001397764,
+      "upper_valid": true,
+      "lower_valid": true,
+      "upper_new_min": false,
+      "lower_new_min": false,
+      "nfcn": 48
+    }
+  ]
+}

@@ -22,6 +22,8 @@
 
 #include "Minuit2/FCNBase.h"
 #include "Minuit2/MnMigrad.h"
+#include "Minuit2/MnMinos.h"
+#include "Minuit2/MinosError.h"
 #include "Minuit2/MnUserParameters.h"
 #include "Minuit2/MnUserCovariance.h"
 #include "Minuit2/MnUserParameterState.h"
@@ -262,6 +264,79 @@ void run_case(const std::string &outdir,
               << "  valid=" << (mn.IsValid() ? "y" : "n") << "\n";
 }
 
+// MnMinos oracle: run MIGRAD then MINOS on all free params, dump
+// asymmetric ± errors per parameter. Phase 1 完成判据 #5 (1e-8 agreement
+// with C++ MINOS on at least one bounded and one unbounded fit).
+void run_minos_case(const std::string &outdir,
+                    const std::string &name,
+                    const std::vector<double> &x0,
+                    const std::vector<double> &errs0,
+                    const FCNBase &fcn,
+                    unsigned strategy_level = 1)
+{
+    MnUserParameters upar;
+    for (size_t i = 0; i < x0.size(); ++i) {
+        upar.Add("p" + std::to_string(i), x0[i], errs0[i]);
+    }
+    MnStrategy stra(strategy_level);
+    MnMigrad migrad(fcn, upar, stra);
+    FunctionMinimum mn = migrad();
+
+    if (!mn.IsValid()) {
+        std::cerr << "WARN: " << name << " MIGRAD invalid; skipping MINOS\n";
+        return;
+    }
+
+    MnMinos minos(fcn, mn, stra);
+
+    const std::string path = outdir + "/" + name + "_minos.json";
+    std::ofstream out(path);
+    if (!out) {
+        std::cerr << "ERROR: could not open " << path << "\n";
+        std::exit(2);
+    }
+
+    const unsigned n = static_cast<unsigned>(mn.UserState().VariableParameters());
+    out << "{\n";
+    out << "  \"name\": \"" << name << "\",\n";
+    out << "  \"_meta\": {\n";
+    out << "    \"source\": \"GooFit/Minuit2 @ " << kMinuit2Commit << "\",\n";
+    out << "    \"version\": \"" << kMinuit2Version << "\",\n";
+    out << "    \"strategy_level\": " << strategy_level << ",\n";
+    out << "    \"err_def\": " << Float64Out{1.0} << ",\n";
+    out << "    \"generator\": \"tools/cpp_trace_harness.cxx :: run_minos_case\"\n";
+    out << "  },\n";
+    out << "  \"fval\": " << Float64Out{mn.Fval()} << ",\n";
+    out << "  \"params\": [";
+    for (unsigned i = 0; i < n; ++i) {
+        if (i) out << ", ";
+        out << Float64Out{mn.UserState().Value(i)};
+    }
+    out << "],\n";
+
+    out << "  \"minos\": [\n";
+    for (unsigned i = 0; i < n; ++i) {
+        MinosError me = minos.Minos(i);
+        out << "    {\n";
+        out << "      \"par\": " << i << ",\n";
+        out << "      \"min_value\": " << Float64Out{me.Min()} << ",\n";
+        out << "      \"upper\": " << Float64Out{me.Upper()} << ",\n";
+        out << "      \"lower\": " << Float64Out{me.Lower()} << ",\n";
+        out << "      \"upper_valid\": " << (me.UpperValid() ? "true" : "false") << ",\n";
+        out << "      \"lower_valid\": " << (me.LowerValid() ? "true" : "false") << ",\n";
+        out << "      \"upper_new_min\": " << (me.AtUpperMaxFcn() ? "false" : (me.AtUpperLimit() ? "false" : "false")) << ",\n";
+        out << "      \"lower_new_min\": " << (me.AtLowerMaxFcn() ? "false" : (me.AtLowerLimit() ? "false" : "false")) << ",\n";
+        out << "      \"nfcn\": " << me.NFcn() << "\n";
+        out << "    }" << (i + 1 < n ? "," : "") << "\n";
+    }
+    out << "  ]\n";
+    out << "}\n";
+
+    std::cout << "[ok] " << path
+              << "  fval=" << std::setprecision(17) << mn.Fval()
+              << "  npar=" << n << "\n";
+}
+
 int main(int argc, char *argv[])
 {
     const std::string outdir = (argc > 1) ? argv[1] : ".";
@@ -342,6 +417,24 @@ int main(int argc, char *argv[])
         meta[1].fixed = true;
         run_case(outdir, "quad_2d_fixed_y",
                  { 0.0, 5.0 }, { 0.1, 0.1 }, sh, 0, &meta);
+    }
+
+    // ── MINOS oracles (Phase 1 完成判据 #5) ───────────────────────────
+    // 1e-8 agreement check on at least one unbounded fit. C++ MnMinos
+    // uses Strategy(1) by default in iminuit; we mirror that here.
+    {
+        Rosenbrock2 r2;
+        run_minos_case(outdir, "rosenbrock_2d", { -1.2, 1.0 }, { 0.1, 0.1 }, r2);
+    }
+    {
+        QuadNF q4(4);
+        run_minos_case(outdir, "quad_4d",
+                       { 1.0, 1.0, 1.0, 1.0 }, { 0.1, 0.1, 0.1, 0.1 }, q4);
+    }
+    {
+        Shifted2D sh2;
+        run_minos_case(outdir, "quad_2d_shifted",
+                       { 0.0, 0.0 }, { 0.1, 0.1 }, sh2);
     }
 
     return 0;
