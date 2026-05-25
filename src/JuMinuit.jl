@@ -44,6 +44,8 @@ include("transform.jl")
 include("parameters.jl")
 include("hesse.jl")
 include("covariance_squeeze.jl")
+include("function_cross.jl")
+include("minos.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
@@ -74,5 +76,6 @@ export int_to_ext_vector, ext_to_int_vector
 export initial_int_values, initial_int_errors
 export hesse
 export squeeze_symmetric, squeeze_error
+export MnCross, MinosError, minos
 
 end # module JuMinuit
