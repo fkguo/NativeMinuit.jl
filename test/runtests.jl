@@ -30,4 +30,6 @@ using Test
     include("test_ad_gradient.jl")
     include("test_serialize.jl")
     include("test_contour_exact.jl")
+    include("test_threaded_gradient.jl")
+    include("test_plot_recipes.jl")
 end

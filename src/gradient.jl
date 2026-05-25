@@ -172,7 +172,8 @@ function numerical_gradient!(
     prev::FunctionGradient,
     cf::CostFunction,
     strategy::Strategy,
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    threaded::Bool = false,
 )
     n = length(par)
     length(out) == n ||
@@ -200,6 +201,55 @@ function numerical_gradient!(
     ncycle = strategy.grad_ncycles
     step_tol = strategy.grad_step_tolerance
     grad_tol = strategy.grad_tolerance
+
+    if threaded && Threads.nthreads() > 1
+        # Phase 2.2 threaded gradient — mirrors the OpenMP block at
+        # reference/Minuit2_cpp/src/Numerical2PGradientCalculator.cxx:116-127.
+        # Each parameter index `i` writes to disjoint slots of
+        # out.grad/g2/gstep; no cross-thread reduction needed. Each
+        # thread holds a private copy of x_work so the per-coord
+        # `x_work[i] = xtf ± step` mutations don't race.
+        # Use Threads.maxthreadid() because Julia 1.12 may dispatch
+        # tasks to thread IDs > Threads.nthreads() (interactive +
+        # foreign-task scenarios).
+        n_buffers = max(Threads.maxthreadid(), Threads.nthreads())
+        x_work_perthread = [copy(x_work) for _ in 1:n_buffers]
+        Threads.@threads :static for i in 1:n
+            tid = Threads.threadid()
+            xw = x_work_perthread[tid]
+            xtf = xw[i]
+            epspri = eps2 + abs(out.grad[i] * eps2)
+            stepb4 = 0.0
+            @inbounds for _ in 1:ncycle
+                optstp = sqrt(dfmin / (abs(out.g2[i]) + epspri))
+                step = max(optstp, abs(0.1 * out.gstep[i]))
+                stpmax = 10.0 * abs(out.gstep[i])
+                if step > stpmax; step = stpmax; end
+                stpmin = max(vrysml, 8.0 * abs(eps2 * xw[i]))
+                if step < stpmin; step = stpmin; end
+                if abs((step - stepb4) / step) < step_tol
+                    break
+                end
+                out.gstep[i] = step
+                stepb4 = step
+
+                xw[i] = xtf + step
+                fs1 = cf(xw)
+                xw[i] = xtf - step
+                fs2 = cf(xw)
+                xw[i] = xtf
+
+                grdb4 = out.grad[i]
+                out.grad[i] = 0.5 * (fs1 - fs2) / step
+                out.g2[i] = (fs1 + fs2 - 2.0 * fcnmin) / (step * step)
+
+                if abs(grdb4 - out.grad[i]) / (abs(out.grad[i]) + dfmin / step) < grad_tol
+                    break
+                end
+            end
+        end
+        return out
+    end
 
     @inbounds for i in 1:n
         xtf = x_work[i]
