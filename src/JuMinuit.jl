@@ -88,6 +88,10 @@ export ContoursError, contour, contour_exact
 export function_cross_multi
 export BoundedFunctionMinimum, ext_errors, ext_covariance, free_covariance
 export Minuit, migrad!, minos!
+# IMinuit.jl-compatible helpers (NB: `reset` extends `Base.reset`,
+# `matrix` is JuMinuit's own — IMinuit.jl's matrix returns the
+# correlation/covariance matrix with the same signature).
+export args, matrix, set_precision
 export CostFunctionWithGradient, analytical_gradient, analytical_gradient!
 
 end # module JuMinuit
