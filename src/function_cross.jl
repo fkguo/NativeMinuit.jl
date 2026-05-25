@@ -108,6 +108,7 @@ end
 function _migrad_with_fixed(
     cf::CostFunction, state::MinimumState, i::Integer, v::Float64;
     tol::Float64, maxcalls::Integer, prec::MachinePrecision,
+    strategy::Strategy = Strategy(0),
 )
     n = length(state.parameters)
     # Build initial point + errors with parameter i removed
@@ -130,8 +131,13 @@ function _migrad_with_fixed(
     end
 
     cf_fixed = _fix_one_param(cf, i, v, n)
+    # Thread strategy (parallel-review #4 A5 — previously silently
+    # defaulted to Strategy(0) regardless of outer arg). Inner uses
+    # the outer level minus 1 per C++ MnFunctionCross.cxx:106.
+    inner_strategy = Strategy(max(0, strategy.level - 1))
     inner_min = migrad(cf_fixed, y0, errs;
-                        tol = tol, maxfcn = Int(maxcalls), prec = prec)
+                        tol = tol, maxfcn = Int(maxcalls),
+                        strategy = inner_strategy, prec = prec)
     return inner_min, ncalls(cf_fixed)
 end
 
@@ -212,7 +218,7 @@ function function_cross(
     v1 = x_pivot + 1.0 * step
     min1, nf1 = _migrad_with_fixed(cf, state, par_idx, v1;
                                     tol = 0.5 * tlr, maxcalls = maxcalls,
-                                    prec = prec)
+                                    prec = prec, strategy = strategy)
     nfcn += nf1
 
     if fval(min1) < fmin_val - tlf
@@ -240,7 +246,7 @@ function function_cross(
     v2 = x_pivot + aopt * step
     min2, nf2 = _migrad_with_fixed(cf, state, par_idx, v2;
                                     tol = 0.5 * tlr, maxcalls = maxcalls - nfcn,
-                                    prec = prec)
+                                    prec = prec, strategy = strategy)
     nfcn += nf2
 
     if fval(min2) < fmin_val - tlf
@@ -267,7 +273,7 @@ function function_cross(
         v = x_pivot + aopt * step
         m, nf = _migrad_with_fixed(cf, state, par_idx, v;
                                     tol = 0.5 * tlr, maxcalls = maxcalls - nfcn,
-                                    prec = prec)
+                                    prec = prec, strategy = strategy)
         nfcn += nf
         if fval(m) < fmin_val - tlf
             return MnCross(m.state, NaN, nfcn; valid=false, new_min=true)
@@ -312,7 +318,7 @@ function function_cross(
         v = x_pivot + aopt * step
         m, nf = _migrad_with_fixed(cf, state, par_idx, v;
                                     tol = 0.5 * tlr, maxcalls = maxcalls - nfcn,
-                                    prec = prec)
+                                    prec = prec, strategy = strategy)
         nfcn += nf
         if fval(m) < fmin_val - tlf
             return MnCross(m.state, NaN, nfcn; valid=false, new_min=true)

@@ -139,16 +139,21 @@ function contour(
     points = Vector{Tuple{Float64,Float64}}(undef, npoints)
     @inbounds for k in 1:npoints
         θ = 2π * (k - 1) / npoints
-        # Asymmetric radii (chosen by sign of x/y component)
-        rx_unit = cos(θ)
-        ry_unit = sin(θ)
-        e_x = rx_unit >= 0 ? e_x_up : e_x_lo
-        e_y = ry_unit >= 0 ? e_y_up : e_y_lo
-        # Correlated bivariate ellipse parametrization. For ρ=0 this
-        # is a standard axis-aligned ellipse; for |ρ|→1 it degenerates
-        # toward a line.
-        dx = e_x * rx_unit
-        dy = e_y * (ρ * rx_unit + sqrt_term * ry_unit)
+        cos_θ = cos(θ)
+        sin_θ = sin(θ)
+        # Correlated bivariate ellipse displacement directions. For
+        # ρ=0 this reduces to axis-aligned (sign(dy_unit) = sign(sin_θ));
+        # for ρ ≠ 0 the y-displacement sign can flip relative to sin_θ,
+        # so we MUST pick the asymmetric radius from the actual
+        # displacement direction (parallel-review #4 C-2 blocking —
+        # the v1 version selected `e_y` by `sign(sin_θ)` which gave
+        # the wrong side when the correlation tilted the ellipse).
+        dx_unit = cos_θ
+        dy_unit = ρ * cos_θ + sqrt_term * sin_θ
+        e_x = dx_unit >= 0 ? e_x_up : e_x_lo
+        e_y = dy_unit >= 0 ? e_y_up : e_y_lo
+        dx = e_x * dx_unit
+        dy = e_y * dy_unit
         points[k] = (valx + dx, valy + dy)
     end
 

@@ -69,6 +69,36 @@
         @test cov[2, 2] ≈ 1.0 atol = 0.1
         # Off-diagonal should be ~zero for uncorrelated f
         @test abs(cov[1, 2]) < 0.1
+        @test abs(cov[2, 1]) < 0.1
+        # Symmetry check: cov[i,j] == cov[j,i] (parallel-review #4 D3
+        # blocking — v1 of migrad_bounded read parent(Symmetric{:U})
+        # which returned uninitialized zero in the lower triangle,
+        # producing an asymmetric matrix).
+        @test cov[1, 2] == cov[2, 1]
+    end
+
+    @testset "Covariance symmetry on correlated quadratic (D3 regression)" begin
+        # f(x, y) = x² + y² + x·y has off-diagonal entries in the
+        # Hessian, exposing the upper-vs-lower triangle storage bug
+        # (parallel-review #4 D3). The v1 of migrad_bounded.jl read
+        # `parent(Symmetric{:U}(...))` which gave 0 in the lower
+        # triangle, producing an asymmetric external covariance.
+        # The bit-exact magnitude depends on Strategy(0) DFP-approx
+        # convergence which is loose for correlated 2D; the strict
+        # invariant we MUST hold is symmetry.
+        cf = CostFunction(x -> x[1]^2 + x[2]^2 + x[1]*x[2])
+        params = Parameters([
+            MinuitParameter("x", 1.0, 0.1),
+            MinuitParameter("y", 1.0, 0.1),
+        ])
+        m = migrad(cf, params)
+        cov = ext_covariance(m)
+        @test cov !== nothing
+        # Symmetry MUST hold (the D3 invariant)
+        @test cov[1, 2] == cov[2, 1]
+        # Off-diagonal must be non-trivially negative (true V[1,2] < 0
+        # for this FCN's correlated Hessian); v1 would give 0.
+        @test cov[1, 2] < -0.01
     end
 
     @testset "Argument validation" begin

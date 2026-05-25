@@ -150,7 +150,12 @@ function minos!(m::Minuit, par::Integer; kwargs...)
         throw(ArgumentError("par index $par out of bounds"))
     is_fixed(m.params.pars[par]) &&
         return m  # skip fixed
-    err = minos(m.fmin.internal, m.fcn, m.params.int_of_ext[par]; kwargs...)
+    # Use the internal-coord-wrapped CostFunction stored on m.fmin.
+    # Passing m.fcn (which takes EXTERNAL coords) to minos(internal_fmin)
+    # would feed internal coords into the user FCN — coordinate frame
+    # leak (parallel-review #4 A7/B4 blocking).
+    err = minos(m.fmin.internal, m.fmin.internal_cf,
+                m.params.int_of_ext[par]; kwargs...)
     m.minos_errors[Int(par)] = err
     return m
 end
@@ -184,7 +189,9 @@ function contour(m::Minuit, par_x::Integer, par_y::Integer;
         throw(ArgumentError("Call `migrad!(m)` before `contour(m, ...)`"))
     ix = m.params.int_of_ext[par_x]
     iy = m.params.int_of_ext[par_y]
-    return contour(m.fmin.internal, m.fcn, ix, iy;
+    # Use the internal-coord-wrapped CostFunction (parallel-review #4
+    # A7/B4 — see minos! for the rationale).
+    return contour(m.fmin.internal, m.fmin.internal_cf, ix, iy;
                     npoints = npoints, kwargs...)
 end
 

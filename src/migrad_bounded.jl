@@ -43,6 +43,11 @@ Result of bounded `migrad(cf, params)`. Wraps the internal
 - `ext_covariance::Union{Nothing,Matrix{Float64}}` — full
   `n_pars × n_pars` external covariance matrix (or `nothing` if
   inner MIGRAD did not produce a covariance).
+- `internal_cf::CostFunction` — the int-coord-wrapped FCN used by the
+  internal MIGRAD. Required for follow-up calls (MINOS, contour) that
+  operate on `internal` and must consume internal coordinates — using
+  the user's external `cf` there would leak coordinate frames
+  (parallel-review #4 A7/B4 blocking).
 """
 struct BoundedFunctionMinimum
     internal::FunctionMinimum
@@ -50,6 +55,7 @@ struct BoundedFunctionMinimum
     ext_values::Vector{Float64}
     ext_errors::Vector{Float64}
     ext_covariance::Union{Nothing,Matrix{Float64}}
+    internal_cf::CostFunction
 end
 
 # Accessors mirroring iminuit-style
@@ -74,6 +80,10 @@ covariance was produced.
 """
 ext_covariance(m::BoundedFunctionMinimum) = m.ext_covariance
 
+# Accessor parity with FunctionMinimum (parallel-review #4 E3).
+errors(m::BoundedFunctionMinimum) = m.ext_errors
+covariance(m::BoundedFunctionMinimum) = m.ext_covariance
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: wrap a user FCN to take internal coords and call user FCN with ext.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,8 +92,10 @@ function _wrap_fcn_internal_to_external(cf::CostFunction, params::Parameters)
     f = cf.f
     up = cf.up
     p_ref = params
+    # Skip the `collect(Float64, int_vec)` allocation; int_to_ext_vector
+    # accepts any AbstractVector<:Real (parallel-review #4 D6).
     wrapped = function (int_vec::AbstractVector{<:Real})
-        ext_full = int_to_ext_vector(p_ref, collect(Float64, int_vec))
+        ext_full = int_to_ext_vector(p_ref, int_vec)
         return f(ext_full)
     end
     return CostFunction(wrapped, up)
@@ -171,7 +183,12 @@ function migrad(
 
     # External errors via Jacobian chain rule + covariance back-conversion.
     if has_covariance(fmin_int)
-        V_int = parent(fmin_int.state.error.inv_hessian)
+        # Read symmetrically via the Symmetric{:U} wrapper, NOT through
+        # `parent(...)` (parallel-review #4 D3 blocking — using `parent`
+        # gives only the upper-triangle storage; lower-triangle reads
+        # return uninitialized zeros, producing an asymmetric external
+        # covariance matrix).
+        V_int = fmin_int.state.error.inv_hessian  # Symmetric{:U} view
         # covariance = 2·up·V (per C++; see result.jl::covariance)
         # Build Jacobian d(ext)/d(int) per free parameter
         dint2ext_diag = Vector{Float64}(undef, n_active)
@@ -183,10 +200,10 @@ function migrad(
         # where D = diag(dint2ext) and C_int = 2·up·V_int
         c_int_scale = 2.0 * cf.up
         n_free_actual = n_active
-        # First, place the FREE-FREE block of external covariance, then
-        # promote to the full n_total × n_total matrix.
         cov_free = zeros(Float64, n_free_actual, n_free_actual)
         @inbounds for i in 1:n_free_actual, j in 1:n_free_actual
+            # V_int[i,j] reads symmetrically (Symmetric view mirrors
+            # the authoritative triangle into the other half).
             cov_free[i, j] = c_int_scale * V_int[i, j] *
                               dint2ext_diag[i] * dint2ext_diag[j]
         end
@@ -215,6 +232,7 @@ function migrad(
 
     return BoundedFunctionMinimum(
         fmin_int, params, ext_values, ext_errors_vec, ext_cov_mat,
+        cf_internal,
     )
 end
 

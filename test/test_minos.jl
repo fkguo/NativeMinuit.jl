@@ -3,8 +3,11 @@
 @testset "minos.jl + function_cross.jl" begin
 
     @testset "MinosError struct" begin
-        e = MinosError(1, 0.0, 0.5, -0.5, true, true, false, false, false, false, 100)
+        # min_par_value field stores the parameter value at the minimum,
+        # mirroring C++ MinosError::Min() (parallel-review #4 B2 fix).
+        e = MinosError(1, 1.5, 0.5, -0.5, true, true, false, false, false, false, 100)
         @test e.par_idx == 1
+        @test e.min_par_value == 1.5
         @test e.upper == 0.5
         @test e.lower == -0.5
         @test JuMinuit.is_valid(e)

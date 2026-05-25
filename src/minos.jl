@@ -19,7 +19,11 @@ The asymmetric error result for a single parameter. Mirrors C++
 # Fields
 
 - `par_idx::Int` — 1-based parameter index.
-- `min_fval::Float64` — the function value at the minimum.
+- `min_par_value::Float64` — the **parameter value at the minimum**
+  (NOT the function value). Mirrors C++ `MinosError::Min()`
+  (`reference/Minuit2_cpp/inc/Minuit2/MinosError.h:85-86`,
+  `fMinParValue` at line 30-31). Parallel-review #4 B2 — v1 of
+  this field stored fval, which was a semantic mismatch.
 - `upper::Float64` — upper asymmetric error (`x_+σ - x_min`).
 - `lower::Float64` — lower asymmetric error (`x_-σ - x_min`, ≤ 0).
 - `upper_valid::Bool`, `lower_valid::Bool` — `true` if the crossing
@@ -38,7 +42,7 @@ to the left). For a symmetric well-behaved parabolic minimum,
 """
 struct MinosError
     par_idx::Int
-    min_fval::Float64
+    min_par_value::Float64
     upper::Float64
     lower::Float64
     upper_valid::Bool
@@ -94,7 +98,9 @@ function minos(
     n > 1 ||
         throw(ArgumentError("MINOS requires n > 1 free parameters"))
 
-    min_fval = state.parameters.fval
+    # The C++ Min() returns the parameter value at the minimum
+    # (fMinParValue). Parallel-review #4 B2.
+    min_par_value = state.parameters.x[par_idx]
 
     # Upper direction (positive)
     up_cross = function_cross(fmin, cf, par_idx, +1.0;
@@ -116,7 +122,7 @@ function minos(
 
     return MinosError(
         Int(par_idx),
-        min_fval,
+        min_par_value,
         upper,
         lower,
         up_cross.valid,
