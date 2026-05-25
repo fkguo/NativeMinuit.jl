@@ -112,4 +112,36 @@ const JULIA_PERF_BENCHMARKS = [
         cf = CostFunction(make_gauss_nll_nd(10, 1000), 0.5)
         migrad(cf, zeros(10), fill(0.1, 10))
     end),
+
+    # ── Strategy(1) variants — Phase 1 完成判据 #6 ─────────────────────
+    # Strategy(1) is iminuit's default; the MIGRAD outer loop runs an
+    # inner HESSE when Dcovar > 0.05. Adds ~20-40% nfcn overhead vs
+    # Strategy(0) but produces a more accurate final covariance.
+
+    "rosenbrock_2d_s1" => (() -> begin
+        cf = CostFunction(rosenbrock_2)
+        migrad(cf, [-1.2, 1.0], [0.1, 0.1]; strategy = Strategy(1))
+    end),
+
+    "rosenbrock_10d_s1" => (() -> begin
+        cf = CostFunction(rosenbrock_nd)
+        x0 = [(-1.2, 1.0)[1 + (i & 1)] for i in 0:9]
+        migrad(cf, x0, fill(0.1, 10); strategy = Strategy(1))
+    end),
+
+    "quad_4d_s1" => (() -> begin
+        cf = CostFunction(quad_nd)
+        migrad(cf, [1.0, 1.0, 1.0, 1.0], [0.1, 0.1, 0.1, 0.1];
+                strategy = Strategy(1))
+    end),
+
+    "gauss_ll_2_100_s1" => (() -> begin
+        cf = CostFunction(make_gauss_nll(100, 2.0, 1.0), 0.5)
+        migrad(cf, [1.0, 2.0], [0.1, 0.1]; strategy = Strategy(1))
+    end),
+
+    "gauss_ll_10_1000_s1" => (() -> begin
+        cf = CostFunction(make_gauss_nll_nd(10, 1000), 0.5)
+        migrad(cf, zeros(10), fill(0.1, 10); strategy = Strategy(1))
+    end),
 ]

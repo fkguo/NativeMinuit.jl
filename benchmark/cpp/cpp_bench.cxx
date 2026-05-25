@@ -192,6 +192,61 @@ int main() {
         return std::make_pair(mn.Fval(), int(mn.NFcn()));
     }));
 
+    // ── Strategy(1) variants — Phase 1 完成判据 #6 ─────────────────────
+    // Mirror the Strategy(0) set but with MnStrategy(1) — iminuit's
+    // default mode, where MIGRAD invokes an inner MnHesse when the
+    // DFP-estimated Dcovar exceeds 0.05.
+
+    results.push_back(bench("rosenbrock_2d_s1", []() {
+        Rosenbrock2 fcn;
+        MnUserParameters upar;
+        upar.Add("p0", -1.2, 0.1);
+        upar.Add("p1", 1.0, 0.1);
+        MnMigrad migrad(fcn, upar, MnStrategy(1));
+        FunctionMinimum mn = migrad();
+        return std::make_pair(mn.Fval(), int(mn.NFcn()));
+    }));
+
+    results.push_back(bench("rosenbrock_10d_s1", []() {
+        RosenbrockN fcn(10);
+        MnUserParameters upar;
+        for (int i = 0; i < 10; ++i)
+            upar.Add(("p" + std::to_string(i)).c_str(), (i % 2 == 0 ? -1.2 : 1.0), 0.1);
+        MnMigrad migrad(fcn, upar, MnStrategy(1));
+        FunctionMinimum mn = migrad();
+        return std::make_pair(mn.Fval(), int(mn.NFcn()));
+    }));
+
+    results.push_back(bench("quad_4d_s1", []() {
+        QuadNF fcn(4);
+        MnUserParameters upar;
+        for (int i = 0; i < 4; ++i)
+            upar.Add(("p" + std::to_string(i)).c_str(), 1.0, 0.1);
+        MnMigrad migrad(fcn, upar, MnStrategy(1));
+        FunctionMinimum mn = migrad();
+        return std::make_pair(mn.Fval(), int(mn.NFcn()));
+    }));
+
+    results.push_back(bench("gauss_ll_2_100_s1", []() {
+        GaussNLL fcn(100, 2.0, 1.0);
+        MnUserParameters upar;
+        upar.Add("mu", 1.0, 0.1);
+        upar.Add("sigma", 2.0, 0.1);
+        MnMigrad migrad(fcn, upar, MnStrategy(1));
+        FunctionMinimum mn = migrad();
+        return std::make_pair(mn.Fval(), int(mn.NFcn()));
+    }));
+
+    results.push_back(bench("gauss_ll_10_1000_s1", []() {
+        GaussNLLNDim fcn(10, 1000);
+        MnUserParameters upar;
+        for (int i = 0; i < 10; ++i)
+            upar.Add(("p" + std::to_string(i)).c_str(), 0.0, 0.1);
+        MnMigrad migrad(fcn, upar, MnStrategy(1));
+        FunctionMinimum mn = migrad();
+        return std::make_pair(mn.Fval(), int(mn.NFcn()));
+    }));
+
     // Emit JSON
     std::cout << "[\n";
     for (size_t i = 0; i < results.size(); ++i) {
