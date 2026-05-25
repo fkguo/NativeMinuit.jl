@@ -83,6 +83,27 @@ function migrad(
 end
 
 """
+    migrad(f, x0, errs; up=1.0, strategy=Strategy(0), tol=0.1, maxfcn=..., prec=...)
+
+Convenience overload that wraps a bare callable `f` into a
+[`CostFunction`](@ref) before dispatching to the main `migrad`. The
+parametric `CostFunction{typeof(f)}` ensures closure specialization at
+the call site (parallel-review #2 F4 + ROADMAP §3.4 Criterion 4).
+
+`up=1.0` for χ² fits, `up=0.5` for negative log-likelihood.
+"""
+function migrad(
+    f::F,
+    x0::AbstractVector{<:Real},
+    errs::AbstractVector{<:Real};
+    up::Real = 1.0,
+    kwargs...,
+) where {F}
+    cf = CostFunction(f, up)
+    return migrad(cf, x0, errs; kwargs...)
+end
+
+"""
     _migrad_loop(seed, cf, strategy, tol, maxfcn, prec) -> FunctionMinimum
 
 The MIGRAD iteration loop proper. Public via `migrad(...)`; exposed for

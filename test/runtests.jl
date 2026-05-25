@@ -18,4 +18,5 @@ using Test
     include("test_seed.jl")
     include("test_migrad.jl")
     include("test_cpp_oracle.jl")
+    include("test_aqua_jet.jl")
 end
