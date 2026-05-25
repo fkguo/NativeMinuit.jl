@@ -3,6 +3,89 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [0.2.0-alpha] — 2026-05-25
+
+Phase 1.x deep refinements + Phase 1 exit-gate + Phase 3 polish.
+Builds on 0.1.0-alpha; 1012/1012 tests passing (Julia 1.12, 4 threads).
+
+### Added
+
+#### Phase 1.x — deep algorithmic refinements
+- **D4** (`free_covariance`): n_free × n_free covariance sub-block accessor
+  matching C++ `MnUserParameterState::Covariance()` shape. The default
+  `ext_covariance` remains the n_total × n_total view with zero rows/cols
+  for fixed parameters (convenient indexing); `free_covariance` is the
+  C++-shape alternative on demand.
+- **D5** (`int2ext_error`): C++ `MnUserTransformation::Int2extError`
+  two-sided symmetric average for bounded parameter external errors:
+  `0.5·(|du1| + |du2|)` with the double-bounded saturation clamp
+  (`upper - lower` when err > 1). Captures the nonlinear remapping
+  near bounds where the Jacobian-only formula under-reports.
+- **A3/A4** (`function_cross`): full C++ 3-point parabolic search per
+  `MnFunctionCross.cxx:117-507`. New helpers:
+    - `_parabola_fit3` (Lagrange fit through 3 points)
+    - `_parabola_solve_for_aim` (quadratic root + slope-sign root pick)
+    - `_three_point_classify` (noless, ibest, iworst, ileft, iright,
+      iout with default_ibest tie-break)
+  Both `function_cross` and `function_cross_multi` now share a single
+  `_cross_core` (probe-closure dispatch). L300/L460/L500 control flow
+  ported as `@label`/`@goto`. Crossing convergence uses the hardcoded
+  `tlr = 0.01` per C++ (user `tlr` controls only inner-MIGRAD).
+
+#### Phase 1 exit gate — Strategy(1)/(2) inner-Hesse refinement
+- New outer `do-while` wraps the existing DFP inner loop. After DFP
+  convergence, if `Strategy == 2` (always) or `Strategy == 1 && Dcovar
+  > 0.05`, call MnHesse on the converged state. If HESSE moves edm
+  above tolerance and above machine accuracy, re-iterate the inner
+  DFP loop. Per-pass budget bump `maxfcn → floor(maxfcn × 1.3)` on
+  second pass (`VariableMetricBuilder.cxx:182-184`).
+- Removed the Phase 0 `Strategy ≥ 1 throws` guard from `seed_state`.
+
+#### Phase 3 — Polish + Documentation
+- iminuit-style pretty-print boxes for `FunctionMinimum` + `MinosError`.
+  Two-column 71-char Unicode tables with validity flags + parameter
+  table (idx / name / value / Hesse err).
+- Documenter.jl docs site (`docs/`): index, three tutorials (quickstart,
+  bounded, MINOS+contours), API reference, internals (algorithm map,
+  cross-search walk-through, multi-agent review history).
+- GitHub Actions workflows:
+    - `ci.yml`: test matrix on Julia 1.10 + 1, Ubuntu + macOS +
+      macOS-aarch64; codecov upload.
+    - `docs.yml`: Documenter build + gh-pages deploy on push to main.
+
+### Fixed
+
+#### Multi-agent review BLOCKING findings (round 5)
+
+Independent Opus code-reviewer caught two BLOCKING parity gaps in
+the A3/A4 first cut:
+
+- **BLOCKING #1** — Crossing convergence used user's `tlr` (default 0.1)
+  but C++ `MnFunctionCross.cxx:38-40` OVERRIDES to 0.01. Fixed by
+  hardcoding `tlf = 0.01·up`, `tla_base = 0.01` in `_cross_core`.
+- **BLOCKING #2** — Missing "new straight line thru first two points"
+  fall-through (C++ lines 343-351). The cases `noless ∈ {0, 3} &&
+  ibest == 3` (third probe is best, all 3 same-side of aim) silently
+  fell to L500 with an unconverging parabola fit. Added the ELSE
+  branch: `a[iworst] = a[3]; dfda = (f[2]-f[1])/(a[2]-a[1]);
+  @goto l460_extrapolate`.
+
+Folded IMPORTANT findings:
+- L300-redo step counter is now a local `l300_step_count` reset to 0
+  on each L300 entry (was using cumulative ipt → overshooting steps).
+- `_three_point_classify` accepts `default_ibest` keyword (3 for the
+  initial classifier, 1 for L500) to match C++ tie-break semantics.
+
+### Stats
+
+- Tests: 888 → 1012 (+ 124).
+- Source files: src/ + tests + docs + CI workflows.
+- 5 rounds of parallel multi-agent review (codex gpt-5.5 xhigh +
+  native Opus subagent) caught 5+ BLOCKING bugs that would have
+  shipped silently.
+
+---
+
 ## [0.1.0-alpha] — 2026-05-25
 
 First substantial alpha release. Phase 0 PoC + Phase 1 batch 1-3 +

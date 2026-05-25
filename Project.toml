@@ -1,7 +1,7 @@
 name = "JuMinuit"
 uuid = "5523a57a-07f4-4aae-a9fd-d526bcb5d194"
 authors = ["fkg <huyarthurcamilleMJ@consultant.com>"]
-version = "0.0.1-DEV"
+version = "0.2.0-alpha"
 license = "LGPL-2.1-or-later"
 
 [deps]
