@@ -49,6 +49,7 @@ include("minos.jl")
 include("contours.jl")
 include("migrad_bounded.jl")
 include("minuit.jl")
+include("ad_gradient.jl")
 
 # Phase 0 public surface (will grow as files are added).
 export MachinePrecision
@@ -83,5 +84,6 @@ export MnCross, MinosError, minos
 export ContoursError, contour
 export BoundedFunctionMinimum, ext_errors, ext_covariance
 export Minuit, migrad!, minos!
+export CostFunctionWithGradient, analytical_gradient, analytical_gradient!
 
 end # module JuMinuit

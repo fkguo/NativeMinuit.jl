@@ -111,9 +111,9 @@ re-entry tests and benchmarks.
 """
 function _migrad_loop(
     seed::MinimumState,
-    cf::CostFunction,
-    strategy::Strategy,
-    tol::Real,
+    cf,                          # accepts CostFunction OR CostFunctionWithGradient;
+    strategy::Strategy,          # method dispatch on numerical_gradient! etc.
+    tol::Real,                   # picks the right per-FCN-type implementation.
     maxfcn::Integer,
     prec::MachinePrecision,
 )
