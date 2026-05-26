@@ -233,6 +233,35 @@
             @test e.lower <= 0
         end
 
+        @testset "UpperOnly L300/aulim overshoot (round-4 codex BLOCKING)" begin
+            # Bound JUST PAST 1σ — search will L300-extend, the probe
+            # will clamp ext_val to the bound for aopt > aulim, but
+            # _cross_core records the unclamped aopt. Without the
+            # round-4 fix, MINOS returned `valid=true` with
+            # `upper > bound_distance` — a physics-wrong asymmetric
+            # error (user sees an error larger than the bound allows).
+            m = Minuit(x -> (x[1] - 8.0)^2 + (x[2] - 2.0)^2, [5.0, 0.0];
+                        name = ["x", "y"],
+                        limits = [(nothing, 8.995), nothing])
+            migrad(m); minos(m, 1)
+            e = m.minos_errors[1]
+            bound_distance = 8.995 - m.values[1]
+            @test bound_distance > 0   # sanity: optimum inside the bound
+            # The PHYSICAL invariant: any published upper error must
+            # fit inside the bound. Pre-fix: upper ≈ 1.39, distance ≈
+            # 0.997 → violation. Post-fix: upper ≤ bound_distance OR
+            # upper_valid=false with upper_par_limit=true.
+            if e.upper_valid
+                @test e.upper <= bound_distance + 1e-9
+            else
+                @test e.upper_par_limit
+                @test e.upper <= bound_distance + 1e-9
+            end
+            # Lower side untouched (bound nowhere near).
+            @test e.lower_valid
+            @test e.lower ≈ -1.0 atol = 0.05
+        end
+
         @testset "UpperOnly partial truncation: bound inside 1σ (round-3 I-1)" begin
             # The C++-faithful behavior: bound INSIDE the 1σ HESSE
             # interval but NOT at the converged minimum. Round-3

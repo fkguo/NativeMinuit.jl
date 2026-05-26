@@ -912,10 +912,29 @@ function function_cross_external(
         result = _cross_core(probe, fmin_val, up, bfm.internal.state;
                               tlr = Float64(tlr),
                               maxcalls = maxcalls, prec = prec)
-        # If the search exited invalid AND we hit the bound during the
-        # walk, relabel as par_limit. This is the partial-truncation
-        # case (bound inside 1σ but not at the minimum) both reviewers
-        # flagged in round-3.
+        # Round-4 codex BLOCKING fix: the probe clamps ext_val when
+        # aopt > aulim, but `_cross_core` still records the UNCLAMPED
+        # aopt. If the inner-fval at the clamped bound happens to be
+        # close enough to aim, _cross_core can return valid=true with
+        # aopt > aulim — the published ext error would then exceed
+        # the physical distance to the bound (e.g., user with bound
+        # at +0.997σ sees an asymmetric error of +1.39σ). This is
+        # a silently wrong physics result.
+        #
+        # Mirroring C++ MnFunctionCross.cxx:494-496 (CrossParLimit
+        # raised when limset && Fval < aim): if the returned aopt
+        # exceeds aulim, the search effectively converged against the
+        # constant-f region past the bound. Snap aopt to aulim, mark
+        # par_limit, invalidate the side (the crossing wasn't found
+        # before hitting the bound).
+        if result.valid && aulim < Inf && result.aopt > aulim
+            result = MnCross(result.state, aulim, result.nfcn;
+                              valid = false, par_limit = true,
+                              new_min = result.new_min,
+                              fcn_limit = result.fcn_limit)
+        end
+        # Round-3 partial-truncation fix: search exited invalid AND
+        # we hit the bound during the walk → relabel as par_limit.
         if !result.valid && limset[] && !result.par_limit
             result = MnCross(result.state, result.aopt, result.nfcn;
                               valid = false, par_limit = true,
