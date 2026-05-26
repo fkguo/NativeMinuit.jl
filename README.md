@@ -158,8 +158,7 @@ cd ../../.. && julia benchmark/compare_cpp.jl
 - **C++ Minuit2** by M. Winkler, F. James, L. Moneta, A. Zsenei
   (CERN PH/SFT, 2003–) — the algorithmic basis. This Julia port is a
   derivative work.
-- **[IMinuit.jl](https://github.com/fkguo/IMinuit.jl)** (Feng-Kun Guo,
-  [@fkguo](https://github.com/fkguo)) — the Julia wrapper this port
-  replaces.
+- **[IMinuit.jl](https://github.com/fkguo/IMinuit.jl)** (Feng-Kun Guo)
+  — the Julia wrapper this port replaces.
 - **[iminuit](https://github.com/scikit-hep/iminuit)** (Hans Dembinski,
   scikit-hep) — the Python wrapper whose API Phase 3 mirrors.
