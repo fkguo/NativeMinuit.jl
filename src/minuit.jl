@@ -783,11 +783,15 @@ function _param_row_data(m::Minuit, i::Int)
     minos_hi = nothing
     if haskey(m.minos_errors, i)
         me = m.minos_errors[i]
-        minos_lo = me.lower_valid ? me.lower : nothing
-        minos_hi = me.upper_valid ? me.upper : nothing
+        # Show the MINOS error if it's valid OR if it represents an
+        # at-limit bound_distance (par_limit). In the par_limit case
+        # the value is physically meaningful (max ext movement before
+        # hitting the bound), matching iminuit. Round-6 polish.
+        minos_lo = (me.lower_valid || me.lower_par_limit) ? me.lower : nothing
+        minos_hi = (me.upper_valid || me.upper_par_limit) ? me.upper : nothing
     end
-    limit_lo = has_lower_limit(p) || has_limits(p) ? p.lower : nothing
-    limit_hi = has_upper_limit(p) || has_limits(p) ? p.upper : nothing
+    limit_lo = has_lower_limit(p) ? p.lower : nothing
+    limit_hi = has_upper_limit(p) ? p.upper : nothing
     return (idx = i, name = p.name, value = value,
             hesse = hesse_err, minos_lo = minos_lo, minos_hi = minos_hi,
             limit_lo = limit_lo, limit_hi = limit_hi, fixed = fixed)

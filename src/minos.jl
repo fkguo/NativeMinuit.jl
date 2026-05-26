@@ -134,11 +134,13 @@ function minos(
     # 1-sigma external step (same as inside function_cross)
     sigma_i = sqrt(max(2.0 * cf.up * state.error.inv_hessian[par_idx, par_idx],
                         prec.eps2))
-    # Invalid-side encoding: 0.0 (NOT NaN), matching iminuit and the
-    # bounded MINOS path. Users see `e.upper_valid=false` + `e.upper=0`
-    # consistently across bounded/unbounded fits; downstream code
-    # gating on `e.upper > threshold` is safe (no NaN propagation).
-    # Round-3 I-2 (Opus).
+    # Invalid-side encoding: 0.0 (NOT NaN), avoiding NaN propagation
+    # in downstream code that gates on `e.upper > threshold`. The
+    # bounded MINOS path (in src/minuit.jl) publishes the actual
+    # bound_distance when `par_limit=true` and 0.0 only for non-bound
+    # failure modes — unbounded fits have no `par_limit` so they
+    # consistently fall into the 0.0 branch here. Round-3 I-2 (Opus);
+    # bounded behavior refined in round-6.
     upper = up_cross.valid ? up_cross.aopt * sigma_i : 0.0
     nfcn_total = up_cross.nfcn
 
@@ -198,6 +200,8 @@ function Base.show(io::IO, ::MIME"text/plain", e::MinosError)
     println(io, "├", "─"^35, "┼", "─"^35, "┤")
     up_status = if e.upper_new_min
         "Upper: NEW MIN found"
+    elseif e.upper_par_limit
+        "Upper: AT LIMIT"
     elseif e.upper_fcn_limit
         "Upper: call-limit hit"
     elseif e.upper_valid
@@ -207,6 +211,8 @@ function Base.show(io::IO, ::MIME"text/plain", e::MinosError)
     end
     lo_status = if e.lower_new_min
         "Lower: NEW MIN found"
+    elseif e.lower_par_limit
+        "Lower: AT LIMIT"
     elseif e.lower_fcn_limit
         "Lower: call-limit hit"
     elseif e.lower_valid

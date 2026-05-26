@@ -236,6 +236,57 @@
             @test e.lower <= 0
         end
 
+        @testset "LowerOnly saturated: param at lower bound (round-6 mirror)" begin
+            # Mirror of the UpperOnly saturated test, but with the
+            # optimum below the lower bound so x converges AT the
+            # bound. Round-6 polish: ensures the LowerOnly path of
+            # the at-limit publish-bound_distance fix is exercised.
+            m = Minuit(x -> (x[1] - 4.0)^2 + (x[2] - 2.0)^2, [10.0, 0.0];
+                        name = ["x", "y"], limits = [(6.0, nothing), nothing])
+            migrad(m)
+            @test m.is_valid
+            @test m.values[1] ≈ 6.0 atol = 1e-2   # at lower bound
+            minos(m, 1)
+            e = m.minos_errors[1]
+            # Lower saturated: par_limit raised, lower_err equals the
+            # PHYSICAL bound_distance (negative — par.lower − ext_min).
+            bound_distance = m.params.pars[1].lower - m.values[1]   # ≤ 0
+            @test !e.lower_valid
+            @test e.lower_par_limit
+            @test !e.lower_fcn_limit
+            @test e.lower ≈ bound_distance atol = 1e-6
+            # Upper side stays interior (search goes away from bound).
+            @test e.upper >= 0
+        end
+
+        @testset "BothBounds saturated: both sides clip (round-6 mirror)" begin
+            # Bounds at ±0.5 around optimum at 0 with σ ≈ 1 — both
+            # MINOS sides need to saturate. Tests the BothBounds
+            # par_limit case symmetrically.
+            m = Minuit(x -> x[1]^2 + (x[2] - 2.0)^2, [0.2, 0.0];
+                        name = ["x", "y"], limits = [(-0.5, 0.5), nothing])
+            migrad(m)
+            @test m.is_valid
+            minos(m, 1)
+            e = m.minos_errors[1]
+            up_bound = m.params.pars[1].upper - m.values[1]   # > 0
+            lo_bound = m.params.pars[1].lower - m.values[1]   # < 0
+            # Both sides should either succeed within the bounds OR
+            # publish the bound_distance with par_limit.
+            if !e.upper_valid
+                @test e.upper_par_limit
+                @test e.upper ≈ up_bound atol = 1e-6
+            else
+                @test e.upper <= up_bound + 1e-9
+            end
+            if !e.lower_valid
+                @test e.lower_par_limit
+                @test e.lower ≈ lo_bound atol = 1e-6
+            else
+                @test e.lower >= lo_bound - 1e-9
+            end
+        end
+
         @testset "UpperOnly L300/aulim overshoot (round-4 codex BLOCKING)" begin
             # Bound JUST PAST 1σ — search will L300-extend, the probe
             # will clamp ext_val to the bound for aopt > aulim, but
