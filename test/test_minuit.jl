@@ -208,11 +208,10 @@
             @test e.lower ≈ -1.0 atol = 0.05
         end
 
-        @testset "UpperOnly saturated: param near upper bound" begin
+        @testset "UpperOnly saturated: param at upper bound" begin
             # Fit pushes x toward upper bound: optimum is at x=12 but
-            # upper=10. MINOS upper side will saturate at the bound;
-            # lower side stays valid (search goes interior). Two-param
-            # form (MINOS requires n > 1 free).
+            # upper=10. MINOS upper side saturates AT the bound; lower
+            # side stays interior. Two-param form (MINOS needs n>1).
             m = Minuit(x -> (x[1] - 12.0)^2 + (x[2] - 2.0)^2, [5.0, 0.0];
                         name = ["x", "y"],
                         limits = [(nothing, 10.0), nothing])
@@ -221,16 +220,47 @@
             @test m.values[1] ≈ 10.0 atol = 1e-2   # at upper bound
             minos(m, 1)
             e = m.minos_errors[1]
-            # Upper saturated: ext shift = 0, invalid, per-side
-            # fcn_limit (NOT shared with lower).
+            # Upper saturated: ext shift = 0, invalid, par_limit
+            # (NOT fcn_limit — par_limit means "hit a bound", fcn_limit
+            # means "ran out of FCN budget"; round-3 I-4 separates them).
             @test e.upper == 0.0
             @test !e.upper_valid
-            @test e.upper_fcn_limit
-            # Lower side should still be valid and negative (search
-            # goes away from bound, toward x=12-1=11... but x is
-            # capped at 10, so the lower MINOS finds the crossing
-            # somewhere interior). At minimum, sign should be right.
+            @test e.upper_par_limit
+            @test !e.upper_fcn_limit
+            # Lower side: search goes away from bound, finds interior
+            # crossing (or also saturates if x has bumped 1σ toward the
+            # bound). Sign must be ≤ 0.
             @test e.lower <= 0
+        end
+
+        @testset "UpperOnly partial truncation: bound inside 1σ (round-3 I-1)" begin
+            # The C++-faithful behavior: bound INSIDE the 1σ HESSE
+            # interval but NOT at the converged minimum. Round-3
+            # reviewers both flagged this as the missing par_limit
+            # propagation case. Setup: x ∈ (-∞, 8.5] with optimum at
+            # x=8 (well-interior); σ_x ≈ 1 → upper 1σ at x=9 would be
+            # past the bound at 8.5.
+            m = Minuit(x -> (x[1] - 8.0)^2 + (x[2] - 2.0)^2, [5.0, 0.0];
+                        name = ["x", "y"],
+                        limits = [(nothing, 8.5), nothing])
+            migrad(m)
+            @test m.is_valid
+            minos(m, 1)
+            e = m.minos_errors[1]
+            # Lower side unaffected (bound far from lower direction).
+            @test e.lower_valid
+            @test e.lower ≈ -1.0 atol = 0.05
+            # Upper side: bound cuts into the 1σ interval. Should
+            # either succeed at truncated value OR fail with
+            # par_limit raised. The SILENT failure (round-3 BLOCKING)
+            # would have valid=false AND par_limit=false AND fcn_limit
+            # =false — making the user think nothing was wrong.
+            if !e.upper_valid
+                @test e.upper_par_limit
+            end
+            # Either way, no false fcn_limit (the budget wasn't the
+            # issue — the bound was).
+            @test !e.upper_fcn_limit
         end
     end
 

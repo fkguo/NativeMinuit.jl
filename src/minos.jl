@@ -51,7 +51,32 @@ struct MinosError
     lower_new_min::Bool
     upper_fcn_limit::Bool
     lower_fcn_limit::Bool
+    # par_limit fields distinguish "ran out of FCN calls" (a budget
+    # problem the user can fix by increasing maxcalls) from "search
+    # hit a parameter bound" (a model problem the user can fix only
+    # by relaxing the bound). C++ MnCross has the equivalent flag
+    # via CrossParLimit(); Opus round-3 I-4. Set to false by the
+    # backward-compatible constructor below.
+    upper_par_limit::Bool
+    lower_par_limit::Bool
     nfcn::Int
+end
+
+# Backward-compatible constructor (legacy callers that don't pass
+# par_limit fields). Defaults the par_limit flags to false. Public
+# API; bounded MINOS path passes them explicitly.
+function MinosError(par_idx::Int, min_par_value::Float64,
+                     upper::Float64, lower::Float64,
+                     upper_valid::Bool, lower_valid::Bool,
+                     upper_new_min::Bool, lower_new_min::Bool,
+                     upper_fcn_limit::Bool, lower_fcn_limit::Bool,
+                     nfcn::Int)
+    MinosError(par_idx, min_par_value, upper, lower,
+                upper_valid, lower_valid,
+                upper_new_min, lower_new_min,
+                upper_fcn_limit, lower_fcn_limit,
+                false, false,   # par_limit defaults
+                nfcn)
 end
 
 """
@@ -109,7 +134,12 @@ function minos(
     # 1-sigma external step (same as inside function_cross)
     sigma_i = sqrt(max(2.0 * cf.up * state.error.inv_hessian[par_idx, par_idx],
                         prec.eps2))
-    upper = up_cross.valid ? up_cross.aopt * sigma_i : NaN
+    # Invalid-side encoding: 0.0 (NOT NaN), matching iminuit and the
+    # bounded MINOS path. Users see `e.upper_valid=false` + `e.upper=0`
+    # consistently across bounded/unbounded fits; downstream code
+    # gating on `e.upper > threshold` is safe (no NaN propagation).
+    # Round-3 I-2 (Opus).
+    upper = up_cross.valid ? up_cross.aopt * sigma_i : 0.0
     nfcn_total = up_cross.nfcn
 
     # Lower direction (negative). aopt comes out positive; flip sign.
@@ -117,7 +147,7 @@ function minos(
                                 tlr = tlr,
                                 maxcalls = maxcalls,
                                 strategy = strategy, prec = prec)
-    lower = lo_cross.valid ? -lo_cross.aopt * sigma_i : NaN
+    lower = lo_cross.valid ? -lo_cross.aopt * sigma_i : 0.0
     nfcn_total += lo_cross.nfcn
 
     return MinosError(
@@ -131,6 +161,8 @@ function minos(
         lo_cross.new_min,
         up_cross.fcn_limit,
         lo_cross.fcn_limit,
+        up_cross.par_limit,
+        lo_cross.par_limit,
         nfcn_total,
     )
 end

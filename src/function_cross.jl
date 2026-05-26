@@ -833,18 +833,44 @@ function function_cross_external(
     up = cf.up
     inner_strategy = Strategy(max(0, strategy.level - 1))
 
-    # Build probe closure. At each alpha, set par to `ext_min + aopt
-    # * step_ext` (clamped defensively to the bound on alpha
-    # extrapolation), build a fresh Parameters with par_idx FIXED at
-    # that value, run bounded migrad on the inner problem.
+    # aulim-style detection: the maximum alpha that keeps the trial
+    # value inside the bound. Mirrors C++ MnFunctionCross.cxx:64-104
+    # — when aopt exceeds aulim, the search hit the bound; this is a
+    # `par_limit` event, not a `fcn_limit` event. Tracked via Ref
+    # captured in the probe closure (Julia idiom for "mutable state
+    # observable across a closure call").
+    aulim = if step_ext > 0 && has_upper_limit(par)
+        (par.upper - ext_min) / step_ext
+    elseif step_ext < 0 && has_lower_limit(par)
+        (par.lower - ext_min) / step_ext
+    else
+        Inf
+    end
+    limset = Ref(false)
+
+    # Build probe closure. At each alpha, set par to `ext_min + aopt *
+    # step_ext` (clamped against the bound if aopt > aulim), copy ALL
+    # other free params from the CONVERGED minimum (NOT the user seed
+    # — codex round-3 catch: starting from the seed loses the
+    # MIGRAD-converged information and can land the inner search in a
+    # different basin for hard FCNs), build Parameters with par_idx
+    # FIXED at the trial value, run bounded migrad on the inner problem.
     let par_idx = Int(par_idx), step_ext = step_ext,
         ext_min = ext_min, par = par, params = params,
+        aulim = aulim, limset = limset,
+        ext_values = bfm.ext_values,
         inner_strategy = inner_strategy
         probe = function (aopt::Float64, budget::Integer)
-            ext_val = ext_min + aopt * step_ext
-            # Defensive re-clamp: L300 outward extension may use
-            # aopt > 1, which could push past the bound. Use
-            # side-specific predicates (NOT has_limits — see note above).
+            # aulim check: if alpha overshoots the bound, clamp and
+            # mark limset. Round-3 BLOCKING fix.
+            clamped_aopt = aopt
+            if aopt > aulim
+                clamped_aopt = aulim
+                limset[] = true
+            end
+            ext_val = ext_min + clamped_aopt * step_ext
+            # Defensive re-clamp: rounding might leave ext_val just past
+            # the bound by 1 ulp.
             if has_upper_limit(par)
                 ext_val = min(ext_val, par.upper)
             end
@@ -854,25 +880,48 @@ function function_cross_external(
             inner_pars = MinuitParameter[]
             sizehint!(inner_pars, length(params.pars))
             for (i, p) in enumerate(params.pars)
+                # Start each non-scanned param from the CONVERGED ext
+                # value (bfm.ext_values[i]), not the user's original
+                # seed (p.value). Without this, the inner MIGRAD
+                # restarts from the user's initial guess every probe.
+                converged_v = ext_values[i]
+                lo = isnan(p.lower) ? NaN : p.lower
+                hi = isnan(p.upper) ? NaN : p.upper
                 if i == par_idx
-                    lo = isnan(p.lower) ? NaN : p.lower
-                    hi = isnan(p.upper) ? NaN : p.upper
                     push!(inner_pars, MinuitParameter(p.name, ext_val,
                                                        p.error;
                                                        lower = lo, upper = hi,
                                                        fixed = true))
                 else
-                    push!(inner_pars, p)
+                    push!(inner_pars, MinuitParameter(p.name, converged_v,
+                                                       p.error;
+                                                       lower = lo, upper = hi,
+                                                       fixed = p.fixed))
                 end
             end
             inner_params = Parameters(inner_pars, prec)
             inner_bfm = migrad(cf, inner_params;
                                 tol = 0.5 * tlr, maxfcn = Int(budget),
                                 strategy = inner_strategy, prec = prec)
-            return inner_bfm.internal, ncalls(cf)
+            # nfcn correctly = the inner bounded migrad's call count
+            # (NOT ncalls(cf), which is the OUTER cf and never gets
+            # incremented because bounded migrad wraps cf into
+            # cf_internal with its own counter). Round-3 BLOCKING fix.
+            return inner_bfm.internal, nfcn(inner_bfm)
         end
-        return _cross_core(probe, fmin_val, up, bfm.internal.state;
-                            tlr = Float64(tlr),
-                            maxcalls = maxcalls, prec = prec)
+        result = _cross_core(probe, fmin_val, up, bfm.internal.state;
+                              tlr = Float64(tlr),
+                              maxcalls = maxcalls, prec = prec)
+        # If the search exited invalid AND we hit the bound during the
+        # walk, relabel as par_limit. This is the partial-truncation
+        # case (bound inside 1σ but not at the minimum) both reviewers
+        # flagged in round-3.
+        if !result.valid && limset[] && !result.par_limit
+            result = MnCross(result.state, result.aopt, result.nfcn;
+                              valid = false, par_limit = true,
+                              new_min = result.new_min,
+                              fcn_limit = result.fcn_limit)
+        end
+        return result
     end
 end
