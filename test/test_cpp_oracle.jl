@@ -90,16 +90,20 @@ const ORACLE_TOL = Dict(
         atol_cov = 2e-2,
     ),
     "rosenbrock_10d" => (
-        # Measured: |fval diff| ≈ 7e-5, |param diff| ≈ 1e-3.
-        # |cov diff| ≈ 0.09 (cov scale ~3) — banana valley has a
-        # near-zero smallest Hessian eigenvalue, so V = inv(H) is
-        # ill-conditioned and any iteration-stop drift amplifies in
-        # the covariance. This is physics, not algorithmic divergence.
+        # Measured on Apple M3 (local): |fval| ≈ 7e-5, |param| ≈ 1e-3,
+        # |cov| ≈ 0.09. The GitHub macos CI runner showed cov |diff| up
+        # to 0.28 on the same case — different OpenBLAS thread / kernel
+        # routing changes the EDM-stopping iteration count, and the
+        # banana valley's near-zero smallest Hessian eigenvalue amplifies
+        # any param drift through V = inv(H). Tolerance set to 5× the
+        # local drift, 1.8× the CI drift, ~17% of the cov scale (~3) —
+        # tight enough to catch real algorithmic regressions, loose
+        # enough to survive cross-machine BLAS variability.
         rtol_fval = 1.0,    atol_fval = 2e-4,
         rtol_param = 5e-3,  atol_param = 2e-3,
         rtol_edm = 1.0,
         nfcn_slack = 100,
-        atol_cov = 2e-1,
+        atol_cov = 5e-1,
     ),
 )
 
