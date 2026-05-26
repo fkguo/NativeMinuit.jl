@@ -24,6 +24,8 @@
 #include "Minuit2/MnMigrad.h"
 #include "Minuit2/MnMinos.h"
 #include "Minuit2/MinosError.h"
+#include "Minuit2/MnContours.h"
+#include "Minuit2/ContoursError.h"
 #include "Minuit2/MnUserParameters.h"
 #include "Minuit2/MnUserCovariance.h"
 #include "Minuit2/MnUserParameterState.h"
@@ -34,6 +36,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -77,6 +80,34 @@ public:
     double Up() const override { return 1.0; }
 private:
     unsigned fN;
+};
+
+// Negative log-likelihood for a Gaussian sample. Two parameters:
+// mu (mean) and sigma (std-dev, sigma > 0). Up() = 0.5 (NLL convention).
+// The data is generated once with a fixed RNG seed so the Julia side
+// can reproduce it bit-identically.
+class GaussNLL final : public FCNBase {
+public:
+    GaussNLL(unsigned n_events, double mu, double sigma, std::uint64_t seed = 0xCAFEF00D) {
+        std::mt19937_64 rng(seed);
+        std::normal_distribution<double> g(mu, sigma);
+        fData.reserve(n_events);
+        for (unsigned i = 0; i < n_events; ++i) fData.push_back(g(rng));
+    }
+    double operator()(const std::vector<double>& p) const override {
+        const double mu = p[0], sigma = p[1];
+        if (sigma <= 0) return 1e30;
+        double s = 0.0;
+        for (double x : fData) {
+            const double d = x - mu;
+            s += std::log(sigma) + 0.5 * (d * d) / (sigma * sigma);
+        }
+        return s;
+    }
+    double Up() const override { return 0.5; }
+    const std::vector<double>& Data() const { return fData; }
+private:
+    std::vector<double> fData;
 };
 
 // f(x, y) = 100 * (y - x^2)^2 + (1 - x)^2 + ... — n-dim Rosenbrock chain
@@ -272,11 +303,23 @@ void run_minos_case(const std::string &outdir,
                     const std::vector<double> &x0,
                     const std::vector<double> &errs0,
                     const FCNBase &fcn,
-                    unsigned strategy_level = 1)
+                    unsigned strategy_level = 1,
+                    const std::vector<ParamMeta> *meta = nullptr)
 {
     MnUserParameters upar;
     for (size_t i = 0; i < x0.size(); ++i) {
         upar.Add("p" + std::to_string(i), x0[i], errs0[i]);
+        if (meta && i < meta->size()) {
+            const auto &m = (*meta)[i];
+            if (m.has_lower && m.has_upper) {
+                upar.SetLimits(i, m.lower, m.upper);
+            } else if (m.has_upper) {
+                upar.SetUpperLimit(i, m.upper);
+            } else if (m.has_lower) {
+                upar.SetLowerLimit(i, m.lower);
+            }
+            if (m.fixed) upar.Fix(i);
+        }
     }
     MnStrategy stra(strategy_level);
     MnMigrad migrad(fcn, upar, stra);
@@ -335,6 +378,75 @@ void run_minos_case(const std::string &outdir,
     std::cout << "[ok] " << path
               << "  fval=" << std::setprecision(17) << mn.Fval()
               << "  npar=" << n << "\n";
+}
+
+// MnContours oracle: run MIGRAD then sample the 1σ contour (Up
+// default = 1.0 for χ², 0.5 for NLL) of two free parameters
+// (par1, par2) at `npoints` angles. Dumps each (x, y) pair to JSON.
+// Phase 1.x — closes the contour parity verification gap.
+void run_contour_case(const std::string &outdir,
+                      const std::string &name,
+                      const std::vector<double> &x0,
+                      const std::vector<double> &errs0,
+                      const FCNBase &fcn,
+                      unsigned par1, unsigned par2,
+                      unsigned npoints = 20,
+                      unsigned strategy_level = 1)
+{
+    MnUserParameters upar;
+    for (size_t i = 0; i < x0.size(); ++i) {
+        upar.Add("p" + std::to_string(i), x0[i], errs0[i]);
+    }
+    MnStrategy stra(strategy_level);
+    MnMigrad migrad(fcn, upar, stra);
+    FunctionMinimum mn = migrad();
+    if (!mn.IsValid()) {
+        std::cerr << "WARN: " << name << " MIGRAD invalid; skipping contour\n";
+        return;
+    }
+
+    MnContours contours(fcn, mn, stra);
+    // The C++ signature: Contour(par1, par2, npoints) returns
+    // std::vector<std::pair<double, double>>.
+    auto pts = contours(par1, par2, npoints);
+
+    const std::string path = outdir + "/" + name + "_contour.json";
+    std::ofstream out(path);
+    if (!out) {
+        std::cerr << "ERROR: could not open " << path << "\n";
+        std::exit(2);
+    }
+    out << "{\n";
+    out << "  \"name\": \"" << name << "\",\n";
+    out << "  \"_meta\": {\n";
+    out << "    \"source\": \"GooFit/Minuit2 @ " << kMinuit2Commit << "\",\n";
+    out << "    \"version\": \"" << kMinuit2Version << "\",\n";
+    out << "    \"strategy_level\": " << strategy_level << ",\n";
+    out << "    \"err_def\": " << Float64Out{fcn.Up()} << ",\n";
+    out << "    \"generator\": \"tools/cpp_trace_harness.cxx :: run_contour_case\"\n";
+    out << "  },\n";
+    out << "  \"par1\": " << par1 << ",\n";
+    out << "  \"par2\": " << par2 << ",\n";
+    out << "  \"npoints_requested\": " << npoints << ",\n";
+    out << "  \"fval\": " << Float64Out{mn.Fval()} << ",\n";
+    out << "  \"min_params\": [";
+    for (unsigned i = 0; i < mn.UserState().VariableParameters(); ++i) {
+        if (i) out << ", ";
+        out << Float64Out{mn.UserState().Value(i)};
+    }
+    out << "],\n";
+    out << "  \"points\": [\n";
+    for (size_t i = 0; i < pts.size(); ++i) {
+        out << "    [" << Float64Out{pts[i].first} << ", "
+                       << Float64Out{pts[i].second} << "]"
+                       << (i + 1 < pts.size() ? "," : "") << "\n";
+    }
+    out << "  ]\n";
+    out << "}\n";
+
+    std::cout << "[ok] " << path
+              << "  npoints=" << pts.size()
+              << "  fval=" << std::setprecision(17) << mn.Fval() << "\n";
 }
 
 int main(int argc, char *argv[])
@@ -435,6 +547,50 @@ int main(int argc, char *argv[])
         Shifted2D sh2;
         run_minos_case(outdir, "quad_2d_shifted",
                        { 0.0, 0.0 }, { 0.1, 0.1 }, sh2);
+    }
+
+    // Bounded Gauss-LL MINOS — Phase 1 完成判据 #5 explicitly asks for
+    // this case. Data drawn from N(2, 1) with 200 events, fit μ, σ
+    // with σ ∈ [0.1, ∞) (lower bound only). We dump the data array
+    // inline so the Julia side can reproduce the FCN bit-identically.
+    {
+        GaussNLL g(200, 2.0, 1.0);
+        std::vector<ParamMeta> meta(2);
+        meta[1].has_lower = true; meta[1].lower = 0.1;
+        run_minos_case(outdir, "bounded_gauss_ll",
+                       { 1.0, 2.0 }, { 0.1, 0.1 }, g, 1, &meta);
+
+        // Also dump the input data array so Julia can reconstruct the
+        // exact same FCN (Julia's Random.MersenneTwister doesn't match
+        // C++'s mt19937_64 byte-for-byte).
+        std::ofstream dout(outdir + "/bounded_gauss_ll_data.json");
+        dout << "{\n";
+        dout << "  \"name\": \"bounded_gauss_ll_data\",\n";
+        dout << "  \"_meta\": { \"seed\": \"0xCAFEF00D\", \"n_events\": 200,\n";
+        dout << "              \"true_mu\": 2.0, \"true_sigma\": 1.0 },\n";
+        dout << "  \"data\": [";
+        const auto &d = g.Data();
+        for (size_t i = 0; i < d.size(); ++i) {
+            if (i) dout << (i % 10 == 0 ? ",\n           " : ", ");
+            dout << Float64Out{d[i]};
+        }
+        dout << "]\n}\n";
+        std::cout << "[ok] " << outdir << "/bounded_gauss_ll_data.json"
+                  << "  n_events=" << d.size() << "\n";
+    }
+
+    // ── Contour oracles (Phase 1.x — verify MnContours numerical parity)
+    {
+        Rosenbrock2 r2;
+        run_contour_case(outdir, "rosenbrock_2d",
+                         { -1.2, 1.0 }, { 0.1, 0.1 }, r2, 0, 1, 20);
+    }
+    {
+        // 2D quadratic: f = (x - 1)^2 + (y - 2)^2; contour at f = fmin + 1
+        // is a unit circle centered at (1, 2). Good geometric sanity test.
+        Shifted2D sh2;
+        run_contour_case(outdir, "quad_2d_shifted",
+                         { 0.0, 0.0 }, { 0.1, 0.1 }, sh2, 0, 1, 24);
     }
 
     return 0;

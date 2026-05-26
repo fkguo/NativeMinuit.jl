@@ -25,6 +25,7 @@ using Test
     include("test_covariance_squeeze.jl")
     include("test_minos.jl")
     include("test_minos_oracle.jl")
+    include("test_bounded_gauss_minos.jl")
     include("test_contours.jl")
     include("test_migrad_bounded.jl")
     include("test_minuit.jl")

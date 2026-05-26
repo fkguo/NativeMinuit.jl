@@ -1,0 +1,21 @@
+{
+  "name": "rosenbrock_2d",
+  "_meta": {
+    "source": "GooFit/Minuit2 @ 57dc936a2b74d0b4dda1254c3dd63e7c61a97c84",
+    "version": "6.24.0",
+    "strategy_level": 1,
+    "err_def": 1,
+    "generator": "tools/cpp_trace_harness.cxx :: run_contour_case"
+  },
+  "par1": 0,
+  "par2": 1,
+  "npoints_requested": 20,
+  "fval": 3.3073893013155756e-06,
+  "min_params": [0.99953821907967566, 0.99890074950550123],
+  "points": [
+    [-1.6871137582530338e-06, 3.2533975513615587e-12],
+    [0.11724937572336142, -0.033595970599425651],
+    [2.0000016142969645, 4.0000064571944849],
+    [1.9996950238767781, 4.0012560692489325]
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "name": "bounded_gauss_ll",
+  "_meta": {
+    "source": "GooFit/Minuit2 @ 57dc936a2b74d0b4dda1254c3dd63e7c61a97c84",
+    "version": "6.24.0",
+    "strategy_level": 1,
+    "err_def": 1,
+    "generator": "tools/cpp_trace_harness.cxx :: run_minos_case"
+  },
+  "fval": 95.284135426299429,
+  "params": [2.0072641454647977, 0.97670603789812593],
+  "minos": [
+    {
+      "par": 0,
+      "min_value": 2.0072641454647977,
+      "upper": 0.069129703630008324,
+      "lower": -0.069168467633120012,
+      "upper_valid": true,
+      "lower_valid": true,
+      "upper_new_min": false,
+      "lower_new_min": false,
+      "nfcn": 12
+    },
+    {
+      "par": 1,
+      "min_value": 0.97670603789812593,
+      "upper": 0.050938847899970066,
+      "lower": -0.046879903972633433,
+      "upper_valid": true,
+      "lower_valid": true,
+      "upper_new_min": false,
+      "lower_new_min": false,
+      "nfcn": 28
+    }
+  ]
+}

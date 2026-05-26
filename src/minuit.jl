@@ -283,8 +283,51 @@ function minos!(m::Minuit, par::Integer; kwargs...)
     # leak (parallel-review #4 A7/B4 blocking).
     err = minos(m.fmin.internal, m.fmin.internal_cf,
                 m.params.int_of_ext[par]; kwargs...)
-    m.minos_errors[Int(par)] = err
+    # Convert internal-coord errors to external for bounded parameters,
+    # matching iminuit / C++ MnMinos semantics (which report external
+    # asymmetric ± offsets from the external minimum value). For
+    # unbounded params the conversion is a no-op (internal == external).
+    m.minos_errors[Int(par)] = _minos_int_to_ext(err, m.params.pars[Int(par)])
     return m
+end
+
+"""
+    _minos_int_to_ext(err, par) -> MinosError
+
+Convert a MinosError computed in INTERNAL parameter coordinates (what
+JuMinuit's `minos` returns when called on the bounded fit's internal
+state) into EXTERNAL coordinates — the form users expect, matching
+C++ MnMinos and iminuit.
+
+For unbounded parameters this is a no-op. For bounded:
+  - `min_par_value` ← `int2ext(int_min)`
+  - `upper` ← `int2ext(int_min + upper_int) - ext_min` (the EXT shift
+     at the upper crossing point)
+  - `lower` ← `int2ext(int_min + lower_int) - ext_min` (similarly;
+     note `lower_int` is negative)
+
+The shift is exact in external coordinates — there is no Jacobian
+approximation. This is what C++ `MnMinos::Minos` returns at the end
+(`MnMinos.cxx:120-126`).
+"""
+function _minos_int_to_ext(err::MinosError, par::MinuitParameter)
+    has_limits(par) || has_lower_limit(par) || has_upper_limit(par) ||
+        return err  # unbounded: int == ext
+    kind = bound_kind(par.lower, par.upper)
+    int_min = err.min_par_value
+    ext_min = int2ext(kind, int_min, par.lower, par.upper)
+    upper_ext = err.upper_valid ?
+        int2ext(kind, int_min + err.upper, par.lower, par.upper) - ext_min :
+        err.upper
+    lower_ext = err.lower_valid ?
+        int2ext(kind, int_min + err.lower, par.lower, par.upper) - ext_min :
+        err.lower
+    return MinosError(err.par_idx, ext_min,
+                       upper_ext, lower_ext,
+                       err.upper_valid, err.lower_valid,
+                       err.upper_new_min, err.lower_new_min,
+                       err.upper_fcn_limit, err.lower_fcn_limit,
+                       err.nfcn)
 end
 
 function minos!(m::Minuit, par_name::AbstractString; kwargs...)
