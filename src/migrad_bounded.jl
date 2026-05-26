@@ -124,6 +124,101 @@ function _wrap_fcn_internal_to_external(cf::CostFunction, params::Parameters)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helper: build (ext_values, ext_errors, ext_covariance) from an internal-coord
+# FunctionMinimum + the Parameters describing the bound structure.
+#
+# Shared by `migrad(cf, params)` (Phase 1.x) and `hesse(m::Minuit)` (Phase 3).
+# Both need the same int→ext transform machinery: Jacobian chain rule on the
+# covariance, two-sided `Int2extError` for the bounded diagonals.
+# ─────────────────────────────────────────────────────────────────────────────
+
+function _internal_to_external_results(
+    fmin_int::FunctionMinimum,
+    params::Parameters,
+    up::Float64,
+)
+    n_total  = n_pars(params)
+    n_active = n_free(params)
+    int_x    = fmin_int.state.parameters.x
+
+    ext_values     = Vector{Float64}(undef, n_total)
+    ext_errors_vec = zeros(Float64, n_total)
+    ext_cov_mat    = nothing
+
+    # Build the full external parameter vector (fixed params keep
+    # their initial values; free params come from the internal state).
+    @inbounds for ext_idx in 1:n_total
+        par = params.pars[ext_idx]
+        int_idx = params.int_of_ext[ext_idx]
+        if int_idx == 0
+            ext_values[ext_idx] = par.value
+        else
+            ext_values[ext_idx] = int_to_ext_value(params, int_idx, int_x[int_idx])
+        end
+    end
+
+    if has_covariance(fmin_int)
+        # Read symmetrically via the Symmetric{:U} wrapper, NOT through
+        # `parent(...)` (parallel-review #4 D3 blocking — using `parent`
+        # gives only the upper-triangle storage; lower-triangle reads
+        # return uninitialized zeros, producing an asymmetric external
+        # covariance matrix).
+        V_int = fmin_int.state.error.inv_hessian  # Symmetric{:U} view
+
+        # Jacobian d(ext)/d(int) per free parameter
+        dint2ext_diag = Vector{Float64}(undef, n_active)
+        @inbounds for int_idx in 1:n_active
+            dint2ext_diag[int_idx] = dint2ext_value(params, int_idx, int_x[int_idx])
+        end
+
+        # External covariance for the FREE parameters: C_ext = D · C_int · D
+        # where D = diag(dint2ext) and C_int = 2·up·V_int (per C++; see
+        # result.jl::covariance).
+        c_int_scale = 2.0 * up
+        cov_free = zeros(Float64, n_active, n_active)
+        @inbounds for i in 1:n_active, j in 1:n_active
+            cov_free[i, j] = c_int_scale * V_int[i, j] *
+                              dint2ext_diag[i] * dint2ext_diag[j]
+        end
+
+        # Set diagonal external errors. For unbounded parameters the
+        # Jacobian-diagonal sqrt(cov_free[i,i]) is exact. For bounded
+        # parameters near the boundary the Jacobian shrinks (the sin
+        # transform's derivative goes to 0 at the limit) — use the C++
+        # `Int2extError` two-sided formula instead (parallel-review #4 D5).
+        @inbounds for int_idx in 1:n_active
+            ext_idx = params.ext_of_int[int_idx]
+            par = params.pars[ext_idx]
+            if has_limits(par) || has_upper_limit(par) || has_lower_limit(par)
+                kind = bound_kind(par.lower, par.upper)
+                int_err = sqrt(max(V_int[int_idx, int_idx], 0.0))
+                ext_errors_vec[ext_idx] = int2ext_error(
+                    kind, int_x[int_idx], int_err, par.lower, par.upper)
+            else
+                ext_errors_vec[ext_idx] = sqrt(max(cov_free[int_idx, int_idx], 0.0))
+            end
+        end
+
+        # Promote to n_total × n_total covariance (fixed params get 0 row/col)
+        cov_full = zeros(Float64, n_total, n_total)
+        @inbounds for i in 1:n_active, j in 1:n_active
+            ei = params.ext_of_int[i]
+            ej = params.ext_of_int[j]
+            cov_full[ei, ej] = cov_free[i, j]
+        end
+        ext_cov_mat = cov_full
+    else
+        # No covariance available — fall back to user's initial errors
+        @inbounds for ext_idx in 1:n_total
+            par = params.pars[ext_idx]
+            ext_errors_vec[ext_idx] = is_fixed(par) ? 0.0 : par.error
+        end
+    end
+
+    return ext_values, ext_errors_vec, ext_cov_mat
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main: bound-aware migrad
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -185,84 +280,8 @@ function migrad(
                        prec = prec)
 
     # ── Convert internal results back to external ────────────────
-    ext_values = Vector{Float64}(undef, n_total)
-    ext_errors_vec = zeros(Float64, n_total)
-    ext_cov_mat = nothing
-
-    # Build the full external parameter vector (fixed params keep
-    # their initial values; free params come from MIGRAD).
-    int_x = fmin_int.state.parameters.x
-    @inbounds for ext_idx in 1:n_total
-        par = params.pars[ext_idx]
-        int_idx = params.int_of_ext[ext_idx]
-        if int_idx == 0
-            # Fixed parameter
-            ext_values[ext_idx] = par.value
-        else
-            ext_values[ext_idx] = int_to_ext_value(params, int_idx, int_x[int_idx])
-        end
-    end
-
-    # External errors via Jacobian chain rule + covariance back-conversion.
-    if has_covariance(fmin_int)
-        # Read symmetrically via the Symmetric{:U} wrapper, NOT through
-        # `parent(...)` (parallel-review #4 D3 blocking — using `parent`
-        # gives only the upper-triangle storage; lower-triangle reads
-        # return uninitialized zeros, producing an asymmetric external
-        # covariance matrix).
-        V_int = fmin_int.state.error.inv_hessian  # Symmetric{:U} view
-        # covariance = 2·up·V (per C++; see result.jl::covariance)
-        # Build Jacobian d(ext)/d(int) per free parameter
-        dint2ext_diag = Vector{Float64}(undef, n_active)
-        @inbounds for int_idx in 1:n_active
-            dint2ext_diag[int_idx] = dint2ext_value(params, int_idx, int_x[int_idx])
-        end
-
-        # External covariance for the FREE parameters: C_ext = D · C_int · D
-        # where D = diag(dint2ext) and C_int = 2·up·V_int
-        c_int_scale = 2.0 * cf.up
-        n_free_actual = n_active
-        cov_free = zeros(Float64, n_free_actual, n_free_actual)
-        @inbounds for i in 1:n_free_actual, j in 1:n_free_actual
-            # V_int[i,j] reads symmetrically (Symmetric view mirrors
-            # the authoritative triangle into the other half).
-            cov_free[i, j] = c_int_scale * V_int[i, j] *
-                              dint2ext_diag[i] * dint2ext_diag[j]
-        end
-
-        # Set diagonal external errors. For unbounded parameters the
-        # Jacobian-diagonal sqrt(cov_free[i,i]) is exact. For bounded
-        # parameters near the boundary the Jacobian shrinks (the sin
-        # transform's derivative goes to 0 at the limit) — use the C++
-        # `Int2extError` two-sided formula instead (parallel-review #4 D5).
-        @inbounds for int_idx in 1:n_free_actual
-            ext_idx = params.ext_of_int[int_idx]
-            par = params.pars[ext_idx]
-            if has_limits(par) || has_upper_limit(par) || has_lower_limit(par)
-                kind = bound_kind(par.lower, par.upper)
-                int_err = sqrt(max(V_int[int_idx, int_idx], 0.0))
-                ext_errors_vec[ext_idx] = int2ext_error(
-                    kind, int_x[int_idx], int_err, par.lower, par.upper)
-            else
-                ext_errors_vec[ext_idx] = sqrt(max(cov_free[int_idx, int_idx], 0.0))
-            end
-        end
-
-        # Promote to n_total × n_total covariance (fixed params get 0 row/col)
-        cov_full = zeros(Float64, n_total, n_total)
-        @inbounds for i in 1:n_free_actual, j in 1:n_free_actual
-            ei = params.ext_of_int[i]
-            ej = params.ext_of_int[j]
-            cov_full[ei, ej] = cov_free[i, j]
-        end
-        ext_cov_mat = cov_full
-    else
-        # No covariance available — fall back to user's initial errors
-        @inbounds for ext_idx in 1:n_total
-            par = params.pars[ext_idx]
-            ext_errors_vec[ext_idx] = is_fixed(par) ? 0.0 : par.error
-        end
-    end
+    ext_values, ext_errors_vec, ext_cov_mat =
+        _internal_to_external_results(fmin_int, params, cf.up)
 
     return BoundedFunctionMinimum(
         fmin_int, params, ext_values, ext_errors_vec, ext_cov_mat,

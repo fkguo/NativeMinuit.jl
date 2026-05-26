@@ -485,25 +485,67 @@ function migrad(m::Minuit;
 end
 
 """
-    hesse(m::Minuit; maxcall=0) -> Minuit
+    hesse(m::Minuit; strategy=Strategy(1), maxcall=0) -> Minuit
 
-IMinuit.jl-compatible alias. Currently a no-op when `m.fmin` is
-already populated (the bounded-aware MIGRAD path runs HESSE inside
-for `Strategy ≥ 1`). For `Strategy(0)` runs followed by an
-explicit `hesse(m)` call, this would re-run the full numerical
-Hessian — Phase 1.x deferred (rarely used directly when migrad
-already populates the covariance).
+IMinuit.jl-compatible: re-run a full numerical HESSE at the current
+converged minimum to refresh the covariance matrix.
 
-Currently returns `m` unchanged. Workaround: re-run `migrad(m;
-strategy=Strategy(2))` to force the full HESSE pass.
+Typical use: a fast Strategy(0) MIGRAD leaves the inverse-Hessian
+as a DFP approximation, which is usually accurate but can drift in
+ill-conditioned valleys. `hesse(m)` recomputes the full 2nd-derivative
+Hessian numerically (mirrors `MnHesse` invoked standalone in C++)
+and updates `m.fmin` in place with the refined `ext_covariance` and
+`ext_errors`.
+
+Strategy(1) is the iminuit default for HESSE; Strategy(2) is more
+accurate but slower. The `maxcall` argument is accepted for IMinuit.jl
+parity but currently unused (the HESSE implementation has its own
+budget logic).
+
+Internally:
+  1. Take `m.fmin.internal.state` (the converged internal-coord state).
+  2. Call `JuMinuit.hesse(cf_internal, state, strategy)` to refresh
+     `state.error.inv_hessian` via numerical 2nd derivatives.
+  3. Re-run the same int→ext Jacobian + `Int2extError` machinery used
+     in `migrad(cf, params)` to rebuild `ext_covariance` + `ext_errors`.
+  4. Wrap a fresh `BoundedFunctionMinimum` and overwrite `m.fmin`.
+
+Returns `m` for chaining.
 """
-function hesse(m::Minuit; maxcall::Integer = 0)
+function hesse(m::Minuit; strategy::Strategy = Strategy(1),
+                           maxcall::Integer = 0)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad(m)` before `hesse(m)`"))
-    # The bounded MIGRAD path already runs HESSE for Strategy ≥ 1.
-    # Re-running standalone HESSE here would require re-doing the
-    # int↔ext transform plumbing — deferred. Users wanting a guaranteed
-    # full HESSE should pass `strategy=Strategy(2)` to `migrad(m)`.
+    bfm = m.fmin
+
+    # Refresh the internal-coord Hessian.
+    new_state = JuMinuit.hesse(bfm.internal_cf, bfm.internal.state, strategy;
+                                 prec = m.prec)
+
+    # Wrap into a fresh FunctionMinimum keeping the same convergence
+    # flags from MIGRAD; HESSE can flip `hesse_failed` (via the
+    # MnHesseFailed / MnInvertFailed status) — propagate that.
+    hesse_now_failed = JuMinuit.hesse_failed(new_state.error) ||
+                        JuMinuit.invert_failed(new_state.error)
+    made_pos_def = bfm.internal.made_pos_def ||
+                    JuMinuit.is_made_pos_def(new_state.error)
+    new_fmin_int = FunctionMinimum(new_state, bfm.internal.seed,
+                                     bfm.internal.up;
+                                     is_valid = bfm.internal.is_valid && !hesse_now_failed,
+                                     reached_call_limit = bfm.internal.reached_call_limit,
+                                     above_max_edm = bfm.internal.above_max_edm,
+                                     hesse_failed = hesse_now_failed,
+                                     made_pos_def = made_pos_def)
+
+    # Rebuild external view via the shared helper.
+    ext_values, ext_errors_vec, ext_cov_mat =
+        JuMinuit._internal_to_external_results(new_fmin_int, bfm.params,
+                                                m.fcn.up)
+
+    m.fmin = BoundedFunctionMinimum(
+        new_fmin_int, bfm.params, ext_values, ext_errors_vec, ext_cov_mat,
+        bfm.internal_cf,
+    )
     return m
 end
 
