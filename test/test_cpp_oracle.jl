@@ -51,24 +51,55 @@ const ORACLE_FCNS = Dict(
 #   impl variance" and assert proximity rather than bit-parity; tight
 #   trace parity is a Phase 1 task gated on MnTraceObject + matching
 #   parabola form.
+# Tolerances reflect the actual cross-implementation differences
+# measured on this machine (Apple M3, Julia 1.12, OpenBLAS 0.3.29):
+#
+#   rosen_2d:   |fval diff| ≈ 4e-7,  max |param diff| ≈ 3e-5
+#   rosen_10d:  |fval diff| ≈ 7e-5,  max |param diff| ≈ 1e-3
+#   quad_4d:    converges to a sharp quadratic minimum; both
+#               implementations agree to floating-point precision.
+#
+# These differences come from the EDM-controlled stopping criterion:
+# the same threshold (≈ 2e-4 for default tol=0.1) is crossed at
+# slightly different inner-DFP iterations because of different BLAS
+# summation orders, so the final state is sampled at slightly
+# different points on the convergence curve. The differences are
+# physical (algorithmically equivalent, numerically not bit-identical),
+# not algorithmic bugs.
+#
+# Tolerances are set to ~1.5–3× the measured drift so any future
+# real regression (changed algorithm path, wrong update formula)
+# trips the test.
 const ORACLE_TOL = Dict(
     "quad_4d" => (
+        # Sharp quadratic — both implementations should match to
+        # machine precision.
         rtol_fval = 1e-10, atol_fval = 1e-18,
         rtol_param = 1e-10, atol_param = 1e-12,
         rtol_edm = 1e-6,
         nfcn_slack = 5,
+        atol_cov = 1e-12,   # measured ~3e-16 (machine precision)
     ),
     "rosenbrock_2d" => (
-        rtol_fval = 0.5,    atol_fval = 1e-5,
+        # Measured: |fval diff| ≈ 4e-7, |param diff| ≈ 3e-5,
+        # |cov diff| ≈ 7e-3 (cov scale ~4 → rel ~ 2e-3).
+        rtol_fval = 0.5,    atol_fval = 1e-6,
         rtol_param = 1e-3,  atol_param = 1e-4,
         rtol_edm = 0.5,
-        nfcn_slack = 50,
+        nfcn_slack = 20,
+        atol_cov = 2e-2,
     ),
     "rosenbrock_10d" => (
-        rtol_fval = 2.0,    atol_fval = 1e-3,
-        rtol_param = 1e-2,  atol_param = 1e-3,
-        rtol_edm = 2.0,
-        nfcn_slack = 500,
+        # Measured: |fval diff| ≈ 7e-5, |param diff| ≈ 1e-3.
+        # |cov diff| ≈ 0.09 (cov scale ~3) — banana valley has a
+        # near-zero smallest Hessian eigenvalue, so V = inv(H) is
+        # ill-conditioned and any iteration-stop drift amplifies in
+        # the covariance. This is physics, not algorithmic divergence.
+        rtol_fval = 1.0,    atol_fval = 2e-4,
+        rtol_param = 5e-3,  atol_param = 2e-3,
+        rtol_edm = 1.0,
+        nfcn_slack = 100,
+        atol_cov = 2e-1,
     ),
 )
 
@@ -119,6 +150,29 @@ const ORACLE_TOL = Dict(
             # ── NFcn (call count within slack) ─────────────
             ref_nfcn = Int(ref["nfcn"])
             @test abs(nfcn(m) - ref_nfcn) <= tol.nfcn_slack
+
+            # ── Covariance matrix elements vs C++ Minuit2 ──
+            # The C++ JSON stores the upper triangle in row-major
+            # order (n·(n+1)/2 entries). We rebuild the full matrix
+            # and compare element-by-element to JuMinuit's covariance.
+            # Tolerances are per-case because near-zero Hessian
+            # eigenvalues (banana valleys) amplify any iteration-stop
+            # drift through V = inv(H).
+            ref_cov_flat = Float64.(ref["covariance_upper"])
+            n = length(ref_params)
+            ref_cov = zeros(n, n)
+            k = 1
+            for i in 1:n, j in i:n
+                ref_cov[i, j] = ref_cov[j, i] = ref_cov_flat[k]
+                k += 1
+            end
+            jl_cov = JuMinuit.covariance(m)
+            @test jl_cov !== nothing
+            @test size(jl_cov) == (n, n)
+            for i in 1:n, j in 1:n
+                @test isapprox(jl_cov[i, j], ref_cov[i, j];
+                                atol = tol.atol_cov)
+            end
         end
     end
 end
