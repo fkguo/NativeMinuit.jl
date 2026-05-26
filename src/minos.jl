@@ -26,8 +26,13 @@ The asymmetric error result for a single parameter. Mirrors C++
   this field stored fval, which was a semantic mismatch.
 - `upper::Float64` — upper asymmetric error (`x_+σ - x_min`).
 - `lower::Float64` — lower asymmetric error (`x_-σ - x_min`, ≤ 0).
-- `upper_valid::Bool`, `lower_valid::Bool` — `true` if the crossing
-  was found cleanly.
+- `upper_valid::Bool`, `lower_valid::Bool` — `true` if the MINOS
+  analysis completed cleanly on that side. **True also when the
+  search saturated against a parameter bound** (the corresponding
+  `upper_par_limit` / `lower_par_limit` flag is then raised and the
+  published value is the physical bound_distance — `x_bound − x_min`).
+  This matches iminuit's `m.merrors[name].is_valid` semantics: hitting
+  a bound is a legitimate MINOS termination, not a failure.
 - `upper_new_min::Bool`, `lower_new_min::Bool` — `true` if a lower
   minimum was discovered during the scan (caller should restart
   MIGRAD from the better point).
@@ -82,7 +87,11 @@ end
 """
     is_valid(e::MinosError) -> Bool
 
-True if both upper and lower errors were found within tolerance.
+True if both upper and lower MINOS analyses completed cleanly.
+Includes the at-bound case (`upper_par_limit` / `lower_par_limit`):
+saturating against a parameter bound is treated as a clean termination
+with a physically meaningful published value (the bound distance),
+matching iminuit's `m.merrors[name].is_valid`.
 """
 is_valid(e::MinosError) = e.upper_valid && e.lower_valid
 

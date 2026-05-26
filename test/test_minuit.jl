@@ -225,8 +225,10 @@
             # "exhausted budget"). The published `upper` value equals
             # the PHYSICAL bound_distance, matching iminuit. For this
             # at-the-bound case bound_distance is essentially 0.
+            # `upper_valid=true` under new semantics: saturating against
+            # a bound is a clean MINOS termination (matches iminuit).
             bound_distance = m.params.pars[1].upper - m.values[1]
-            @test !e.upper_valid
+            @test e.upper_valid
             @test e.upper_par_limit
             @test !e.upper_fcn_limit
             @test e.upper ≈ bound_distance atol = 1e-6
@@ -250,8 +252,9 @@
             e = m.minos_errors[1]
             # Lower saturated: par_limit raised, lower_err equals the
             # PHYSICAL bound_distance (negative — par.lower − ext_min).
+            # `lower_valid=true` under new semantics.
             bound_distance = m.params.pars[1].lower - m.values[1]   # ≤ 0
-            @test !e.lower_valid
+            @test e.lower_valid
             @test e.lower_par_limit
             @test !e.lower_fcn_limit
             @test e.lower ≈ bound_distance atol = 1e-6
@@ -271,16 +274,17 @@
             e = m.minos_errors[1]
             up_bound = m.params.pars[1].upper - m.values[1]   # > 0
             lo_bound = m.params.pars[1].lower - m.values[1]   # < 0
-            # Both sides should either succeed within the bounds OR
-            # publish the bound_distance with par_limit.
-            if !e.upper_valid
-                @test e.upper_par_limit
+            # Both sides should be `valid` under new semantics (clean
+            # crossing OR at-limit termination both count). Switch on
+            # `par_limit` to distinguish the saturated vs interior case.
+            @test e.upper_valid
+            @test e.lower_valid
+            if e.upper_par_limit
                 @test e.upper ≈ up_bound atol = 1e-6
             else
                 @test e.upper <= up_bound + 1e-9
             end
-            if !e.lower_valid
-                @test e.lower_par_limit
+            if e.lower_par_limit
                 @test e.lower ≈ lo_bound atol = 1e-6
             else
                 @test e.lower >= lo_bound - 1e-9
@@ -303,14 +307,11 @@
             @test bound_distance > 0   # sanity: optimum inside the bound
             # The PHYSICAL invariant: any published upper error must
             # fit inside the bound. Pre-fix: upper ≈ 1.39, distance ≈
-            # 0.997 → violation. Post-fix: upper ≤ bound_distance OR
-            # upper_valid=false with upper_par_limit=true.
-            if e.upper_valid
-                @test e.upper <= bound_distance + 1e-9
-            else
-                @test e.upper_par_limit
-                @test e.upper <= bound_distance + 1e-9
-            end
+            # 0.997 → violation. Post-fix: upper ≤ bound_distance, and
+            # the side is `valid` under new semantics whether it hit
+            # the bound (par_limit=true) or found an interior crossing.
+            @test e.upper_valid
+            @test e.upper <= bound_distance + 1e-9
             # Lower side untouched (bound nowhere near).
             @test e.lower_valid
             @test e.lower ≈ -1.0 atol = 0.05
@@ -333,16 +334,15 @@
             # Lower side unaffected (bound far from lower direction).
             @test e.lower_valid
             @test e.lower ≈ -1.0 atol = 0.05
-            # Upper side: bound cuts into the 1σ interval. Should
-            # either succeed at truncated value OR fail with
-            # par_limit raised. The SILENT failure (round-3 BLOCKING)
-            # would have valid=false AND par_limit=false AND fcn_limit
-            # =false — making the user think nothing was wrong.
-            if !e.upper_valid
-                @test e.upper_par_limit
-            end
-            # Either way, no false fcn_limit (the budget wasn't the
-            # issue — the bound was).
+            # Upper side: bound cuts into the 1σ interval. Should be
+            # `valid` under new semantics (either succeeded at truncated
+            # value with par_limit=false, OR saturated against the bound
+            # with par_limit=true — both count as clean termination).
+            # The SILENT failure (round-3 BLOCKING) would have valid=false
+            # AND par_limit=false AND fcn_limit=false.
+            @test e.upper_valid
+            # No false fcn_limit (the budget wasn't the issue — the
+            # bound was).
             @test !e.upper_fcn_limit
         end
     end

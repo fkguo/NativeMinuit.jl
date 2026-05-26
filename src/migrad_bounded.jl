@@ -123,6 +123,44 @@ function _wrap_fcn_internal_to_external(cf::CostFunction, params::Parameters)
     return CostFunction(wrapped, up)
 end
 
+# Bounded path with user-supplied gradient. Wraps both f and g into
+# internal coords. Chain rule on the gradient is component-wise because
+# the int↔ext transform per Minuit2 has no cross-parameter coupling:
+#
+#   g_int[i] = (∂ext_i / ∂int_i) · g_ext[ext_of_int[i]]
+#            = dint2ext_value(params, i, int_val) · g_ext[ext_of_int[i]]
+#
+# Fixed parameters never appear in the int vector; their gradient
+# components from g_ext are dropped here.
+function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
+                                          params::Parameters)
+    f = cf.f
+    g = cf.g
+    up = cf.up
+    p_ref = params
+    n_active = n_free(params)
+    wrapped_f = function (int_vec::AbstractVector{<:Real})
+        ext_full = int_to_ext_vector(p_ref, int_vec)
+        return f(ext_full)
+    end
+    wrapped_g = function (int_vec::AbstractVector{<:Real})
+        ext_full = int_to_ext_vector(p_ref, int_vec)
+        g_ext = g(ext_full)
+        g_int = Vector{Float64}(undef, n_active)
+        @inbounds for int_idx in 1:n_active
+            ext_idx = p_ref.ext_of_int[int_idx]
+            d = dint2ext_value(p_ref, int_idx, Float64(int_vec[int_idx]))
+            g_int[int_idx] = d * Float64(g_ext[ext_idx])
+        end
+        return g_int
+    end
+    # Share the user-facing CFwG's nfcn + ngrad Refs so call counters
+    # surfaced via `m.nfcn` / `m.ngrad` reflect ALL calls (the wrap
+    # closure is what the inner MIGRAD actually drives).
+    return CostFunctionWithGradient(wrapped_f, wrapped_g, up,
+                                     cf.nfcn, cf.ngrad)
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: build (ext_values, ext_errors, ext_covariance) from an internal-coord
 # FunctionMinimum + the Parameters describing the bound structure.
@@ -286,6 +324,63 @@ function migrad(
     return BoundedFunctionMinimum(
         fmin_int, params, ext_values, ext_errors_vec, ext_cov_mat,
         cf_internal,
+    )
+end
+
+"""
+    migrad(cf::CostFunctionWithGradient, params::Parameters; ...) ->
+        BoundedFunctionMinimum
+
+AD-aware bounded MIGRAD. The user FCN + gradient operate on EXTERNAL
+parameters; this overload threads the int↔ext chain rule into the
+gradient before handing both to the unbounded `migrad(cf::CFwG, ...)`
+path. The 5-10× FCN-call savings of analytical gradients carry through
+to bounded fits.
+
+For follow-up MINOS / contour calls on the returned `BoundedFunctionMinimum`,
+the internal CF is exposed as a **plain `CostFunction`** sharing the
+same `nfcn` counter (the gradient information is dropped at that layer).
+This keeps the existing `CostFunction`-typed function_cross / minos /
+contour API working unchanged; inner MIGRADs inside MINOS use numerical
+gradient, which is fine because MINOS inner problems are smaller and
+the bulk of FCN evaluations happened in the outer MIGRAD.
+"""
+function migrad(
+    cf::CostFunctionWithGradient,
+    params::Parameters;
+    strategy::Strategy = Strategy(0),
+    tol::Real = 0.1,
+    maxfcn::Union{Integer,Nothing} = nothing,
+    prec::MachinePrecision = MachinePrecision(),
+)
+    n_total = n_pars(params)
+    n_active = n_free(params)
+    n_active > 0 ||
+        throw(ArgumentError("migrad needs at least one free parameter"))
+
+    int_vals = initial_int_values(params)
+    int_errs = initial_int_errors(params)
+
+    cf_internal_grad = _wrap_fcn_internal_to_external(cf, params)
+
+    # Internal MIGRAD dispatches to the CFwG path → uses analytical gradient
+    fmin_int = migrad(cf_internal_grad, int_vals, int_errs;
+                       strategy = strategy, tol = tol, maxfcn = maxfcn,
+                       prec = prec)
+
+    # Plain-CostFunction view of the SAME internal `f` with SHARED nfcn
+    # counter. Stored on bfm so downstream MINOS/contour (which take
+    # `::CostFunction`) work without further dispatch changes.
+    plain_internal_cf = CostFunction(cf_internal_grad.f,
+                                      cf_internal_grad.up,
+                                      cf_internal_grad.nfcn)
+
+    ext_values, ext_errors_vec, ext_cov_mat =
+        _internal_to_external_results(fmin_int, params, cf.up)
+
+    return BoundedFunctionMinimum(
+        fmin_int, params, ext_values, ext_errors_vec, ext_cov_mat,
+        plain_internal_cf,
     )
 end
 

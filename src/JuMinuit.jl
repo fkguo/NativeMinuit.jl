@@ -40,6 +40,7 @@ include("negative_g2.jl")
 include("seed.jl")
 include("result.jl")
 include("migrad.jl")
+include("ad_gradient.jl")
 include("transform.jl")
 include("parameters.jl")
 include("hesse.jl")
@@ -48,8 +49,11 @@ include("function_cross.jl")
 include("minos.jl")
 include("contours.jl")
 include("migrad_bounded.jl")
+include("simplex.jl")
+include("scan.jl")
 include("minuit.jl")
-include("ad_gradient.jl")
+include("eigen_corr.jl")
+include("iminuit_compat.jl")
 include("serialize.jl")
 include("plot_recipes.jl")
 include("precompile_workload.jl")
@@ -93,5 +97,20 @@ export Minuit, migrad!, minos!
 # correlation/covariance matrix with the same signature).
 export args, matrix, set_precision
 export CostFunctionWithGradient, analytical_gradient, analytical_gradient!
+
+# IMinuit.jl drop-in helpers (iminuit_compat.jl)
+export Data, chisq, model_fit, @model_fit
+export func_argnames
+export chi2, poisson_chi2, multinominal_chi2
+export @plt_data, @plt_data!, @plt_best, @plt_best!
+
+# Algorithms ported from C++ Minuit2
+export simplex, scan
+export eigenvalues, global_cc
+
+# IMinuit.jl-compatible algorithm wrappers
+export mncontour, profile, mnprofile
+export draw_contour, draw_mncontour, draw_profile, draw_mnprofile, draw_mnmatrix
+export scipy
 
 end # module JuMinuit

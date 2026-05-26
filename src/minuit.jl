@@ -72,6 +72,18 @@ mutable struct Minuit
     fmin::Union{Nothing,BoundedFunctionMinimum}
     minos_errors::Dict{Int,MinosError}
     prec::MachinePrecision
+    # When the user supplies `grad=...` to the constructor, the cached
+    # CostFunctionWithGradient is kept here for migrad! / hesse to
+    # dispatch into the AD-backed path. Shares the same `nfcn` Ref
+    # as `fcn` so the call counter is consistent. `nothing` for plain
+    # (no-gradient) fits.
+    cfwg::Union{Nothing,CostFunctionWithGradient}
+    # IMinuit.jl-compatible stored settings — read at migrad! /
+    # minos! / hesse! time when not explicitly passed. Mirrors
+    # iminuit's `m.strategy`, `m.tol`, `m.print_level` attributes.
+    strategy::Strategy
+    tol::Float64
+    print_level::Int
 end
 
 function Minuit(
@@ -89,6 +101,17 @@ function Minuit(
     up::Real = 1.0,
     errordef::Union{Real,Nothing} = nothing,  # iminuit alias for `up`
     prec::MachinePrecision = MachinePrecision(),
+    # IMinuit.jl-compatible: user-supplied gradient. Pass a callable
+    # `g(x_ext) -> Vector{Float64}` (e.g. `x -> ForwardDiff.gradient(f, x)`)
+    # to use analytical / AD-backed gradients instead of central-difference.
+    # Typically 5-10× fewer FCN evaluations on cheap FCNs.
+    grad::Union{Function,Nothing} = nothing,
+    # IMinuit.jl-compatible stored settings. These become `m.strategy`,
+    # `m.tol`, `m.print_level` and feed into subsequent migrad! calls
+    # when not explicitly overridden.
+    strategy::Union{Strategy,Integer} = Strategy(0),
+    tol::Real = 0.1,
+    print_level::Integer = 0,
     # Catch-all for per-parameter `error_<name>`, `fix_<name>`, `limit_<name>`
     # kwargs in the IMinuit.jl style.
     kwargs...,
@@ -169,7 +192,13 @@ function Minuit(
                          limits = limit_tuples, fixed = fx_vec,
                          prec = prec)
     cf = CostFunction(fcn, up_resolved)
-    return Minuit(cf, params, nothing, Dict{Int,MinosError}(), prec)
+    # Build cached CFwG when grad provided — share nfcn Ref so call
+    # count is consistent across both views into the user FCN.
+    cfwg = grad === nothing ? nothing :
+        CostFunctionWithGradient(fcn, grad, up_resolved, cf.nfcn, Ref(0))
+    strat = strategy isa Strategy ? strategy : Strategy(Int(strategy))
+    return Minuit(cf, params, nothing, Dict{Int,MinosError}(), prec,
+                  cfwg, strat, Float64(tol), Int(print_level))
 end
 
 # IMinuit.jl-style: named-parameter constructor where each parameter
@@ -189,6 +218,10 @@ function Minuit(fcn;
                 up::Real = 1.0,
                 errordef::Union{Real,Nothing} = nothing,
                 prec::MachinePrecision = MachinePrecision(),
+                grad::Union{Function,Nothing} = nothing,
+                strategy::Union{Strategy,Integer} = Strategy(0),
+                tol::Real = 0.1,
+                print_level::Integer = 0,
                 kwargs...)
     # Separate `error_*`, `fix_*`, `limit_*`, and meta from the
     # parameter-name kwargs.
@@ -221,7 +254,10 @@ function Minuit(fcn;
         x -> fcn(x...)
     end
     return Minuit(f_wrapped, x0; name = names, up = up,
-                  errordef = errordef, prec = prec, other_kws...)
+                  errordef = errordef, prec = prec,
+                  grad = grad, strategy = strategy, tol = tol,
+                  print_level = print_level,
+                  other_kws...)
 end
 
 # IMinuit.jl-style: copy-from-another-fit constructor.
@@ -239,9 +275,13 @@ function Minuit(fcn, m::Minuit; kwargs...)
         lim[i] = (lo === nothing && hi === nothing) ? nothing : (lo, hi)
     end
     # Splat the recovered config into the main constructor; user kwargs
-    # take precedence (we put theirs LAST in the call).
+    # take precedence (we put theirs LAST in the call). Carry over the
+    # source m's stored strategy/tol/print_level so a `Minuit(f, m)`
+    # rebuild preserves the user's tuning.
     return Minuit(fcn, x0; name = nm, error = er, fixed = fx, limits = lim,
-                            up = m.fcn.up, prec = m.prec, kwargs...)
+                            up = m.fcn.up, prec = m.prec,
+                            strategy = m.strategy, tol = m.tol,
+                            print_level = m.print_level, kwargs...)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,18 +289,64 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    migrad!(m::Minuit; strategy=Strategy(0), tol=0.1, maxfcn=nothing) -> Minuit
+    migrad!(m::Minuit; strategy=m.strategy, tol=m.tol, maxfcn=nothing) -> Minuit
 
 Run MIGRAD on `m`. Updates `m.fmin`. Returns `m` for chaining.
+If the constructor was given `grad=...`, dispatches into the
+analytical-gradient path. `strategy` and `tol` default to whatever
+the user stored on `m` (settable via `m.strategy = ...`, `m.tol = ...`
+or the constructor's `strategy`/`tol` kwargs).
+
+If a prior `m.fmin` exists, the next MIGRAD starts from the previous
+converged point (iminuit-compatible implicit resume). Use
+[`reset`](@ref) (or `migrad(m; resume=false)`) to drop the prior fit
+and restart from the constructor's initial values. `m.params` itself
+is NEVER mutated — the carry-forward builds a fresh `Parameters` only
+for the duration of the inner MIGRAD call.
 """
 function migrad!(m::Minuit;
-                  strategy::Strategy = Strategy(0),
-                  tol::Real = 0.1,
+                  strategy::Strategy = m.strategy,
+                  tol::Real = m.tol,
                   maxfcn::Union{Integer,Nothing} = nothing)
-    m.fmin = migrad(m.fcn, m.params;
-                     strategy = strategy, tol = tol, maxfcn = maxfcn,
-                     prec = m.prec)
+    # iminuit-style implicit resume: if we already converged once,
+    # build a temporary Parameters carrying those values forward. The
+    # user's m.params stays untouched so that `reset(m)` + migrad
+    # returns to the constructor's initial values (review BLOCKING #2).
+    params_to_use = m.fmin === nothing ? m.params : _build_resume_params(m)
+    if m.cfwg !== nothing
+        m.fmin = migrad(m.cfwg, params_to_use;
+                         strategy = strategy, tol = tol, maxfcn = maxfcn,
+                         prec = m.prec)
+    else
+        m.fmin = migrad(m.fcn, params_to_use;
+                         strategy = strategy, tol = tol, maxfcn = maxfcn,
+                         prec = m.prec)
+    end
     return m
+end
+
+# Build a fresh `Parameters` with values carried forward from the last
+# converged fit. The user-original m.params is NOT mutated. Errors are
+# taken as `max(bfm.ext_errors[i], p_old.error)` — the post-MIGRAD
+# ext_error is usually a tighter estimate, but near a sin/sqrt bound
+# the C++ Int2extError formula can collapse to a value far smaller
+# than the natural scale, which would seed the next MIGRAD with steps
+# below the numerical-gradient threshold. The `max` floor with the
+# original step protects against this regression (review BLOCKING #1).
+function _build_resume_params(m::Minuit)
+    bfm = m.fmin
+    new_pars = Vector{MinuitParameter}(undef, n_pars(m.params))
+    @inbounds for i in 1:n_pars(m.params)
+        p_old = m.params.pars[i]
+        new_err = max(bfm.ext_errors[i], p_old.error)
+        new_pars[i] = MinuitParameter(p_old.name,
+                                       bfm.ext_values[i],
+                                       new_err;
+                                       lower = p_old.lower,
+                                       upper = p_old.upper,
+                                       fixed = p_old.fixed)
+    end
+    return Parameters(new_pars, m.prec)
 end
 
 """
@@ -273,6 +359,15 @@ first). Returns `m`.
 function minos!(m::Minuit, par::Integer; kwargs...)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad!(m)` before `minos!(m)`"))
+    # MINOS derives sigma_i = sqrt(2·up·V[i,i]) from the inverse
+    # Hessian, so it requires an actual covariance — not the
+    # identity placeholder that simplex / scan leave behind. Force
+    # the user to call hesse(m) first (review IMPORTANT #2 round-2).
+    JuMinuit.is_available(m.fmin.internal.state.error) ||
+        throw(ArgumentError(
+            "MINOS requires a covariance matrix. The last fit produced " *
+            "no inverse Hessian (likely simplex/scan, or HESSE didn't " *
+            "run). Call `hesse(m)` first."))
     1 <= par <= n_pars(m.params) ||
         throw(ArgumentError("par index $par out of bounds"))
     is_fixed(m.params.pars[par]) &&
@@ -369,12 +464,19 @@ function _minos_external_via_function_cross(
         0.0
     end
 
-    # par_limit and fcn_limit are now PER-SIDE and DISTINGUISHABLE
-    # (round-3 I-4). par_limit = "hit a parameter bound during the
-    # search" — fcn_limit = "exhausted budget". They're independent.
+    # `upper_valid`/`lower_valid` lifted: clean crossing OR at-limit
+    # both count as "MINOS analysis completed". Matches iminuit's
+    # m.merrors[name].is_valid semantics (saturating against a bound is
+    # a legitimate termination — the published bound_distance is a
+    # physically meaningful value, not a failure indicator). The
+    # MnCross-level `valid` stays C++-faithful (false at par_limit);
+    # we lift the semantics only at the user-facing MinosError layer.
+    # par_limit and fcn_limit remain PER-SIDE and DISTINGUISHABLE
+    # (round-3 I-4): par_limit = "hit a bound", fcn_limit = "budget".
     return MinosError(par_idx, ext_min,
                        upper_err, lower_err,
-                       cr_up.valid, cr_lo.valid,
+                       cr_up.valid || cr_up.par_limit,
+                       cr_lo.valid || cr_lo.par_limit,
                        cr_up.new_min, cr_lo.new_min,
                        cr_up.fcn_limit, cr_lo.fcn_limit,
                        cr_up.par_limit, cr_lo.par_limit,
@@ -399,20 +501,25 @@ function minos!(m::Minuit; kwargs...)
 end
 
 """
-    contour(m::Minuit, par_x, par_y; npoints=20, kwargs...) -> ContoursError
+    contour(m::Minuit, par_x, par_y; npoints=20, bins=nothing, kwargs...) -> ContoursError
 
 Compute a 2D contour. `par_x` / `par_y` may be Integer or String.
+The `bins=...` kwarg is an IMinuit.jl-compatible alias for `npoints`
+(takes precedence when both are passed).
 """
 function contour(m::Minuit, par_x::Integer, par_y::Integer;
-                  npoints::Integer = 20, kwargs...)
+                  npoints::Integer = 20,
+                  bins::Union{Integer,Nothing} = nothing,
+                  kwargs...)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad!(m)` before `contour(m, ...)`"))
+    npts = bins === nothing ? Int(npoints) : Int(bins)
     ix = m.params.int_of_ext[par_x]
     iy = m.params.int_of_ext[par_y]
     # Use the internal-coord-wrapped CostFunction (parallel-review #4
     # A7/B4 — see minos! for the rationale).
     return contour(m.fmin.internal, m.fmin.internal_cf, ix, iy;
-                    npoints = npoints, kwargs...)
+                    npoints = npts, kwargs...)
 end
 
 function contour(m::Minuit, px::AbstractString, py::AbstractString;
@@ -475,19 +582,146 @@ function Base.getproperty(m::Minuit, name::Symbol)
         # iminuit's `m.accurate` ≡ "covariance is reliable"
         return m.fmin === nothing ? false :
                (is_valid(m.fmin) && !m.fmin.internal.made_pos_def)
+    elseif name === :matrix
+        # IMinuit.jl-compatible: `m.matrix` returns the external
+        # covariance matrix as a `Matrix{Float64}` (free-parameter
+        # block, matching IMinuit.jl's `f.matrix` getproperty hook).
+        # `nothing` if MIGRAD hasn't run or no covariance available.
+        return matrix(m)
+    elseif name === :nfit
+        # iminuit-compatible: total degrees of free parameters
+        return n_free(m.params)
+    elseif name === :ngrad
+        # IMinuit.jl/iminuit-compatible: gradient call counter (only
+        # nonzero when `grad=...` was supplied)
+        return m.cfwg === nothing ? 0 : m.cfwg.ngrad[]
     else
         return getfield(m, name)
     end
 end
 
+# Settable iminuit-compatible properties. Lets users tune
+# `m.strategy`, `m.tol`, `m.print_level`, `m.errordef`/`m.up`,
+# `m.values`, `m.errors`, `m.limits`, `m.fixed` between fits without
+# rebuilding the Minuit object.
+function Base.setproperty!(m::Minuit, name::Symbol, val)
+    if name === :strategy
+        setfield!(m, :strategy, val isa Strategy ? val : Strategy(Int(val)))
+    elseif name === :tol
+        setfield!(m, :tol, Float64(val))
+    elseif name === :print_level
+        setfield!(m, :print_level, Int(val))
+    elseif name === :errordef || name === :up
+        # Mutates the underlying CostFunction.up — both `fcn` and (if
+        # present) `cfwg` need to be re-wrapped because `up` is stored
+        # in the struct rather than fetched on demand. Use the
+        # original `f` (and `g`) so the user's closures survive.
+        new_up = Float64(val)
+        setfield!(m, :fcn, CostFunction(m.fcn.f, new_up, m.fcn.nfcn))
+        if m.cfwg !== nothing
+            setfield!(m, :cfwg,
+                CostFunctionWithGradient(m.cfwg.f, m.cfwg.g, new_up,
+                                          m.cfwg.nfcn, m.cfwg.ngrad))
+        end
+    elseif name === :values
+        # iminuit-style `m.values = [...]`: replaces the per-parameter
+        # initial values. Any prior `m.fmin` becomes invalid (its
+        # covariance is aligned with the OLD values), so we drop it.
+        # Review IMPORTANT round-3.
+        _set_param_field!(m, val, :value)
+        setfield!(m, :fmin, nothing)
+        empty!(m.minos_errors)
+    elseif name === :errors
+        _set_param_field!(m, val, :error)
+        setfield!(m, :fmin, nothing)
+        empty!(m.minos_errors)
+    elseif name === :limits
+        _set_param_limits!(m, val)
+        setfield!(m, :fmin, nothing)
+        empty!(m.minos_errors)
+    elseif name === :fixed
+        _set_param_fixed!(m, val)
+        setfield!(m, :fmin, nothing)
+        empty!(m.minos_errors)
+    else
+        setfield!(m, name, val)
+    end
+end
+
+# Helper: update one field of every parameter from a vector of new
+# values. Used by `m.values = [...]` and `m.errors = [...]`.
+function _set_param_field!(m::Minuit, vals::AbstractVector, field::Symbol)
+    n = n_pars(m.params)
+    length(vals) == n ||
+        throw(DimensionMismatch("expected $n values, got $(length(vals))"))
+    new_pars = Vector{MinuitParameter}(undef, n)
+    @inbounds for i in 1:n
+        p = m.params.pars[i]
+        new_val   = field === :value ? Float64(vals[i]) : p.value
+        new_err   = field === :error ? Float64(vals[i]) : p.error
+        new_pars[i] = MinuitParameter(p.name, new_val, new_err;
+                                       lower = p.lower, upper = p.upper,
+                                       fixed = p.fixed)
+    end
+    setfield!(m, :params, Parameters(new_pars, m.prec))
+    return nothing
+end
+
+# Helper: update bounds. `lim` is a vector of `(lo, hi)` tuples (or
+# `nothing` for unbounded; or `(nothing, x)` / `(x, nothing)` for one-
+# sided). Matches the iminuit `m.limits` setter shape.
+function _set_param_limits!(m::Minuit, lim::AbstractVector)
+    n = n_pars(m.params)
+    length(lim) == n ||
+        throw(DimensionMismatch("expected $n limit tuples, got $(length(lim))"))
+    new_pars = Vector{MinuitParameter}(undef, n)
+    @inbounds for i in 1:n
+        p = m.params.pars[i]
+        lo, hi = NaN, NaN
+        l = lim[i]
+        if l !== nothing
+            lo_raw, up_raw = l
+            if lo_raw !== nothing && !(lo_raw isa Real && isinf(lo_raw))
+                lo = Float64(lo_raw)
+            end
+            if up_raw !== nothing && !(up_raw isa Real && isinf(up_raw))
+                hi = Float64(up_raw)
+            end
+        end
+        new_pars[i] = MinuitParameter(p.name, p.value, p.error;
+                                       lower = lo, upper = hi,
+                                       fixed = p.fixed)
+    end
+    setfield!(m, :params, Parameters(new_pars, m.prec))
+    return nothing
+end
+
+# Helper: update fixed flags from a `Vector{Bool}`.
+function _set_param_fixed!(m::Minuit, fx::AbstractVector)
+    n = n_pars(m.params)
+    length(fx) == n ||
+        throw(DimensionMismatch("expected $n fixed flags, got $(length(fx))"))
+    new_pars = Vector{MinuitParameter}(undef, n)
+    @inbounds for i in 1:n
+        p = m.params.pars[i]
+        new_pars[i] = MinuitParameter(p.name, p.value, p.error;
+                                       lower = p.lower, upper = p.upper,
+                                       fixed = Bool(fx[i]))
+    end
+    setfield!(m, :params, Parameters(new_pars, m.prec))
+    return nothing
+end
+
 function Base.propertynames(m::Minuit, ::Bool = false)
-    return (:fcn, :params, :fmin, :minos_errors, :prec,
+    return (:fcn, :params, :fmin, :minos_errors, :prec, :cfwg,
+            :strategy, :tol, :print_level,
             # JuMinuit-native
             :values, :errors, :fval, :edm, :nfcn, :valid,
             :covariance, :ndim, :npar,
             # IMinuit.jl-compatible aliases
             :ncalls, :is_valid, :parameters, :fixed, :limits,
-            :errordef, :up, :merrors, :accurate)
+            :errordef, :up, :merrors, :accurate,
+            :matrix, :nfit, :ngrad)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -501,7 +735,7 @@ end
 
 """
     migrad(m::Minuit; ncall=nothing, resume=true, precision=nothing,
-                       strategy=Strategy(1), tol=0.1) -> Minuit
+                       strategy=m.strategy, tol=m.tol) -> Minuit
 
 IMinuit.jl-compatible alias for [`migrad!`](@ref). Mutates `m.fmin`
 and returns `m`. The `ncall` / `resume` / `precision` kwargs are
@@ -514,15 +748,18 @@ accepted for IMinuit.jl interface parity:
   - `precision::Union{Real,Nothing}` — override the `MachinePrecision`
     `eps` value (rarely used).
 
-The default `strategy=Strategy(1)` matches iminuit's default; JuMinuit's
-native `migrad!` defaults to `Strategy(0)` (faster).
+`strategy` and `tol` default to whatever the user stored on `m`
+(settable via `m.strategy = ...`, `m.tol = ...`). Constructor default
+is `Strategy(0)` — faster than iminuit's `Strategy(1)`; if you want
+the iminuit-matching accuracy/cost trade pass `strategy=Strategy(1)`
+or set `m.strategy = Strategy(1)` once before the first migrad.
 """
 function migrad(m::Minuit;
                  ncall::Union{Integer,Nothing} = nothing,
                  resume::Bool = true,
                  precision::Union{Real,Nothing} = nothing,
-                 strategy::Strategy = Strategy(1),
-                 tol::Real = 0.1)
+                 strategy::Strategy = m.strategy,
+                 tol::Real = m.tol)
     if !resume
         # Equivalent to IMinuit.jl `reset(m)`: drop any prior fmin/minos.
         m.fmin = nothing
@@ -783,12 +1020,11 @@ function _param_row_data(m::Minuit, i::Int)
     minos_hi = nothing
     if haskey(m.minos_errors, i)
         me = m.minos_errors[i]
-        # Show the MINOS error if it's valid OR if it represents an
-        # at-limit bound_distance (par_limit). In the par_limit case
-        # the value is physically meaningful (max ext movement before
-        # hitting the bound), matching iminuit. Round-6 polish.
-        minos_lo = (me.lower_valid || me.lower_par_limit) ? me.lower : nothing
-        minos_hi = (me.upper_valid || me.upper_par_limit) ? me.upper : nothing
+        # New semantics: `lower_valid`/`upper_valid` are TRUE also at
+        # par_limit (the bound_distance is physically meaningful), so
+        # this single test covers both clean-crossing and at-limit.
+        minos_lo = me.lower_valid ? me.lower : nothing
+        minos_hi = me.upper_valid ? me.upper : nothing
     end
     limit_lo = has_lower_limit(p) ? p.lower : nothing
     limit_hi = has_upper_limit(p) ? p.upper : nothing
