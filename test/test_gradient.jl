@@ -182,12 +182,18 @@
         initial_gradient!(out, par, errs, cf.up)
         numerical_gradient!(out, x_work, par, prev, cf, strat)
 
-        # Measure: initial_gradient! is allocation-free.
-        @test (@allocated initial_gradient!(out, par, errs, cf.up)) == 0
-
-        # numerical_gradient! allocates only what the user FCN allocates.
-        # sum(abs2, x) on a Vector is allocation-free.
-        @test (@allocated numerical_gradient!(
-            out, x_work, par, prev, cf, strat)) == 0
+        # Julia 1.10's optimizer leaves small closure allocations that
+        # 1.12+ elides; mark broken on 1.10 to keep 1.12 strictness.
+        if VERSION >= v"1.12"
+            # initial_gradient! is allocation-free.
+            @test (@allocated initial_gradient!(out, par, errs, cf.up)) == 0
+            # numerical_gradient! allocates only what the user FCN does.
+            @test (@allocated numerical_gradient!(
+                out, x_work, par, prev, cf, strat)) == 0
+        else
+            @test_broken (@allocated initial_gradient!(out, par, errs, cf.up)) == 0
+            @test_broken (@allocated numerical_gradient!(
+                out, x_work, par, prev, cf, strat)) == 0
+        end
     end
 end

@@ -133,8 +133,13 @@ using LinearAlgebra
         copyto!(parent(V), Matrix{Float64}(I, n, n))
 
         # Measure (hopefully no @warn fires, since random dx · random
-        # dg should be nonzero generically)
-        @test (@allocated JuMinuit.davidon_update!(V, dx, dg, 0.0, vg_work, vUpd_work)) == 0
+        # dg should be nonzero generically). Julia 1.10 leaves a small
+        # BLAS-syr! temporary; 1.12 elides it.
+        if VERSION >= v"1.12"
+            @test (@allocated JuMinuit.davidon_update!(V, dx, dg, 0.0, vg_work, vUpd_work)) == 0
+        else
+            @test_broken (@allocated JuMinuit.davidon_update!(V, dx, dg, 0.0, vg_work, vUpd_work)) == 0
+        end
     end
 
     # ─────────────────────────────────────────────────────────
