@@ -4,7 +4,28 @@ on:
   push:
     branches: [main]
     tags: ['*']
+    # Skip CI when only documentation, benchmark artifacts, or tooling
+    # changes — those have their own paths (docs.yml) or aren't tested
+    # by `Pkg.test()`.
+    paths-ignore:
+      - 'docs/**'
+      - 'benchmark/.julia-perf/**'
+      - 'benchmark/cpp/build/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CHANGELOG*'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'benchmark/.julia-perf/**'
+      - 'benchmark/cpp/build/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CHANGELOG*'
+  schedule:
+    # Weekly full-matrix sweep — Mondays 06:00 UTC = catch any
+    # version/OS regression that the per-push minimal CI misses.
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -12,14 +33,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ github.event_name }}
+  # Per-push minimal: just Julia 1 on Ubuntu. ~5 billable minutes,
+  # gives fast feedback. macos is 10× billing — only on schedule/tag.
+  test-minimal:
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    name: Julia 1 - ubuntu-latest - ${{ github.event_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+          arch: x64
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
+        env:
+          JULIA_NUM_THREADS: '4'
+      - uses: julia-actions/julia-processcoverage@v1
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+        continue-on-error: true   # codecov upload is best-effort
+
+  # Full matrix: tags + weekly schedule + manual dispatch. macos-14
+  # (Apple Silicon) is the developer's native arch; Julia 1.10 is the
+  # declared LTS-class compat floor (Project.toml: julia = "1.10").
+  test-full:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - full
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         version:
-          - '1.10'              # LTS-class
+          - '1.10'              # LTS-class compat floor
           - '1'                 # current stable
         os:
           - ubuntu-latest
@@ -27,7 +76,7 @@ jobs:
         arch:
           - x64
         include:
-          # Linux + Apple Silicon variant for native ARM testing
+          # Apple Silicon native — only on Julia 1 (latest)
           - os: macos-14
             version: '1'
             arch: aarch64
@@ -42,10 +91,3 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         env:
           JULIA_NUM_THREADS: '4'
-      - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v5
-        if: matrix.version == '1' && matrix.os == 'ubuntu-latest'
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-        continue-on-error: true   # codecov upload is best-effort

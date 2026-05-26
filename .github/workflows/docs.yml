@@ -5,7 +5,14 @@ on:
     branches:
       - main
     tags: ['*']
-  pull_request:
+    # Only rebuild docs when the docs source / docstring source actually
+    # changes — skip the 5-minute build on test-only or CI-config commits.
+    paths:
+      - 'docs/**'
+      - 'src/**'
+      - '.github/workflows/docs.yml'
+  # Skip docs on PR — preview-rendering rarely needs verification and the
+  # PR loop is already covered by CI's docstring-syntax check.
   workflow_dispatch:
 
 # Cancel intermediate builds for the same branch
