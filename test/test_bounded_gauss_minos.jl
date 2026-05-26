@@ -50,17 +50,28 @@ using JSON
 
     ref = JSON.parsefile(minos_path)
 
+    # Tolerances. The bounded Gauss NLL has a well-conditioned Hessian
+    # (≈ diag(N/σ², 2N/σ²)) and only one parameter is on a SqrtLow
+    # transform — so Julia↔C++ agreement is much tighter than the
+    # rosenbrock case. Local measurements (Apple M3, OpenBLAS 0.3.29):
+    #   fval        |diff| ≈ 3e-7
+    #   μ           |diff| ≈ 9e-6
+    #   σ           |diff| ≈ 5e-5
+    #   μ MINOS U/L |diff| ≈ 1.1e-4
+    #   σ MINOS U/L |diff| ≈ 5e-5
+    # Tolerances picked to give ~3-5× headroom over the worst local
+    # drift plus ~2× margin for CI machines (Gauss is well-conditioned
+    # so the 3× rosen10d-cov CI factor shouldn't apply here).
+    atol_fval  = 1e-6
+    atol_val   = 1e-4
+    atol_minos = 5e-4
+
     # ── Function value + external param values ─────────────────────
-    @test m.fval ≈ ref["fval"] atol = 1e-4
-    @test m.values[1] ≈ ref["params"][1] atol = 1e-3   # μ
-    @test m.values[2] ≈ ref["params"][2] atol = 1e-3   # σ
+    @test m.fval ≈ ref["fval"] atol = atol_fval
+    @test m.values[1] ≈ ref["params"][1] atol = atol_val   # μ
+    @test m.values[2] ≈ ref["params"][2] atol = atol_val   # σ
 
     # ── MINOS asymmetric errors (external) vs C++ MnMinos ──────────
-    # Gauss NLL is well-conditioned (Hessian ≈ diag(N/σ², 2N/σ²)),
-    # so MINOS is close to linear and Julia↔C++ should agree at
-    # ~1e-3. (Tighter than rosen2 because FCN is smoother; looser
-    # than pure quadratic because of the σ ∈ [0.1, ∞) SqrtLow
-    # transform's nonlinear remapping near the minimum.)
     minos(m)
     for (i, ref_entry) in enumerate(ref["minos"])
         @testset "par $(i-1) ($(i == 1 ? "μ" : "σ"))" begin
@@ -69,9 +80,9 @@ using JSON
             @test JuMinuit.is_valid(err)
             @test err.upper_valid == ref_entry["upper_valid"]
             @test err.lower_valid == ref_entry["lower_valid"]
-            @test err.upper ≈ ref_entry["upper"] atol = 1e-3
-            @test err.lower ≈ ref_entry["lower"] atol = 1e-3
-            @test err.min_par_value ≈ ref_entry["min_value"] atol = 1e-3
+            @test err.upper ≈ ref_entry["upper"] atol = atol_minos
+            @test err.lower ≈ ref_entry["lower"] atol = atol_minos
+            @test err.min_par_value ≈ ref_entry["min_value"] atol = atol_minos
         end
     end
 end
