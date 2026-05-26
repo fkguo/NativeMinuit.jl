@@ -277,18 +277,91 @@ function minos!(m::Minuit, par::Integer; kwargs...)
         throw(ArgumentError("par index $par out of bounds"))
     is_fixed(m.params.pars[par]) &&
         return m  # skip fixed
-    # Use the internal-coord-wrapped CostFunction stored on m.fmin.
-    # Passing m.fcn (which takes EXTERNAL coords) to minos(internal_fmin)
-    # would feed internal coords into the user FCN — coordinate frame
-    # leak (parallel-review #4 A7/B4 blocking).
-    err = minos(m.fmin.internal, m.fmin.internal_cf,
-                m.params.int_of_ext[par]; kwargs...)
-    # Convert internal-coord errors to external for bounded parameters,
-    # matching iminuit / C++ MnMinos semantics (which report external
-    # asymmetric ± offsets from the external minimum value). For
-    # unbounded params the conversion is a no-op (internal == external).
-    m.minos_errors[Int(par)] = _minos_int_to_ext(err, m.params.pars[Int(par)])
+    p = m.params.pars[Int(par)]
+    has_any_bound = has_limits(p) || has_lower_limit(p) || has_upper_limit(p)
+    if has_any_bound
+        # Bound-aware EXT-coord MINOS (mirrors C++ MnMinos.cxx:119-131
+        # architecture). Search runs in EXTERNAL coordinates with the
+        # 1σ step truncated against the parameter bound BEFORE the
+        # alpha-search starts. Inner MIGRAD at each probe uses the
+        # bounded API, respecting bounds on the other free params.
+        # Sign convention is automatic: no Jacobian-swap or sign-cross
+        # detection needed; what comes out is directly the EXT error.
+        m.minos_errors[Int(par)] = _minos_external_via_function_cross(
+            m.fmin, m.fcn, Int(par); kwargs...)
+    else
+        # Unbounded — search in the user FCN's frame directly.
+        # m.fmin.internal_cf == m.fcn here; m.params.int_of_ext[par]
+        # == par when no params are bounded. Use the wrapped path so
+        # that mixed (some bounded, some not) configurations route
+        # consistently.
+        err = minos(m.fmin.internal, m.fmin.internal_cf,
+                    m.params.int_of_ext[par]; kwargs...)
+        m.minos_errors[Int(par)] = err
+    end
     return m
+end
+
+# Helper: run upper + lower function_cross_external and assemble a
+# MinosError directly in EXT coords. The C++ analog is MnMinos.cxx's
+# pair of MnFunctionCross calls (one per direction) wrapped in a
+# MinosError constructor.
+function _minos_external_via_function_cross(
+    bfm,          # ::BoundedFunctionMinimum
+    cf::CostFunction,
+    par_idx::Int;
+    tlr::Real = 0.1,
+    maxcalls::Integer = 1000,
+    strategy::Strategy = Strategy(1),
+    prec::MachinePrecision = MachinePrecision(),
+)
+    par = bfm.params.pars[par_idx]
+    ext_min = bfm.ext_values[par_idx]
+    ext_err = bfm.ext_errors[par_idx]
+    # Compute the (truncated) ext step magnitudes for both directions.
+    # For upper-search: step_up = min(par.upper, ext_min + ext_err) - ext_min
+    #                          ≥ 0  (or 0 if saturated).
+    # For lower-search: step_lo = max(par.lower, ext_min - ext_err) - ext_min
+    #                          ≤ 0  (or 0 if saturated).
+    # Use side-specific predicates only — has_limits would falsely
+    # trigger on one-sided bounds (par.lower or par.upper = NaN → NaN
+    # arithmetic). See function_cross_external for the same fix.
+    step_up = ext_err
+    if has_upper_limit(par)
+        step_up = min(ext_err, par.upper - ext_min)
+    end
+    step_up = max(step_up, 0.0)
+    step_lo = ext_err
+    if has_lower_limit(par)
+        step_lo = min(ext_err, ext_min - par.lower)
+    end
+    step_lo = max(step_lo, 0.0)
+
+    cr_up = function_cross_external(bfm, cf, par_idx, +1.0;
+                                     tlr = tlr, maxcalls = maxcalls,
+                                     strategy = strategy, prec = prec)
+    cr_lo = function_cross_external(bfm, cf, par_idx, -1.0;
+                                     tlr = tlr, maxcalls = maxcalls,
+                                     strategy = strategy, prec = prec)
+
+    # External errors = aopt * (truncated ext step). aopt is the alpha
+    # multiplier returned by _cross_core; the step has been truncated
+    # to non-negative magnitude above, with direction encoded by the
+    # ±1 dir argument to function_cross_external.
+    upper_err = cr_up.valid ? cr_up.aopt * step_up : 0.0
+    lower_err = cr_lo.valid ? -cr_lo.aopt * step_lo : 0.0
+    # Sign sanity (defense in depth — should never fire with the new
+    # architecture but keeps the MinosError contract enforced):
+    upper_err = upper_err < 0 ? 0.0 : upper_err
+    lower_err = lower_err > 0 ? 0.0 : lower_err
+
+    return MinosError(par_idx, ext_min,
+                       upper_err, lower_err,
+                       cr_up.valid, cr_lo.valid,
+                       cr_up.new_min, cr_lo.new_min,
+                       cr_up.fcn_limit || cr_up.par_limit,
+                       cr_lo.fcn_limit || cr_lo.par_limit,
+                       cr_up.nfcn + cr_lo.nfcn)
 end
 
 """

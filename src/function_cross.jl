@@ -726,3 +726,153 @@ function function_cross(
                             maxcalls = maxcalls, prec = prec)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bound-aware external-coord MINOS — mirrors C++ MnMinos.cxx:119-131
+# architecture. This is the proper bounded-parameter MINOS path; it
+# replaces the previous int-coord search + post-conversion approach
+# that triggered the Jacobian-sign / sign-cross issues round-1 and
+# round-2 reviewers caught.
+#
+# Architecture (vs the int-coord function_cross above):
+#   - alpha-search operates on EXTERNAL coords. The "step" passed to
+#     `_cross_core` is the external direction (truncated against any
+#     bound BEFORE the search starts).
+#   - Inner MIGRAD at each probe uses the bounded migrad API (with the
+#     scanning parameter FIXED at the trial external value). Bounds on
+#     other free parameters are respected.
+#   - Sign convention is automatic: for `dir = +1` (upper search) the
+#     ext step is positive → positive aopt → positive ext error; for
+#     `dir = -1` (lower search) the ext step is negative → positive aopt
+#     → negative ext error. No Jacobian-swap or sign-cross detection
+#     needed.
+#
+# C++ reference: reference/Minuit2_cpp/src/MnMinos.cxx:119-131 truncates
+# the trial value against the parameter limit BEFORE constructing
+# `xmid` / `xdir`; the alpha search inside MnFunctionCross is then in
+# the (truncated) external direction.
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    function_cross_external(bfm, cf, par_idx, dir; tlr=0.1, maxcalls=1000,
+                             strategy=Strategy(0), prec=MachinePrecision()) -> MnCross
+
+Bound-aware MINOS one-sided search. `bfm::BoundedFunctionMinimum` is
+the converged bounded fit; `cf::CostFunction` is the USER FCN (takes
+external coords); `par_idx::Integer` is the 1-based external parameter
+index; `dir::Real` is +1 (upper search) or -1 (lower search).
+
+The 1σ external step is truncated against `par.lower` / `par.upper`
+before the search begins. The returned `MnCross.aopt` is the multiplier
+on the (possibly truncated) step; `aopt * step_ext = ext_error`.
+
+Sets `par_limit = true` when the 1σ step is fully truncated by the
+bound (no extrapolation possible).
+"""
+function function_cross_external(
+    bfm,                # ::BoundedFunctionMinimum — typed at use site
+    cf::CostFunction,
+    par_idx::Integer,
+    dir::Real;
+    tlr::Real = 0.1,
+    maxcalls::Integer = 1000,
+    strategy::Strategy = Strategy(0),
+    prec::MachinePrecision = MachinePrecision(),
+)
+    params = bfm.params
+    n_total = n_pars(params)
+    1 <= par_idx <= n_total ||
+        throw(ArgumentError("par_idx $par_idx out of bounds for n=$n_total"))
+    par = params.pars[par_idx]
+    is_fixed(par) &&
+        throw(ArgumentError("Cannot run MINOS on fixed parameter $par_idx"))
+    n_free(params) > 1 ||
+        throw(ArgumentError("function_cross_external requires n_free > 1"))
+
+    ext_min = bfm.ext_values[par_idx]
+    ext_err = bfm.ext_errors[par_idx]
+    direction = Float64(dir)
+    abs(direction) ≈ 1.0 ||
+        throw(ArgumentError("dir must be ±1, got $direction"))
+
+    # Sanity: if Hesse error is zero or non-finite (e.g. HESSE failed),
+    # fall back to the user's step from the Parameters seed.
+    if !isfinite(ext_err) || ext_err <= 0
+        ext_err = abs(par.error)
+        ext_err > 0 ||
+            throw(ArgumentError("Cannot run MINOS: parameter $par_idx has zero error"))
+    end
+
+    # ── Truncate trial step against the parameter bound (C++ MnMinos
+    #    :119-131). Use side-specific predicates only — `has_limits` is
+    #    `has_lower_limit OR has_upper_limit`, so testing it here would
+    #    incorrectly trigger the wrong-side clamp on one-sided
+    #    parameters (par.lower=NaN → max(x, NaN)=NaN).
+    val_trial = ext_min + direction * ext_err
+    if direction > 0 && has_upper_limit(par)
+        val_trial = min(val_trial, par.upper)
+    end
+    if direction < 0 && has_lower_limit(par)
+        val_trial = max(val_trial, par.lower)
+    end
+    step_ext = val_trial - ext_min
+    # Saturated against the bound. Threshold is 0.1% of the nominal
+    # 1σ step (not machine epsilon): MIGRAD on bounded params often
+    # converges to within numerical-stability-roundoff of the bound
+    # (e.g., 2e-9 close to a bound at 10), not bit-exact. A step
+    # that's < 0.1% of the natural error scale is physically
+    # saturated — no useful extrapolation. This matches iminuit's
+    # behavior, which treats "within ~ulps_of_bound × scale" as
+    # at-limit.
+    if abs(step_ext) <= 1e-3 * ext_err
+        return MnCross(bfm.internal.state, 0.0, 0;
+                        valid = false, par_limit = true)
+    end
+
+    fmin_val = fval(bfm)
+    up = cf.up
+    inner_strategy = Strategy(max(0, strategy.level - 1))
+
+    # Build probe closure. At each alpha, set par to `ext_min + aopt
+    # * step_ext` (clamped defensively to the bound on alpha
+    # extrapolation), build a fresh Parameters with par_idx FIXED at
+    # that value, run bounded migrad on the inner problem.
+    let par_idx = Int(par_idx), step_ext = step_ext,
+        ext_min = ext_min, par = par, params = params,
+        inner_strategy = inner_strategy
+        probe = function (aopt::Float64, budget::Integer)
+            ext_val = ext_min + aopt * step_ext
+            # Defensive re-clamp: L300 outward extension may use
+            # aopt > 1, which could push past the bound. Use
+            # side-specific predicates (NOT has_limits — see note above).
+            if has_upper_limit(par)
+                ext_val = min(ext_val, par.upper)
+            end
+            if has_lower_limit(par)
+                ext_val = max(ext_val, par.lower)
+            end
+            inner_pars = MinuitParameter[]
+            sizehint!(inner_pars, length(params.pars))
+            for (i, p) in enumerate(params.pars)
+                if i == par_idx
+                    lo = isnan(p.lower) ? NaN : p.lower
+                    hi = isnan(p.upper) ? NaN : p.upper
+                    push!(inner_pars, MinuitParameter(p.name, ext_val,
+                                                       p.error;
+                                                       lower = lo, upper = hi,
+                                                       fixed = true))
+                else
+                    push!(inner_pars, p)
+                end
+            end
+            inner_params = Parameters(inner_pars, prec)
+            inner_bfm = migrad(cf, inner_params;
+                                tol = 0.5 * tlr, maxfcn = Int(budget),
+                                strategy = inner_strategy, prec = prec)
+            return inner_bfm.internal, ncalls(cf)
+        end
+        return _cross_core(probe, fmin_val, up, bfm.internal.state;
+                            tlr = Float64(tlr),
+                            maxcalls = maxcalls, prec = prec)
+    end
+end
