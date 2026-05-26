@@ -1,0 +1,17 @@
+#!/bin/bash
+# Binder post-build: instantiate the Julia environment in .binder/
+# and install the IJulia kernel.
+set -e
+
+julia --project=.binder -e '
+using Pkg
+# Dev the current repo's JuMinuit so the notebook uses the in-tree
+# version (not the registered one — JuMinuit.jl is private/dev).
+Pkg.develop(path="..")
+Pkg.instantiate()
+Pkg.precompile()
+
+# Register an IJulia kernel for the notebook to use.
+using IJulia
+installkernel("Julia (.binder)", "--project=@.")
+'

@@ -11,6 +11,12 @@ verified).
 
 License: **LGPL 2.1 or later** (mirrors upstream Minuit2).
 
+For functions defined, click
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://fkguo.github.io/JuMinuit.jl/dev)
+
+For interactive examples, click
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2Fdocs%2Fexample.ipynb)
+
 ## Quick start
 
 ```julia
