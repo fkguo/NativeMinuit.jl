@@ -245,7 +245,8 @@ function seed_state(
     x0::AbstractVector{<:Real},
     errs::AbstractVector{<:Real},
     strategy::Strategy = Strategy(0),
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
 )
     n = length(x0)
     length(errs) == n ||
@@ -261,11 +262,28 @@ function seed_state(
     grad = analytical_gradient(par, cf, strategy, prec)
 
     n_total = n
-    mat = zeros(n_total, n_total)
-    @inbounds for i in 1:n_total
-        mat[i, i] = abs(grad.g2[i]) > prec.eps2 ? 1.0 / grad.g2[i] : 1.0
+    # M5: user-supplied covariance branch — mirrors C++ MnSeedGenerator.cxx:63-67.
+    # See the numerical-gradient seed_state in `seed.jl` for the full
+    # discussion; the AD path follows the same rule.
+    if prior_cov === nothing
+        mat = zeros(n_total, n_total)
+        @inbounds for i in 1:n_total
+            mat[i, i] = abs(grad.g2[i]) > prec.eps2 ? 1.0 / grad.g2[i] : 1.0
+        end
+        err = MinimumError(Symmetric(mat, :U), 1.0)
+    else
+        size(prior_cov) == (n_total, n_total) ||
+            throw(DimensionMismatch(
+                "prior_cov size $(size(prior_cov)) != ($n_total, $n_total)"))
+        M = Matrix{Float64}(prior_cov)
+        for j in 1:n_total, i in (j + 1):n_total
+            abs(M[i, j] - M[j, i]) <= max(1e-12, 1e-9 * max(abs(M[i, j]), abs(M[j, i]))) ||
+                throw(ArgumentError(
+                    "prior_cov is not symmetric at ($i,$j): " *
+                    "M[i,j]=$(M[i,j]) ≠ M[j,i]=$(M[j,i])"))
+        end
+        err = MinimumError(Symmetric(M, :U), 0.0)
     end
-    err = MinimumError(Symmetric(mat, :U), 1.0)
     # In-place EDM avoids the BLAS internal temporary in `dot(g, V, g)`.
     edm_val = estimate_edm!(Vector{Float64}(undef, n_total), grad, err)
     state = MinimumState(par, err, grad, edm_val, ncalls(cf))
@@ -337,11 +355,15 @@ function migrad(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
 
-    seed = seed_state(cf, x0, errs, strategy, prec)
+    # M5: optional `prior_cov` overrides the diagonal-from-g2 seed
+    # inv_hessian (and sets `dcovar = 0`). Mirrors C++
+    # MnSeedGenerator.cxx:63-67 `state.HasCovariance()` branch.
+    seed = seed_state(cf, x0, errs, strategy, prec; prior_cov = prior_cov)
     # Note: `threaded_gradient` is a no-op for the AD path (the gradient
     # is one call into `cf.g`, not a per-parameter loop). Accepted here
     # for API symmetry with the numerical path; downstream

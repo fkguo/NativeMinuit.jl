@@ -382,11 +382,15 @@ function migrad(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     verify_threading::Bool = threaded_gradient,
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
 
-    seed = seed_state(cf, x0, errs, strategy, prec)
+    # M5: optional `prior_cov` overrides the diagonal-from-g2 seed
+    # inv_hessian (and sets `dcovar = 0`). Mirrors C++
+    # MnSeedGenerator.cxx:63-67 `state.HasCovariance()` branch.
+    seed = seed_state(cf, x0, errs, strategy, prec; prior_cov = prior_cov)
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,

@@ -16,8 +16,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    seed_state(cf, x0, errs, strategy=Strategy(0), prec=MachinePrecision())
-        -> MinimumState
+    seed_state(cf, x0, errs, strategy=Strategy(0), prec=MachinePrecision();
+               prior_cov=nothing) -> MinimumState
 
 Build the initial `MinimumState` for a MIGRAD fit. Mirrors
 `MnSeedGenerator::operator()` (numerical-gradient overload) from
@@ -31,7 +31,9 @@ Build the initial `MinimumState` for a MIGRAD fit. Mirrors
    — cold-start variant that first computes the rough estimate via
    step sizes, then refines via two-point central diff.
 3. Build the initial diagonal inverse-Hessian: `diag(1/g2[i])` when
-   `|g2[i]| > eps2`, else `1.0` (matches C++ lines 69-70).
+   `|g2[i]| > eps2`, else `1.0` (matches C++ lines 69-70). When
+   `prior_cov` is supplied, use it instead and set `dcovar = 0.0`
+   (M5 — see "User-supplied covariance branch" below).
 4. Estimate EDM via `0.5·g'·V·g`.
 5. Construct `MinimumState`.
 6. **Unconditional** `has_negative_g2` check; if any `g2[i] ≤ 0`,
@@ -48,13 +50,25 @@ Build the initial `MinimumState` for a MIGRAD fit. Mirrors
   uses `|werr|`.
 - `strategy::Strategy` — Phase 0 must be `Strategy(0)`.
 - `prec::MachinePrecision`.
+
+# Keyword arguments
+
+- `prior_cov::Union{Nothing,AbstractMatrix{<:Real}}=nothing` — M5
+  (GAP_AUDIT): user-supplied prior inverse-Hessian. When non-`nothing`,
+  it REPLACES the diagonal-from-g2 estimate as the seed inv_hessian
+  and `dcovar` is set to `0.0`. Mirrors C++ `MnSeedGenerator.cxx:63-67`
+  (the `state.HasCovariance()` branch). Used by warm-restart workflows
+  to skip the seed-time MnHesse bootstrap when a prior fit's covariance
+  is reliable. Must be `n×n` and symmetric; the matrix is wrapped in
+  `Symmetric(:U)` regardless of the input's upper/lower variant.
 """
 function seed_state(
     cf::CostFunction,
     x0::AbstractVector{<:Real},
     errs::AbstractVector{<:Real},
     strategy::Strategy = Strategy(0),
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
 )
     n = length(x0)
     length(errs) == n ||
@@ -82,12 +96,37 @@ function seed_state(
     x_work = Vector{Float64}(undef, n)
     numerical_gradient!(grad, x_work, par, grad, cf, strategy, prec)
 
-    # Diagonal inverse-Hessian (C++ MnSeedGenerator.cxx:69-70).
-    mat = zeros(n, n)
-    @inbounds for i in 1:n
-        mat[i, i] = abs(grad.g2[i]) > prec.eps2 ? 1.0 / grad.g2[i] : 1.0
+    # M5: user-supplied covariance branch. Mirrors C++
+    # MnSeedGenerator.cxx:63-67 — when the caller already has a
+    # reliable inv_hessian estimate (e.g. from a prior fit), use it
+    # directly and set `dcovar = 0.0` to signal "trust this covariance".
+    # The diagonal-from-g2 path below is skipped entirely.
+    if prior_cov === nothing
+        # Diagonal inverse-Hessian (C++ MnSeedGenerator.cxx:69-70).
+        mat = zeros(n, n)
+        @inbounds for i in 1:n
+            mat[i, i] = abs(grad.g2[i]) > prec.eps2 ? 1.0 / grad.g2[i] : 1.0
+        end
+        err = MinimumError(Symmetric(mat, :U), 1.0)
+    else
+        size(prior_cov) == (n, n) ||
+            throw(DimensionMismatch(
+                "prior_cov size $(size(prior_cov)) != ($n, $n)"))
+        # Copy into a fresh Matrix and wrap as Symmetric(:U). Even if
+        # the caller already passed a `Symmetric`, copying decouples
+        # the seed state's storage from theirs (subsequent DFP updates
+        # would otherwise mutate the caller's matrix).
+        M = Matrix{Float64}(prior_cov)
+        # Symmetry check: tolerate small numerical asymmetry but reject
+        # gross mismatches.
+        for j in 1:n, i in (j + 1):n
+            abs(M[i, j] - M[j, i]) <= max(1e-12, 1e-9 * max(abs(M[i, j]), abs(M[j, i]))) ||
+                throw(ArgumentError(
+                    "prior_cov is not symmetric at ($i,$j): " *
+                    "M[i,j]=$(M[i,j]) ≠ M[j,i]=$(M[j,i])"))
+        end
+        err = MinimumError(Symmetric(M, :U), 0.0)
     end
-    err = MinimumError(Symmetric(mat, :U), 1.0)
 
     # Use the in-place EDM variant — x_work is free to reuse (refined
     # gradient is done, we don't need x_work for it anymore).
@@ -103,14 +142,10 @@ function seed_state(
     # Mirrors C++ `MnSeedGenerator.cxx:88-98`:
     #     if (stra.Strategy() == 2 && !st.HasCovariance())
     #         MinimumState tmp = MnHesse(stra)(fcn, state, st.Trafo());
-    # The user-state never carries a pre-computed covariance through
-    # JuMinuit's API (we always start with the diagonal-from-step-sizes
-    # estimate), so `!HasCovariance` collapses to "always when Strategy 2".
-    # The bootstrap gives MIGRAD a full-rank Hessian to start with,
-    # which on hard problems saves a couple of outer-loop iterations
-    # vs. having the inner-Hesse refinement build it up after MIGRAD
-    # converges.
-    if strategy.level == 2
+    # When the user supplied `prior_cov`, the C++ guard `!HasCovariance`
+    # short-circuits — Phase 1 follows that: skip the Hesse bootstrap
+    # at Strategy(2) when a prior covariance was provided.
+    if strategy.level == 2 && prior_cov === nothing
         state = hesse(cf, state, strategy; prec = prec)
     end
 
@@ -149,8 +184,8 @@ end
 
 """
     warm_restart_state(prev::MinimumState, new_cf::CostFunction;
-                       strategy=Strategy(0), prec=MachinePrecision())
-        -> Union{MinimumState,Nothing}
+                       strategy=Strategy(0), prec=MachinePrecision(),
+                       prior_cov=nothing) -> Union{MinimumState,Nothing}
 
 Build a MIGRAD-ready seed state for `new_cf` by reusing the converged
 gradient + inv_hessian from a previous probe's `MinimumState`. Returns
@@ -165,7 +200,9 @@ back to [`seed_state`](@ref).
    per-coord step convergence in Numerical2P shortcuts after 1 cycle
    when `prev.gstep` is already near-optimal. (~2·n FCN calls.)
 3. Keep `prev.error.inv_hessian` unchanged — this is the bulk of the
-   warm-start gain, sidestepping ~5-10 DFP convergence iters.
+   warm-start gain, sidestepping ~5-10 DFP convergence iters. When
+   the caller supplies `prior_cov`, that matrix overrides
+   `prev.error.inv_hessian` as the warm Hessian.
 4. Compute new EDM from refined gradient + carried-over inv_hessian.
 5. Wrap into a `MinimumState` with the same dimension as `prev`.
 
@@ -176,6 +213,14 @@ back to [`seed_state`](@ref).
   `seed_state` path runs `negative_g2_line_search` to recover; this
   helper doesn't bake in the recovery.
 - `length(prev) == 0`.
+
+# Keyword arguments
+
+- `prior_cov::Union{Nothing,AbstractMatrix{<:Real}}=nothing` — M5
+  (GAP_AUDIT): override the warm inv_hessian. Same semantics as
+  [`seed_state`](@ref)'s `prior_cov` — when non-`nothing` it replaces
+  `prev.error.inv_hessian` for the new seed, and `dcovar` is still
+  `0.0` (warm restarts already set dcovar=0 regardless).
 
 # Phase-0 lock
 
@@ -189,6 +234,7 @@ function warm_restart_state(
     new_cf::AbstractCostFunction;
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
 )
     n = length(prev)
     n == 0 && return nothing
@@ -197,6 +243,14 @@ function warm_restart_state(
     # Validity of prev.gradient is checked by is_valid above; defensively
     # also require dimensions to match.
     length(prev.gradient) == n || return nothing
+    # M5: optional prior_cov override. Shape-check up front so the
+    # caller can't smuggle in a wrong-size matrix; the actual swap
+    # happens at err_warm construction below.
+    if prior_cov !== nothing
+        size(prior_cov) == (n, n) ||
+            throw(DimensionMismatch(
+                "prior_cov size $(size(prior_cov)) != ($n, $n)"))
+    end
 
     # 1. Re-evaluate new_cf at the warm position.
     x_warm = collect(Float64, prev.parameters.x)
@@ -234,12 +288,15 @@ function warm_restart_state(
         return nothing
     end
 
-    # 5. Reuse prev's inv_hessian. We do NOT copy the matrix here — the
-    # inv_hessian is read-only inside `_migrad_loop` until the first DFP
-    # update, which writes into a SEPARATE ping-pong buffer (V_a/V_b in
-    # migrad.jl). So sharing the storage is safe.
+    # 5. Reuse prev's inv_hessian (or `prior_cov` if supplied). We do
+    # NOT copy prev's matrix here — the inv_hessian is read-only inside
+    # `_migrad_loop` until the first DFP update, which writes into a
+    # SEPARATE ping-pong buffer (V_a/V_b in migrad.jl). So sharing the
+    # storage is safe. When `prior_cov` is supplied we copy it into a
+    # fresh Matrix so subsequent DFP updates don't mutate the caller's
+    # matrix.
     #
-    # BUT we explicitly rebuild MinimumError with `dcovar = 0` and
+    # We explicitly rebuild MinimumError with `dcovar = 0` and
     # `status = MnHesseValid`, matching C++ MnSeedGenerator.cxx:63-67
     # (HasCovariance branch sets `dcovar = 0.0` regardless of the
     # incoming state). Carrying prev's dcovar would inflate the
@@ -247,7 +304,11 @@ function warm_restart_state(
     # and propagating a stale `MnMadePosDef` status would mark our warm
     # seed as posdef-massaged forever even though the matrix has now
     # been through full MIGRAD convergence.
-    err_warm = MinimumError(prev.error.inv_hessian, 0.0)
+    err_warm = if prior_cov === nothing
+        MinimumError(prev.error.inv_hessian, 0.0)
+    else
+        MinimumError(Symmetric(Matrix{Float64}(prior_cov), :U), 0.0)
+    end
 
     # 6. EDM from new gradient + warm inv_hessian.
     edm_new = estimate_edm!(x_work, grad_new, err_warm)
