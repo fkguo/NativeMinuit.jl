@@ -19,9 +19,11 @@
 #        - Break if d-step or g2 has converged below the strategy
 #          tolerances.
 #      vhmat[i, i] = g2[i].
-#   3. (Strategy > 0): refine gradient via HessianGradientCalculator.
-#      Phase 1 first cut SKIPS this and uses the gradient as-is. The
-#      refined-gradient path lands in a Phase 1 follow-up.
+#   3. (Strategy > 0): refine gradient via `hessian_gradient!`
+#      (port of C++ `HessianGradientCalculator`). Per-coordinate
+#      central-difference iteration on the FCN, up to
+#      `strategy.hessian_grad_ncycles` cycles. Updates `grd` and
+#      `gst`; leaves `g2` (from step 2) and `dirin` alone.
 #   4. Off-diagonal pass: for each pair (i, j) with i < j, compute
 #      `(f(x + d_i + d_j) + f(x) - f(x + d_i) - f(x + d_j)) / (d_i d_j)`.
 #      Uses cached single-direction values `yy[i]` from the diagonal
@@ -99,6 +101,74 @@ function hesse(
     grd = copy(state.gradient.grad)
     dirin = copy(gst)
     yy = zeros(Float64, n)
+
+    # ── AD-gradient numerical-companion refresh ───────────────────
+    # Mirrors C++ `MnHesse.cxx:118-126`. When the input gradient is
+    # analytical (the user supplied `grad=...` and we're running
+    # through `CostFunctionWithGradient`), `state.gradient.g2` and
+    # `state.gradient.gstep` carry their last seed-time numerical
+    # estimates — never refreshed during MIGRAD because the analytical
+    # gradient short-circuits the central-difference path that would
+    # have updated them. C++ recomputes the (gst, dirin, g2) triplet
+    # via `Numerical2PGradientCalculator` before the diagonal Hessian
+    # pass begins; we do the same here.
+    #
+    # We don't refresh `grd` — the analytical value is kept (matches
+    # C++ where the refresh only writes back `gst`, `dirin`, `g2`).
+    # The diagonal pass below overwrites `grd[i]` via central diffs
+    # anyway, so the input `grd` only matters if the diagonal pass
+    # fails early — in that case the AD-derived value is the better
+    # answer (cf. `_hesse_diagonal_failure`).
+    #
+    # NOTE — seed-semantics divergence from C++ Minuit2:
+    # C++ `MnHesse.cxx:121` calls the cold-start
+    # `Numerical2PGradientCalculator::operator()(par)` overload, which
+    # internally constructs a fresh `InitialGradientCalculator` that
+    # reads per-parameter user errors from `MnUserTransformation`
+    # (`InitialGradientCalculator.cxx:25-75`). JuMinuit's `MinimumState`
+    # does not retain those user errors past MIGRAD (`migrad.jl:672`
+    # builds `MinimumParameters(nx_buf, pp.y)` with the no-step
+    # constructor that zeros `dirin`), so we instead seed the
+    # `numerical_gradient!` central-difference iteration with the
+    # current (stale) `state.gradient`. For smooth FCNs the iterative
+    # `step ← max(optstp, 0.1·gstep)` refinement converges in 1-2
+    # cycles regardless of seed, so the observable g2/gstep output
+    # matches C++ to within FP precision. For pathological FCNs where
+    # convergence depends on the initial step, the two paths can
+    # diverge — see [docs/GAP_AUDIT.md] P2 follow-up note for the fix
+    # (propagate seed-time errors through `MinimumState`).
+    #
+    # NOTE — gate fidelity vs C++:
+    # C++ `MnHesse.cxx:120` gates on `st.Gradient().IsAnalytical()` —
+    # the `analytical` flag on the input `FunctionGradient`. JuMinuit's
+    # gate is `cf isa CostFunctionWithGradient` because today neither
+    # `analytical_gradient!` (`src/ad_gradient.jl:184-208`) nor
+    # `migrad.jl:677` sets the `FunctionGradient.analytical` flag to
+    # `true` for AD-MIGRAD states (the flag was added in `state.jl:123`
+    # but never threaded through the AD path). Effect: a *repeated*
+    # call to `hesse(cf::CostFunctionWithGradient, ...)` triggers the
+    # refresh even when the prior HESSE has already left
+    # `state.gradient.g2` numerical-grade. The refresh is observably
+    # idempotent (it just re-converges on the same g2/gstep), so the
+    # cost is the extra `numerical_gradient!` FCN calls only, not a
+    # correctness bug. Documented follow-up: thread the `analytical`
+    # flag through MIGRAD + AD path and gate this branch on
+    # `is_analytical(state.gradient)` to match C++ exactly.
+    if cf isa CostFunctionWithGradient
+        # CostFunction wrapper SHARES `cf.f`, `cf.up`, and `cf.nfcn` —
+        # FCN calls against `cf_numeric` increment the same counter so
+        # the `maxcalls` budget below remains correct.
+        cf_numeric = CostFunction(cf.f, cf.up, cf.nfcn)
+        refresh_out = FunctionGradient(zeros(Float64, n),
+                                        zeros(Float64, n),
+                                        zeros(Float64, n))
+        x_refresh = similar(x)
+        numerical_gradient!(refresh_out, x_refresh, state.parameters,
+                             state.gradient, cf_numeric, strategy, prec)
+        copyto!(g2, refresh_out.g2)
+        copyto!(gst, refresh_out.gstep)
+        copyto!(dirin, refresh_out.gstep)
+    end
 
     vhmat = zeros(Float64, n, n)
 
@@ -184,27 +254,32 @@ function hesse(
         end
     end
 
-    # ── Strategy > 0: gradient refinement (Phase 1 follow-up) ──
-    # The C++ HessianGradientCalculator refines `grd` and `gst` here when
-    # strategy.level > 0 (see reference/Minuit2_cpp/src/MnHesse.cxx:222-236).
-    # **Phase 1 first cut**: this refinement is intentionally skipped.
-    # `strategy.level` continues to affect `hessian_ncycles` and the
-    # tolerance constants used in the diagonal pass above, but the
-    # post-diagonal gradient refinement is a no-op until
-    # hessian_gradient.jl is ported. For smooth FCNs (quadratics, simple
-    # Rosenbrock) the diagonal pass converges in a single cycle so this
-    # gap is invisible; for FCNs with significant g2 instability the
-    # refinement materially improves error-matrix accuracy. Parallel-
-    # review #2 C8 — flagged for Phase 1 follow-up.
+    # ── Strategy ≥ 1: gradient refinement via HessianGradientCalculator ──
+    # Mirrors C++ `MnHesse.cxx:228-235`. Between the diagonal and
+    # off-diagonal passes, refine `grd` and `gst` per parameter via
+    # per-coordinate central-difference iteration (up to
+    # `strategy.hessian_grad_ncycles` cycles). `g2` and `dirin` are
+    # **not** touched — `g2` came from the diagonal pass just above,
+    # and `dirin` carries the converged d-value that the off-diagonal
+    # pass below will use as the step size.
     #
-    # Related Phase 1 follow-up (codex parallel-review #3 C-extra):
-    # when an analytical FCN gradient lands (FCNGradAdapter Phase 1.x),
-    # C++ MnHesse.cxx:118-126 refreshes the numerical `gst`, `dirin`,
-    # `g2` triplet via InitialGradientCalculator before the diagonal
-    # pass because the analytical gradient lacks those numerical
-    # companions. Phase 1 first cut assumes purely numerical gradients
-    # (g.analytical == false), so no refresh is needed; revisit when
-    # analytical gradients are supported.
+    # The C++ gate is on `fStrategy.Strategy() > 0` (line 228 there).
+    # Strategy(0) skips HGC; Strategy(1)/(2) run it with
+    # `hessian_grad_ncycles = 2 / 6` respectively.
+    if strategy.level > 0
+        # `dgrd_scratch` is the per-parameter gradient uncertainty
+        # that C++ `HessianGradientCalculator::DeltaGradient` returns
+        # alongside the refined gradient (a `std::pair<FunctionGradient,
+        # MnAlgebraicVector>`). MnHesse never consumes it — only
+        # callers like `Numerical2PGradientCalculator::operator()` use
+        # the analog. We discard. Pre-zeroed (not `undef`) so a future
+        # refactor that conditionally skips the inner writeback can't
+        # leak uninitialized values.
+        dgrd_scratch = zeros(Float64, n)
+        x_hgc = similar(x)
+        hessian_gradient!(grd, gst, dgrd_scratch, x_hgc,
+                           state.parameters, cf, g2, strategy, prec)
+    end
 
     # ── Off-diagonal pass ─────────────────────────────────────────
     # All pairs (i, j) with i < j.
