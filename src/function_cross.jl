@@ -1176,9 +1176,14 @@ function function_cross_external(
     # saturated — no useful extrapolation. This matches iminuit's
     # behavior, which treats "within ~ulps_of_bound × scale" as
     # at-limit.
+    #
+    # M4: attach `bfm.ext_values` as the `ext_state` — the converged
+    # outer-MIGRAD ext vector IS the "state at the bound" the user
+    # wants to publish on the at-limit side (codex review nb-O2).
     if abs(step_ext) <= 1e-3 * ext_err
         return MnCross(bfm.internal.state, 0.0, 0;
-                        valid = false, par_limit = true)
+                        valid = false, par_limit = true,
+                        ext_state = copy(bfm.ext_values))
     end
 
     fmin_val = fval(bfm)

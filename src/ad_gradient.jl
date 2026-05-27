@@ -272,17 +272,9 @@ function seed_state(
         end
         err = MinimumError(Symmetric(mat, :U), 1.0)
     else
-        size(prior_cov) == (n_total, n_total) ||
-            throw(DimensionMismatch(
-                "prior_cov size $(size(prior_cov)) != ($n_total, $n_total)"))
-        M = Matrix{Float64}(prior_cov)
-        for j in 1:n_total, i in (j + 1):n_total
-            abs(M[i, j] - M[j, i]) <= max(1e-12, 1e-9 * max(abs(M[i, j]), abs(M[j, i]))) ||
-                throw(ArgumentError(
-                    "prior_cov is not symmetric at ($i,$j): " *
-                    "M[i,j]=$(M[i,j]) ≠ M[j,i]=$(M[j,i])"))
-        end
-        err = MinimumError(Symmetric(M, :U), 0.0)
+        # See `_validate_and_copy_prior_cov` in seed.jl for the size +
+        # symmetry checks; same contract here.
+        err = MinimumError(Symmetric(_validate_and_copy_prior_cov(prior_cov, n_total), :U), 0.0)
     end
     # In-place EDM avoids the BLAS internal temporary in `dot(g, V, g)`.
     edm_val = estimate_edm!(Vector{Float64}(undef, n_total), grad, err)

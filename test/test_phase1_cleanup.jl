@@ -157,6 +157,34 @@ using Test
         @test fm.seed.error.inv_hessian[1, 1] == 1.0   # seed's V is independent
     end
 
+    @testset "M5 — warm_restart_state prior_cov symmetry validation" begin
+        # Codex review BLOCKING: `warm_restart_state` originally only
+        # shape-checked `prior_cov`. An asymmetric input like
+        # `[1 9; 0 1]` would silently get mirrored by `Symmetric(:U)`
+        # into `[1 9; 9 1]`. Verify the helper now rejects.
+        rosen(x) = (1.0 - x[1])^2 + 100.0 * (x[2] - x[1]^2)^2
+        cf = CostFunction(rosen)
+        fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
+        prev = fmin.state
+
+        # Valid Symmetric input succeeds.
+        ok_M = Symmetric([0.5  0.4
+                           0.4  0.5], :U)
+        ws_ok = JuMinuit.warm_restart_state(prev, CostFunction(rosen);
+                                             prior_cov = ok_M)
+        @test ws_ok isa JuMinuit.MinimumState
+
+        # Asymmetric input throws (was silently mirroring pre-fix).
+        @test_throws ArgumentError JuMinuit.warm_restart_state(
+            prev, CostFunction(rosen);
+            prior_cov = [1.0 9.0; 0.0 1.0])
+
+        # Wrong-size throws DimensionMismatch.
+        @test_throws DimensionMismatch JuMinuit.warm_restart_state(
+            prev, CostFunction(rosen);
+            prior_cov = zeros(3, 3))
+    end
+
     @testset "M6 — storage_level=1 populates fmin.states" begin
         rosenbrock(x) = (1.0 - x[1])^2 + 100.0 * (x[2] - x[1]^2)^2
         cf = CostFunction(rosenbrock)

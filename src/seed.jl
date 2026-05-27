@@ -15,6 +15,37 @@
 #   that runs MnHesse at C++ line 88-98 is Phase 1.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# M5 helper: validate + materialize a user-supplied prior covariance matrix.
+# Shared by `seed_state` (numerical), `seed_state` (AD), and
+# `warm_restart_state`. Returns a fresh `Matrix{Float64}` decoupled from
+# the caller's storage. Throws on size mismatch or gross asymmetry.
+#
+# Tolerance for the symmetry check is `max(1e-12, 1e-9 · max|M[i,j]|, |M[j,i]|)`:
+# small-magnitude entries tolerate absolute roundoff up to ~1e-12 (machine-
+# epsilon times Float64's range floor), while large entries scale by the
+# magnitude (1e-9 relative). This matches typical HEP covariance scales
+# (errors 1e-6 .. 1e2) without rejecting valid Symmetric{Float64}.
+function _validate_and_copy_prior_cov(prior_cov::AbstractMatrix{<:Real}, n::Int)
+    size(prior_cov) == (n, n) ||
+        throw(DimensionMismatch(
+            "prior_cov size $(size(prior_cov)) != ($n, $n)"))
+    M = Matrix{Float64}(prior_cov)
+    # NOTE: we explicitly check asymmetry on the input matrix even if the
+    # caller passed a `Symmetric` wrapper. The `Matrix(prior_cov)`
+    # conversion DOES mirror the active triangle (`Symmetric{:U}` would
+    # zero out the strict lower half before mirroring), but a user
+    # passing a plain `Matrix{Float64}` with `[1 9; 0 1]` would silently
+    # become `[1 9; 9 1]` via `Symmetric(M, :U)` below. Reject early so
+    # the caller knows their data is wrong.
+    for j in 1:n, i in (j + 1):n
+        abs(M[i, j] - M[j, i]) <= max(1e-12, 1e-9 * max(abs(M[i, j]), abs(M[j, i]))) ||
+            throw(ArgumentError(
+                "prior_cov is not symmetric at ($i,$j): " *
+                "M[i,j]=$(M[i,j]) ≠ M[j,i]=$(M[j,i])"))
+    end
+    return M
+end
+
 """
     seed_state(cf, x0, errs, strategy=Strategy(0), prec=MachinePrecision();
                prior_cov=nothing) -> MinimumState
@@ -109,23 +140,9 @@ function seed_state(
         end
         err = MinimumError(Symmetric(mat, :U), 1.0)
     else
-        size(prior_cov) == (n, n) ||
-            throw(DimensionMismatch(
-                "prior_cov size $(size(prior_cov)) != ($n, $n)"))
-        # Copy into a fresh Matrix and wrap as Symmetric(:U). Even if
-        # the caller already passed a `Symmetric`, copying decouples
-        # the seed state's storage from theirs (subsequent DFP updates
-        # would otherwise mutate the caller's matrix).
-        M = Matrix{Float64}(prior_cov)
-        # Symmetry check: tolerate small numerical asymmetry but reject
-        # gross mismatches.
-        for j in 1:n, i in (j + 1):n
-            abs(M[i, j] - M[j, i]) <= max(1e-12, 1e-9 * max(abs(M[i, j]), abs(M[j, i]))) ||
-                throw(ArgumentError(
-                    "prior_cov is not symmetric at ($i,$j): " *
-                    "M[i,j]=$(M[i,j]) ≠ M[j,i]=$(M[j,i])"))
-        end
-        err = MinimumError(Symmetric(M, :U), 0.0)
+        # Copy into a fresh Matrix (decoupled from caller's storage)
+        # and reject gross asymmetry. See `_validate_and_copy_prior_cov`.
+        err = MinimumError(Symmetric(_validate_and_copy_prior_cov(prior_cov, n), :U), 0.0)
     end
 
     # Use the in-place EDM variant — x_work is free to reuse (refined
@@ -243,14 +260,14 @@ function warm_restart_state(
     # Validity of prev.gradient is checked by is_valid above; defensively
     # also require dimensions to match.
     length(prev.gradient) == n || return nothing
-    # M5: optional prior_cov override. Shape-check up front so the
-    # caller can't smuggle in a wrong-size matrix; the actual swap
-    # happens at err_warm construction below.
-    if prior_cov !== nothing
-        size(prior_cov) == (n, n) ||
-            throw(DimensionMismatch(
-                "prior_cov size $(size(prior_cov)) != ($n, $n)"))
-    end
+    # M5: optional prior_cov override. Validate + materialize up front
+    # (size + symmetry check; same contract as `seed_state`). The
+    # materialized matrix is kept in `prior_cov_copy` and consumed by
+    # `err_warm` below. Without this, an asymmetric user-supplied
+    # `[1 9; 0 1]` would silently become `[1 9; 9 1]` via Symmetric(:U)
+    # mirroring (codex review blocking).
+    prior_cov_copy = prior_cov === nothing ? nothing :
+                      _validate_and_copy_prior_cov(prior_cov, n)
 
     # 1. Re-evaluate new_cf at the warm position.
     x_warm = collect(Float64, prev.parameters.x)
@@ -304,10 +321,10 @@ function warm_restart_state(
     # and propagating a stale `MnMadePosDef` status would mark our warm
     # seed as posdef-massaged forever even though the matrix has now
     # been through full MIGRAD convergence.
-    err_warm = if prior_cov === nothing
+    err_warm = if prior_cov_copy === nothing
         MinimumError(prev.error.inv_hessian, 0.0)
     else
-        MinimumError(Symmetric(Matrix{Float64}(prior_cov), :U), 0.0)
+        MinimumError(Symmetric(prior_cov_copy, :U), 0.0)
     end
 
     # 6. EDM from new gradient + warm inv_hessian.
