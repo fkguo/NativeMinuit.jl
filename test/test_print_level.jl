@@ -177,3 +177,80 @@ end
     end
     @test count(r -> occursin("MnMigrad", r.message), logs) >= 1
 end
+
+@testset "print_level — bounded MINOS path" begin
+    # Codex review: confirm the bounded-MINOS branch in
+    # _minos_external_via_function_cross also forwards print_level.
+    # Use bounds that don't restrict the minimum so MINOS converges.
+    logs = capture_logs() do
+        m = Minuit(quad2, [0.0, 0.0]; error = [0.1, 0.1],
+                    limits = [(-5.0, 5.0), (-5.0, 5.0)],
+                    print_level = 1)
+        migrad!(m)
+        hesse(m)
+        minos!(m)
+    end
+    n_min = count(r -> occursin("MnMinos", r.message) &&
+                       occursin("Determination of", r.message), logs)
+    @test n_min >= 2
+end
+
+@testset "print_level — direct low-level function_cross_multi" begin
+    # Codex review: function_cross_multi accepts print_level too. Direct
+    # invocation should produce the cross-search start banner.
+    cf = JuMinuit.CostFunction(quad2, 1.0)
+    fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
+    @test fmin.is_valid
+    logs = capture_logs() do
+        JuMinuit.function_cross_multi(fmin, cf, [1, 2],
+                                        [fmin.state.parameters.x[1],
+                                         fmin.state.parameters.x[2]],
+                                        [1.0, 0.0];
+                                        print_level = 2)
+    end
+    # Header banner + at least one probe line.
+    @test any(r -> occursin("MnFunctionCross", r.message) &&
+                   occursin("start:", r.message), logs)
+    @test any(r -> occursin("MnFunctionCross", r.message) &&
+                   occursin("probe ipt=", r.message), logs)
+end
+
+@testset "print_level — direct migrad(cf, seed; ...)" begin
+    # Codex review: confirm the `migrad(cf, seed; ...)` warm-restart
+    # entry-point forwards print_level. Build a seed via seed_state
+    # at a non-trivial point.
+    cf = JuMinuit.CostFunction(quad2, 1.0)
+    seed = JuMinuit.seed_state(cf, [0.0, 0.0], [0.1, 0.1],
+                                JuMinuit.Strategy(0),
+                                JuMinuit.MachinePrecision())
+    logs = capture_logs() do
+        migrad(cf, seed; print_level = 1)
+    end
+    @test count(r -> occursin("MnMigrad", r.message), logs) >= 1
+end
+
+@testset "print_level — @debug records snapshot state (codex IMPORTANT)" begin
+    # Codex flagged that level-3 records storing references to mutable
+    # scratch buffers would all collapse to the final state by the time
+    # the test reads them. Verify each stored debug record carries a
+    # DISTINCT (snapshot) state — at least two records should differ.
+    logs = capture_logs(level = Logging.Debug) do
+        m = Minuit(quad2, [-0.5, -0.5]; error = [0.1, 0.1], print_level = 3)
+        migrad!(m)
+    end
+    debug_recs = filter(r -> r.level == Logging.Debug &&
+                              occursin("state at iter=", r.message), logs)
+    if length(debug_recs) >= 2
+        # Compare the x vector across the first two stored records.
+        x_first  = Dict(debug_recs[1].kwargs)[:x]
+        x_second = Dict(debug_recs[end].kwargs)[:x]
+        # If we stored references, x_first == x_second (both point at the
+        # final buffer state). Copies → they differ as the optimizer
+        # marches toward the minimum.
+        @test x_first != x_second
+    else
+        # If the optimizer converged in <2 iters the test is uninformative
+        # — flag it as a soft pass with a note.
+        @test_skip "need >=2 DFP iterations to test snapshot independence"
+    end
+end

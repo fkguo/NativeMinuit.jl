@@ -14,9 +14,10 @@
 #       ncalls). For MIGRAD this is each accepted DFP step plus the
 #       Strategy ≥ 1 HESSE refinement banner. For HESSE this is a header
 #       + a final summary. For MINOS this is each ±σ direction header
-#       and each `function_cross` probe outcome.
+#       + the `function_cross` start banner + non-convergence warnings.
 #   2 — adds inner-loop diagnostics: line-search outcomes, pos-def
-#       events, HESSE per-parameter diagonal pass, MINOS probe events.
+#       events, HESSE per-parameter diagonal pass, HESSE per-pair
+#       off-diagonal, MINOS per-probe events inside `_cross_core`.
 #   3 — adds full parameter + gradient vectors via @debug.
 #
 # Levels 1, 2 emit via `@info`; level 3 via `@debug`. The default Julia
@@ -87,16 +88,22 @@ gradient vectors keyed by `x`/`grad`. Capture by configuring the
 active logger at `Logging.Debug` level (e.g. via
 `Logging.with_logger(ConsoleLogger(stderr, Logging.Debug))`).
 
-The kwargs `x` and `grad` are passed as views — `@debug`'s lazy kwarg
-evaluation means no allocation happens when the active logger
-filters out `Debug` (i.e. the typical case where the user hasn't
-turned on debug-level capture).
+The `x` and `grad` arguments alias mutable scratch buffers inside
+`_migrad_loop` — by the time a logger like `Test.TestLogger` reads a
+stored record, the buffer may have been overwritten by a later DFP
+iteration (Phase D's ping-pong scratch + `numerical_gradient!`'s
+in-place fills). To give each record an immutable snapshot we
+`copy(x)` / `copy(grad)` AT EMIT TIME inside the `@debug` kwarg
+list — `@debug`'s lazy kwarg evaluation means the copies allocate
+only when (a) `print_level >= 3` AND (b) the active logger accepts
+`Debug` (so the typical level-0/1/2 path and a level-3 user with a
+default `ConsoleLogger(min=Info)` both pay zero).
 """
 @inline function _trace_state(level::Integer, prefix::AbstractString,
                                iter::Integer,
                                x::AbstractVector{<:Real},
                                grad::AbstractVector{<:Real})
     level >= 3 || return nothing
-    @debug "[$prefix] state at iter=$iter" x grad
+    @debug "[$prefix] state at iter=$iter" x=copy(x) grad=copy(grad)
     return nothing
 end
