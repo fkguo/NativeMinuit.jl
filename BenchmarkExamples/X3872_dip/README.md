@@ -12,10 +12,11 @@ benchmark + stress test.
 
 ## Physics context
 
-Fit of the e⁺e⁻ → J/ψπ⁺π⁻ line-shape near the X(3872) mass with an
-effective coupled-channel amplitude (DD̄* + ρJ/ψ + ωJ/ψ). The model
-exhibits a *dip* in the cross-section near the DD̄*⁰ threshold for
-specific parameter regions, which serves as the discriminator.
+Fit of the e⁺e⁻ → J/ψπ⁺π⁻ line-shape near the X(3872) mass with a
+two-channel effective amplitude (J/ψρ + DD̄*; the DD̄* effective
+scattering length `a22eff` is fixed from the published analysis). The
+model exhibits a *dip* in the cross-section near the DD̄*⁰ threshold
+for specific parameter regions, which serves as the discriminator.
 
 3–6 free parameters depending on the model variant:
 - Effective coupling constants
