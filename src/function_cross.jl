@@ -500,7 +500,7 @@ function _migrad_with_multi_fixed(
     maxcalls::Integer,
     prec::MachinePrecision,
     strategy::Strategy = Strategy(0),
-    warm_x::Union{Nothing,AbstractVector{Float64}} = nothing,
+    warm_state::Union{Nothing,MinimumState} = nothing,
 )
     n = length(state.parameters)
     is_fixed = falses(n)
@@ -532,64 +532,55 @@ function _migrad_with_multi_fixed(
         return fake_min, 1
     end
 
+    cf_fixed = _fix_multi_params(cf, par_idxs, v, n)
+    inner_strategy = Strategy(max(0, strategy.level - 1))
+
+    # WARM-START PATH: when `warm_state` is supplied (the previous
+    # parabolic-fit probe's converged inner state, in the same
+    # (n - npar)-dim free-coord space as the NEW cf_fixed), skip
+    # `seed_state` entirely. `warm_restart_state` re-evaluates the new
+    # cf_fixed at the warm position (1 FCN call), refines the gradient
+    # using the prev gradient's step sizes (Numerical2P converges in
+    # ~1 cycle), and KEEPS the prev inv_hessian. Then `_migrad_loop`'s
+    # DFP iterations start from the warm Hessian — typically converges
+    # in 2-3 iters instead of 5-10. Mirrors C++ MnFunctionCross.cxx:
+    # 106-216, where a single MnMigrad instance reuses MnUserParameterState
+    # across the 3-15 parabolic iterations.
+    #
+    # Falls back to cold path (full seed_state) when warm_restart_state
+    # returns nothing: dim mismatch, invalid prev state, or any
+    # negative g2 in the refined gradient (caller's seed_state path
+    # handles those via initial_gradient + negative_g2_line_search).
+    if warm_state !== nothing && length(warm_state) == n_free_inner
+        seed_warm = warm_restart_state(warm_state, cf_fixed;
+                                        strategy = inner_strategy, prec = prec)
+        if seed_warm !== nothing
+            inner_min = migrad(cf_fixed, seed_warm;
+                                tol = tol, maxfcn = Int(maxcalls),
+                                strategy = inner_strategy, prec = prec)
+            return inner_min, ncalls(cf_fixed)
+        end
+    end
+
+    # COLD PATH: build initial point + errors from the OUTER minimum's
+    # converged x + sqrt(2·up·V[k,k]) per-coord errors.
     y0 = Vector{Float64}(undef, n_free_inner)
     errs = Vector{Float64}(undef, n_free_inner)
     V = state.error.inv_hessian
     scale = 2.0 * cf.up
     x_min = state.parameters.x
-    # WARM-START: when `warm_x` is supplied (typically the previous
-    # parabolic-fit probe's converged inner state, in FULL-coord
-    # length n), seed the inner MIGRAD from THAT instead of the
-    # outer-minimum x_min. Mirrors C++ MnFunctionCross.cxx:106-216,
-    # where a single MnMigrad instance is reused across the 3-15
-    # parabolic iterations within one cross() call → the inner free
-    # params start from the previous probe's converged values, not
-    # from the OUTER converged minimum every time. C++ default cuts
-    # nfcn 3-4× on 10D contours (rosenbrock_10d benchmark, 2026-05).
-    seed_full = warm_x === nothing ? x_min : warm_x
     j = 1
     @inbounds for k in 1:n
         is_fixed[k] && continue
-        y0[j] = seed_full[k]
-        # Step size always derives from the OUTER inv_hessian
-        # (not from the warm-start) — the inner curvature at the
-        # converged minimum is a better step estimate than whatever
-        # the previous probe happened to land at.
+        y0[j] = x_min[k]
         errs[j] = sqrt(max(scale * V[k, k], prec.eps2))
         j += 1
     end
 
-    cf_fixed = _fix_multi_params(cf, par_idxs, v, n)
-    inner_strategy = Strategy(max(0, strategy.level - 1))
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec)
     return inner_min, ncalls(cf_fixed)
-end
-
-# Helper: build a length-n "full" vector from the inner MIGRAD's
-# free-only state, splicing the fixed-param values back in. Used
-# to thread the warm-start across probes inside _cross_core.
-function _full_x_from_inner(inner_min::FunctionMinimum,
-                              n_total::Integer,
-                              par_idxs::AbstractVector{<:Integer},
-                              fixed_vals::AbstractVector{<:Real})
-    full = Vector{Float64}(undef, Int(n_total))
-    is_fixed = falses(Int(n_total))
-    @inbounds for (idx, k) in enumerate(par_idxs)
-        kk = Int(k)
-        is_fixed[kk] = true
-        full[kk] = Float64(fixed_vals[idx])
-    end
-    inner_x = inner_min.state.parameters.x
-    j = 1
-    @inbounds for k in 1:Int(n_total)
-        if !is_fixed[k]
-            full[k] = inner_x[j]
-            j += 1
-        end
-    end
-    return full
 end
 
 function function_cross_multi(
@@ -619,17 +610,17 @@ function function_cross_multi(
     pdir_f = Float64[Float64(pdir[i]) for i in 1:npar]
 
     # Probe closure: builds the multi-fix vector for a given α and runs
-    # the inner MIGRAD. THREADS THE WARM-START forward across probes:
+    # the inner MIGRAD. THREADS THE WARM STATE forward across probes:
     # within one MnFunctionCross call, C++ keeps a single MnMigrad
     # instance whose internal MnUserParameterState is mutated by each
-    # `migrad()` invocation, so the (n-npar) free params start from
-    # the PREVIOUS probe's converged values, not from the OUTER
-    # minimum. JuMinuit mirrors this via `warm_x_ref` (Ref{Vector{Float64}}).
-    # Without this, JuMinuit uses ~4× more nfcn on 10D contours.
-    warm_x_ref = Ref{Vector{Float64}}(collect(Float64, state.parameters.x))
-    n_total = length(state.parameters)
+    # `migrad()` invocation. The Julia equivalent is `warm_state_ref`:
+    # the previous probe's converged `MinimumState` (in (n-npar)-dim
+    # inner free-coord space) gets passed to `_migrad_with_multi_fixed`,
+    # which calls `warm_restart_state` to skip seed_state AND keep the
+    # warm inv_hessian. Cuts inner-MIGRAD nfcn ~50-60% on 10D contours.
+    warm_state_ref = Ref{Union{Nothing,MinimumState}}(nothing)
     let pmid_f = pmid_f, pdir_f = pdir_f, npar = npar,
-        warm_x_ref = warm_x_ref, n_total = n_total
+        warm_state_ref = warm_state_ref
         probe = function (aopt::Float64, budget::Integer)
             v_probe = Vector{Float64}(undef, npar)
             @inbounds for i in 1:npar
@@ -639,14 +630,13 @@ function function_cross_multi(
                 cf, state, par_idxs, v_probe;
                 tol = 0.5 * tlr, maxcalls = budget,
                 prec = prec, strategy = strategy,
-                warm_x = warm_x_ref[])
-            # On successful inner-MIGRAD, update the warm-start for
-            # the next probe. On failure keep the previous warm-start
-            # (could be x_min or a prior valid probe) — safer than
-            # corrupting future probes with a non-converged state.
+                warm_state = warm_state_ref[])
+            # On successful inner-MIGRAD, update the warm state for the
+            # next probe. On failure keep the previous valid warm state
+            # (or `nothing` for the cold first probe) — corrupting
+            # future probes with a non-converged state is unsafe.
             if inner_min.is_valid
-                warm_x_ref[] = _full_x_from_inner(inner_min, n_total,
-                                                    par_idxs, v_probe)
+                warm_state_ref[] = inner_min.state
             end
             return inner_min, nf
         end
@@ -665,31 +655,44 @@ function _migrad_with_fixed(
     cf::CostFunction, state::MinimumState, i::Integer, v::Float64;
     tol::Float64, maxcalls::Integer, prec::MachinePrecision,
     strategy::Strategy = Strategy(0),
-    warm_x::Union{Nothing,AbstractVector{Float64}} = nothing,
+    warm_state::Union{Nothing,MinimumState} = nothing,
 )
     n = length(state.parameters)
-    # Build initial point + errors with parameter i removed
+    cf_fixed = _fix_one_param(cf, i, v, n)
+    # Thread strategy (parallel-review #4 A5 — previously silently
+    # defaulted to Strategy(0) regardless of outer arg). Inner uses
+    # the outer level minus 1 per C++ MnFunctionCross.cxx:106.
+    inner_strategy = Strategy(max(0, strategy.level - 1))
+
+    # WARM-START PATH: see the matching block in _migrad_with_multi_fixed
+    # above for the full rationale (MnFunctionCross single-MnMigrad-
+    # instance pattern). The MINOS / single-param-cross path threads
+    # the prev probe's converged (n-1)-dim inner state, which is the
+    # same free-coord space as the new cf_fixed (only `v` changes).
+    if warm_state !== nothing && length(warm_state) == n - 1
+        seed_warm = warm_restart_state(warm_state, cf_fixed;
+                                        strategy = inner_strategy, prec = prec)
+        if seed_warm !== nothing
+            inner_min = migrad(cf_fixed, seed_warm;
+                                tol = tol, maxfcn = Int(maxcalls),
+                                strategy = inner_strategy, prec = prec)
+            return inner_min, ncalls(cf_fixed)
+        end
+    end
+
+    # COLD PATH: seed from the outer-minimum x (parameter i removed),
+    # with per-coord errors derived from the outer inv_hessian.
+    # C++ MnUserParameterState constructs free-parameter errors as
+    # sqrt(2·up·V[i,i]) (reference/Minuit2_cpp/src/MnUserParameterState.cxx
+    # :151-154).
     x_min = state.parameters.x
-    # WARM-START: when `warm_x` is supplied (full-length n vector,
-    # typically the previous parabolic-fit probe's converged full
-    # state), use that for the n-1 free params instead of x_min.
-    # Matches C++ MnFunctionCross's single-MnMigrad-instance pattern;
-    # cuts inner-MIGRAD nfcn 3-4× when the contour-point or MINOS-
-    # alpha sequence moves the inner optimum significantly away from
-    # the outer minimum.
-    seed_full = warm_x === nothing ? x_min : warm_x
     y0 = Vector{Float64}(undef, n - 1)
     @inbounds for k in 1:(i - 1)
-        y0[k] = seed_full[k]
+        y0[k] = x_min[k]
     end
     @inbounds for k in (i + 1):n
-        y0[k - 1] = seed_full[k]
+        y0[k - 1] = x_min[k]
     end
-    # Initial step sizes from the post-fit MIGRAD error matrix.
-    # C++ MnUserParameterState constructs free-parameter errors as
-    # sqrt(2·up·V[i,i]) (reference/Minuit2_cpp/src/MnUserParameterState.cxx:151-154).
-    # v1 used sqrt(|V[i,i]|) which under-scaled by √(2·up) — codex
-    # parallel-review #4 A6.
     errs = Vector{Float64}(undef, n - 1)
     V = state.error.inv_hessian
     scale = 2.0 * cf.up
@@ -700,11 +703,6 @@ function _migrad_with_fixed(
         errs[k - 1] = sqrt(max(scale * V[k, k], prec.eps2))
     end
 
-    cf_fixed = _fix_one_param(cf, i, v, n)
-    # Thread strategy (parallel-review #4 A5 — previously silently
-    # defaulted to Strategy(0) regardless of outer arg). Inner uses
-    # the outer level minus 1 per C++ MnFunctionCross.cxx:106.
-    inner_strategy = Strategy(max(0, strategy.level - 1))
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec)
@@ -781,32 +779,20 @@ function function_cross(
     x_pivot = x_min[par_idx]
 
     # Probe closure: runs inner MIGRAD at α along par_idx. Threads
-    # the warm-start across probes (mirrors C++ MnFunctionCross's
-    # single-MnMigrad-instance pattern — see _migrad_with_multi_fixed
-    # for the explanation; same fix on the single-parameter path).
-    warm_x_ref = Ref{Vector{Float64}}(collect(Float64, x_min))
-    n_total = length(state.parameters)
+    # the warm STATE (full MinimumState including inv_hessian + refined
+    # gradient) across probes — see _migrad_with_multi_fixed for the
+    # full rationale; same mechanism on the single-parameter path.
+    warm_state_ref = Ref{Union{Nothing,MinimumState}}(nothing)
     let x_pivot = x_pivot, step = step,
-        warm_x_ref = warm_x_ref, n_total = n_total
+        warm_state_ref = warm_state_ref
         probe = function (aopt::Float64, budget::Integer)
             v = x_pivot + aopt * step
             inner_min, nf = _migrad_with_fixed(cf, state, par_idx, v;
                                 tol = 0.5 * tlr, maxcalls = budget,
                                 prec = prec, strategy = strategy,
-                                warm_x = warm_x_ref[])
+                                warm_state = warm_state_ref[])
             if inner_min.is_valid
-                # Build full-length state with the fixed par at `v` and
-                # the others from inner_min for the next probe seed.
-                full = Vector{Float64}(undef, n_total)
-                inner_x = inner_min.state.parameters.x
-                @inbounds for k in 1:(par_idx - 1)
-                    full[k] = inner_x[k]
-                end
-                full[par_idx] = v
-                @inbounds for k in (par_idx + 1):n_total
-                    full[k] = inner_x[k - 1]
-                end
-                warm_x_ref[] = full
+                warm_state_ref[] = inner_min.state
             end
             return inner_min, nf
         end

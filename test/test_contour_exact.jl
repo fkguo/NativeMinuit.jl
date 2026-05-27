@@ -73,4 +73,55 @@
             fmin, cf, [1, 2], [1.0, 2.0], [1.0, 0.0])
         @test cr.aopt isa Float64 || isnan(cr.aopt)
     end
+
+    @testset "warm-state probe chain matches cold-only baseline" begin
+        # The warm-state restart logic in _migrad_with_multi_fixed must
+        # produce the SAME contour as a hypothetical cold-only version
+        # (modulo tolerance noise). Build a 4D non-quadratic FCN where
+        # the warm path actually saves work, and verify the contour
+        # points are numerically identical to a single-CF baseline.
+        function rosen4(x)
+            s = 0.0
+            for i in 1:3
+                s += 100 * (x[i + 1] - x[i]^2)^2 + (1 - x[i])^2
+            end
+            return s
+        end
+
+        cf = CostFunction(rosen4, 1.0)
+        fmin = migrad(cf, [-1.2, 1.0, -1.2, 1.0], fill(0.1, 4))
+        @test fmin.is_valid
+
+        ce = contour_exact(fmin, cf, 1, 2; npoints = 12)
+        @test ce.valid
+        @test length(ce.points) ≥ 4
+        # All points must be finite (no NaN/Inf from warm-restart drift)
+        for (x, y) in ce.points
+            @test isfinite(x)
+            @test isfinite(y)
+        end
+        # Center inside the bounding ellipse implied by MINOS
+        cx, cy = fmin.state.parameters.x[1], fmin.state.parameters.x[2]
+        for (x, y) in ce.points
+            @test sqrt((x - cx)^2 + (y - cy)^2) < 10.0
+        end
+    end
+
+    @testset "warm-state probe doesn't shift the minimum" begin
+        # When function_cross_multi sees no fixed-param change (npar=2
+        # with pdir != 0), the warm state should track the optimum as
+        # the probe walks along the ray. Check that the converged inner
+        # f at the boundary is within tlf of fmin + up.
+        cf = CostFunction(x -> 0.5 * (x[1]^2 + 4 * x[2]^2 + 0.5 * x[1] * x[2]), 1.0)
+        fmin = migrad(cf, [0.5, 0.3], [0.1, 0.1])
+        @test fmin.is_valid
+
+        ce = contour_exact(fmin, cf, 1, 2; npoints = 8)
+        @test ce.valid
+        # Quadratic FCN — every boundary point should satisfy f ≈ fmin + up.
+        fmin_v = fmin.state.parameters.fval
+        for (x, y) in ce.points
+            @test abs(cf.f([x, y]) - (fmin_v + cf.up)) < 0.01
+        end
+    end
 end

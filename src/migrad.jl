@@ -96,6 +96,39 @@ function migrad(
 end
 
 """
+    migrad(cf::CostFunction, seed::MinimumState;
+           strategy=Strategy(0), tol=0.1, maxfcn=..., prec=MachinePrecision())
+        -> FunctionMinimum
+
+Low-level MIGRAD entry point that takes a pre-built `MinimumState` seed.
+Skips the ~1 + 4·n FCN-call `seed_state` bootstrap. Intended for callers
+that already have a warm gradient + inv_hessian (e.g., the parabolic-fit
+probe chain in `function_cross_multi` — each probe reuses the previous
+probe's converged state via [`warm_restart_state`](@ref)).
+
+The seed must satisfy `is_valid(seed)`. Caller is responsible for having
+evaluated the FCN at `seed.parameters.x` (so the call counter agrees
+with `seed.nfcn`); `warm_restart_state` handles this automatically.
+
+Mirrors the C++ `MnApplication::operator()(unsigned int maxfcn, double
+tolerance)` overload that takes an already-constructed
+`MinimumSeed`/`MinimumState` (vs. the user-x0/errs overload which calls
+`MnSeedGenerator`).
+"""
+function migrad(
+    cf::CostFunction,
+    seed::MinimumState;
+    strategy::Strategy = Strategy(0),
+    tol::Real = 0.1,
+    maxfcn::Union{Integer,Nothing} = nothing,
+    prec::MachinePrecision = MachinePrecision(),
+)
+    n = length(seed)
+    maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec)
+end
+
+"""
     migrad(f, x0, errs; up=1.0, strategy=Strategy(0), tol=0.1, maxfcn=..., prec=...)
 
 Convenience overload that wraps a bare callable `f` into a

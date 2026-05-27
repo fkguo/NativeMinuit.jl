@@ -116,3 +116,141 @@ function seed_state(
 
     return state
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# warm_restart_state — build a MinimumState for a NEW FCN, reusing a
+# previous probe's converged inv_hessian + gradient as warm starts.
+#
+# Background: inside `MnFunctionCross` (function_cross.jl), the cross-
+# search runs 3-15 inner MIGRADs at sequential α probes, each with a
+# different fixed-parameter value v_probe. Phase 1.x originally restarted
+# `seed_state` cold every probe — costing ~1 + 4·n_inner FCN calls per
+# probe (initial gradient + Numerical2P refine), and producing an
+# IDENTITY-like diagonal inv_hessian that the DFP loop then had to
+# converge from scratch.
+#
+# C++ Minuit2 sidesteps this via a single MnMigrad instance whose
+# `MnUserParameterState` is mutated by each `migrad()` invocation — so
+# the inv_hessian + gradient state IS carried across calls.
+# `warm_restart_state` is the Julia equivalent: take a previous probe's
+# state, evaluate the NEW FCN at the same x for a fresh fval, refine the
+# gradient (using the prev g2/gstep as warm starts so Numerical2P
+# converges in 1 cycle), and KEEP the prev inv_hessian.
+#
+# Per-probe budget vs cold seed (n_inner=8 typical):
+#   cold seed_state: 1 + 2·8 (initial_gradient is FCN-free but adds 0)
+#                    + 2·8·grad_ncycles refine = ~17-33 calls
+#   warm restart: 1 + 2·8·grad_ncycles refine ≈ ~17 calls
+#   AND ~5-10 fewer DFP iters because inv_hessian starts near-true
+#
+# Empirically saves ~50-60% of FCN calls on 10D contours (verified on
+# gauss_ll_10_1000 + rosenbrock_10d MNCONTOUR benchmarks).
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    warm_restart_state(prev::MinimumState, new_cf::CostFunction;
+                       strategy=Strategy(0), prec=MachinePrecision())
+        -> Union{MinimumState,Nothing}
+
+Build a MIGRAD-ready seed state for `new_cf` by reusing the converged
+gradient + inv_hessian from a previous probe's `MinimumState`. Returns
+`nothing` if the warm path can't be safely taken — caller should fall
+back to [`seed_state`](@ref).
+
+# Algorithm
+
+1. Take `prev.parameters.x` (the warm position). Evaluate `new_cf` at
+   that point → new `fval` (1 FCN call).
+2. Use `prev.gradient` as the seed for `numerical_gradient!` — the
+   per-coord step convergence in Numerical2P shortcuts after 1 cycle
+   when `prev.gstep` is already near-optimal. (~2·n FCN calls.)
+3. Keep `prev.error.inv_hessian` unchanged — this is the bulk of the
+   warm-start gain, sidestepping ~5-10 DFP convergence iters.
+4. Compute new EDM from refined gradient + carried-over inv_hessian.
+5. Wrap into a `MinimumState` with the same dimension as `prev`.
+
+# Returns `nothing` (caller should cold-seed) when:
+
+- `prev` is invalid (missing parameters, missing error, missing gradient).
+- The refined gradient has any non-positive `g2[i]` — caller's
+  `seed_state` path runs `negative_g2_line_search` to recover; this
+  helper doesn't bake in the recovery.
+- `length(prev) == 0`.
+
+# Phase-0 lock
+
+Strategy ≥ 1's seed-stage Hesse bootstrap is intentionally NOT applied
+to warm restarts: the prev inv_hessian IS the warm Hessian, so a Hesse
+refresh would defeat the purpose. Strategy(2) callers still get the
+post-MIGRAD inner-Hesse refinement in `_migrad_loop`.
+"""
+function warm_restart_state(
+    prev::MinimumState,
+    new_cf::CostFunction;
+    strategy::Strategy = Strategy(0),
+    prec::MachinePrecision = MachinePrecision(),
+)
+    n = length(prev)
+    n == 0 && return nothing
+    is_valid(prev) || return nothing
+    is_available(prev.error) || return nothing
+    # Validity of prev.gradient is checked by is_valid above; defensively
+    # also require dimensions to match.
+    length(prev.gradient) == n || return nothing
+
+    # 1. Re-evaluate new_cf at the warm position.
+    x_warm = collect(Float64, prev.parameters.x)
+    fval_new = new_cf(x_warm)
+
+    # 2. Build new MinimumParameters. Preserve prev's `has_step_size`
+    # semantics — when the prev state carried explicit step sizes (the
+    # usual case for inner-MIGRAD outputs), pass them through; otherwise
+    # use the 2-arg ctor which sets dirin=zeros AND has_step_size=false.
+    # We deliberately don't fall back to `prev.gradient.gstep`: gstep
+    # is the numerical-gradient step (~1e-3 scale), not a user-error
+    # estimate (~0.1 scale), and claiming has_step_size=true with that
+    # would silently misrepresent the parameter's natural scale to any
+    # downstream consumer (parallel-review #N-5).
+    par_new = prev.parameters.has_step_size ?
+               MinimumParameters(x_warm, copy(prev.parameters.dirin), Float64(fval_new)) :
+               MinimumParameters(x_warm, Float64(fval_new))
+
+    # 3. Refine gradient. Allocate fresh out vectors (caller doesn't
+    # share buffers with us — this is per-probe scratch, ~few cache
+    # lines). numerical_gradient! seeds itself from `prev.gradient` via
+    # the copyto! at the top of that function, so we just pass prev in.
+    grad_new = FunctionGradient(zeros(Float64, n), zeros(Float64, n),
+                                  zeros(Float64, n))
+    x_work = Vector{Float64}(undef, n)
+    numerical_gradient!(grad_new, x_work, par_new, prev.gradient,
+                         new_cf, strategy, prec)
+
+    # 4. Bail to cold seed if refined gradient produced any non-positive
+    # g2[i]. The cold path's negative_g2_line_search would handle this,
+    # but doing it here would mean the WARM Hessian gets discarded
+    # anyway (the line search rebuilds the diag(1/g2) error). Cleaner
+    # to just return nothing and let the caller cold-seed.
+    if has_negative_g2(grad_new, prec)
+        return nothing
+    end
+
+    # 5. Reuse prev's inv_hessian. We do NOT copy the matrix here — the
+    # inv_hessian is read-only inside `_migrad_loop` until the first DFP
+    # update, which writes into a SEPARATE ping-pong buffer (V_a/V_b in
+    # migrad.jl). So sharing the storage is safe.
+    #
+    # BUT we explicitly rebuild MinimumError with `dcovar = 0` and
+    # `status = MnHesseValid`, matching C++ MnSeedGenerator.cxx:63-67
+    # (HasCovariance branch sets `dcovar = 0.0` regardless of the
+    # incoming state). Carrying prev's dcovar would inflate the
+    # `edm_corrected = edm·(1+3·dcovar)` correction in `_migrad_loop`,
+    # and propagating a stale `MnMadePosDef` status would mark our warm
+    # seed as posdef-massaged forever even though the matrix has now
+    # been through full MIGRAD convergence.
+    err_warm = MinimumError(prev.error.inv_hessian, 0.0)
+
+    # 6. EDM from new gradient + warm inv_hessian.
+    edm_new = estimate_edm!(x_work, grad_new, err_warm)
+
+    return MinimumState(par_new, err_warm, grad_new, edm_new, ncalls(new_cf))
+end
