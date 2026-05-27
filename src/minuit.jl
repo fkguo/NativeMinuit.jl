@@ -67,7 +67,10 @@ methods plus iminuit-style property access.
   before `migrad!`).
 """
 mutable struct Minuit
-    fcn::CostFunction
+    # Phase F: was concretely `::CostFunction`. Now `::AbstractCostFunction`
+    # so users can construct `Minuit(fcn, x0; grad=g, ...)` and have the
+    # AD gradient survive the bounded MIGRAD → MINOS / contour chain.
+    fcn::AbstractCostFunction
     params::Parameters
     fmin::Union{Nothing,BoundedFunctionMinimum}
     minos_errors::Dict{Int,MinosError}
@@ -382,8 +385,16 @@ function minos!(m::Minuit, par::Integer; kwargs...)
         # bounded API, respecting bounds on the other free params.
         # Sign convention is automatic: no Jacobian-swap or sign-cross
         # detection needed; what comes out is directly the EXT error.
+        #
+        # Phase F: prefer `m.cfwg` (analytical gradient) when the user
+        # supplied `grad=...` at construction — the inner MIGRAD chain
+        # then runs through the AD path. Falls back to numerical `m.fcn`
+        # when no gradient was supplied. (Codex review identified that
+        # this path historically used `m.fcn` unconditionally, silently
+        # dropping the AD gradient for bounded MINOS.)
+        ext_cf = m.cfwg === nothing ? m.fcn : m.cfwg
         m.minos_errors[Int(par)] = _minos_external_via_function_cross(
-            m.fmin, m.fcn, Int(par); kwargs...)
+            m.fmin, ext_cf, Int(par); kwargs...)
     else
         # Unbounded — search in the user FCN's frame directly.
         # m.fmin.internal_cf == m.fcn here; m.params.int_of_ext[par]
@@ -403,7 +414,7 @@ end
 # MinosError constructor.
 function _minos_external_via_function_cross(
     bfm,          # ::BoundedFunctionMinimum
-    cf::CostFunction,
+    cf::AbstractCostFunction,
     par_idx::Int;
     tlr::Real = 0.1,
     maxcalls::Integer = 1000,

@@ -53,7 +53,7 @@ cf = CostFunctionWithGradient(f, x -> ForwardDiff.gradient(f, x))
 m = migrad(cf, [0.0, 0.0], [0.1, 0.1])
 ```
 """
-struct CostFunctionWithGradient{F,G,T}
+struct CostFunctionWithGradient{F,G,T} <: AbstractCostFunction
     f::F
     g::G
     up::T
@@ -63,6 +63,13 @@ end
 
 CostFunctionWithGradient(f, g, up = 1.0) =
     CostFunctionWithGradient(f, g, Float64(up), Ref(0), Ref(0))
+
+# Phase F alias kept for any external code that already imported it;
+# new signatures should prefer `AbstractCostFunction` directly. Defined
+# AFTER both concrete subtypes are introduced so the union resolves to
+# `Union{CostFunction, CostFunctionWithGradient}` exactly (rather than
+# the open-ended `AbstractCostFunction`).
+const AnyCostFunction = Union{CostFunction, CostFunctionWithGradient}
 
 # Forward CostFunction-like accessors
 @inline function (cf::CostFunctionWithGradient)(x::AbstractVector)
@@ -247,10 +254,38 @@ function migrad(
     tol::Real = 0.1,
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
 
     seed = seed_state(cf, x0, errs, strategy, prec)
-    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec)
+    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
+                          scratch = scratch)
+end
+
+"""
+    migrad(cf::CostFunctionWithGradient, seed::MinimumState;
+           strategy=Strategy(0), tol=0.1, maxfcn=..., prec=..., scratch=nothing)
+        -> FunctionMinimum
+
+Phase B's seed-state entry point + Phase F's analytical-gradient
+dispatch. Same semantics as `migrad(::CostFunction, ::MinimumState)`:
+skip `seed_state`'s bootstrap, feed the pre-built seed directly into
+`_migrad_loop`. Used by `warm_restart_state` inside MnFunctionCross
+probes when the user FCN carries an analytical gradient.
+"""
+function migrad(
+    cf::CostFunctionWithGradient,
+    seed::MinimumState;
+    strategy::Strategy = Strategy(0),
+    tol::Real = 0.1,
+    maxfcn::Union{Integer,Nothing} = nothing,
+    prec::MachinePrecision = MachinePrecision(),
+    scratch::Union{Nothing,MigradScratch} = nothing,
+)
+    n = length(seed)
+    maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
+                          scratch = scratch)
 end

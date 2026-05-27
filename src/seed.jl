@@ -186,7 +186,7 @@ post-MIGRAD inner-Hesse refinement in `_migrad_loop`.
 """
 function warm_restart_state(
     prev::MinimumState,
-    new_cf::CostFunction;
+    new_cf::AbstractCostFunction;
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
 )

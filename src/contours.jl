@@ -103,7 +103,7 @@ slower (each boundary point requires a separate inner MIGRAD chain).
 """
 function contour_exact(
     fmin::FunctionMinimum,
-    cf::CostFunction,
+    cf::AbstractCostFunction,
     par_x::Integer,
     par_y::Integer;
     npoints::Integer = 20,
@@ -240,7 +240,7 @@ end
 
 function contour(
     fmin::FunctionMinimum,
-    cf::CostFunction,
+    cf::AbstractCostFunction,
     par_x::Integer,
     par_y::Integer;
     npoints::Integer = 20,

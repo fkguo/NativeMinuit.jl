@@ -471,10 +471,160 @@ function _fix_one_param(cf::CostFunction, i::Integer, v::Float64, n::Integer)
     return CostFunction(wrapped, up)
 end
 
+"""
+    _fix_one_param(cf::CostFunctionWithGradient, i, v, n) -> CostFunctionWithGradient
+
+Phase F overload: when the user FCN carries an analytical gradient
+`cf.g`, the fixed-parameter wrapper must splice BOTH the function and
+its gradient — otherwise the inner cross-search loses the AD path and
+silently falls back to numerical-gradient via the `::CostFunction`
+overload's plain `CostFunction` wrapping.
+
+The wrapped FCN is identical to the numerical-gradient overload: splice
+`v` into slot `i`, pass the (n-1)-vector `y` through. The wrapped
+GRADIENT delegates to `cf.g(full)` on the same spliced full-length
+vector and returns the (n-1)-vector with slot `i` removed (the
+gradient component w.r.t. the fixed parameter is discarded — inner
+MIGRAD doesn't see it). Both wrappers use the same lifted `full_buf`
++ `out_buf` strategy as Phase A V3 to keep per-call alloc at zero.
+
+Thread-safety contract is identical to the numerical-gradient
+overload: `full_buf` and `out_buf` are closure-captured and shared
+across calls within the wrapper's lifetime. Safe under single-
+threaded MnFunctionCross / MINOS / MnContours.
+"""
+function _fix_one_param(cf::CostFunctionWithGradient, i::Integer, v::Float64, n::Integer)
+    f = cf.f
+    g = cf.g
+    up = cf.up
+    # Counters are FRESH (not shared with outer cf) — symmetric with the
+    # numerical `_fix_one_param(::CostFunction, ...)` overload above and
+    # with the `_wrap_fcn_internal_to_external(::CostFunction, ...)`
+    # helper in migrad_bounded.jl. Codex Phase F review noted that
+    # `m.cfwg.ngrad` doesn't reflect inner cross-search gradient calls —
+    # that's by design (mirrors `m.fcn.nfcn` not reflecting inner numerical
+    # gradient calls; the user-facing CF counter tracks USER-FACING calls).
+    # `inner_min.nfcn` and `ContoursError.nfcn` carry the inner delta if
+    # callers need to introspect.
+    i_ = Int(i)
+    n_ = Int(n)
+    full_buf = Vector{Float64}(undef, n_)
+    out_buf  = Vector{Float64}(undef, n_ - 1)
+    f_wrapped = let full_buf = full_buf, i_ = i_, n_ = n_, v = v, f = f
+        function (y::AbstractVector{<:Real})
+            @inbounds for k in 1:(i_ - 1)
+                full_buf[k] = y[k]
+            end
+            @inbounds full_buf[i_] = v
+            @inbounds for k in (i_ + 1):n_
+                full_buf[k] = y[k - 1]
+            end
+            return f(full_buf)
+        end
+    end
+    g_wrapped = let full_buf = full_buf, out_buf = out_buf,
+                     i_ = i_, n_ = n_, v = v, g = g
+        function (y::AbstractVector{<:Real})
+            @inbounds for k in 1:(i_ - 1)
+                full_buf[k] = y[k]
+            end
+            @inbounds full_buf[i_] = v
+            @inbounds for k in (i_ + 1):n_
+                full_buf[k] = y[k - 1]
+            end
+            grad_full = g(full_buf)
+            # Splice out slot i_: copy the n-1 free-coord components into
+            # the pre-allocated out_buf. Avoids a per-call alloc when
+            # `g` returns a fresh Vector (the common ForwardDiff case).
+            @inbounds for k in 1:(i_ - 1)
+                out_buf[k] = Float64(grad_full[k])
+            end
+            @inbounds for k in (i_ + 1):n_
+                out_buf[k - 1] = Float64(grad_full[k])
+            end
+            return out_buf
+        end
+    end
+    return CostFunctionWithGradient(f_wrapped, g_wrapped, up)
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Multi-param fix helper (Phase 1.x — for contour_exact / general
 # MnFunctionCross calls with npar > 1).
 # ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    _fix_multi_params(cf::CostFunctionWithGradient, par_idxs, v, n)
+        -> CostFunctionWithGradient
+
+Phase F overload (multi-param fix variant of `_fix_one_param` above).
+Splices both `cf.f` and `cf.g` so the inner cross-search keeps the
+analytical/AD gradient path.
+"""
+function _fix_multi_params(
+    cf::CostFunctionWithGradient,
+    par_idxs::AbstractVector{<:Integer},
+    v::AbstractVector{<:Real},
+    n::Integer,
+)
+    length(par_idxs) == length(v) ||
+        throw(DimensionMismatch("par_idxs / v length mismatch"))
+    f = cf.f
+    g = cf.g
+    up = cf.up
+    # Counters are fresh — same rationale as `_fix_one_param` above.
+    n_ = Int(n)
+    is_fixed = falses(n_)
+    fixed_value = zeros(Float64, n_)
+    @inbounds for (idx, k) in enumerate(par_idxs)
+        kk = Int(k)
+        1 <= kk <= n_ || throw(ArgumentError("par_idx $kk out of bounds for n=$n_"))
+        is_fixed[kk] = true
+        fixed_value[kk] = Float64(v[idx])
+    end
+    n_free = n_ - count(is_fixed)
+    full_buf = Vector{Float64}(undef, n_)
+    out_buf  = Vector{Float64}(undef, n_free)
+    f_wrapped = let full_buf = full_buf, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
+        function (y::AbstractVector{<:Real})
+            j = 1
+            @inbounds for k in 1:n_
+                if is_fixed[k]
+                    full_buf[k] = fixed_value[k]
+                else
+                    full_buf[k] = y[j]
+                    j += 1
+                end
+            end
+            return f(full_buf)
+        end
+    end
+    g_wrapped = let full_buf = full_buf, out_buf = out_buf,
+                     is_fixed = is_fixed, fixed_value = fixed_value,
+                     n_ = n_, g = g
+        function (y::AbstractVector{<:Real})
+            j = 1
+            @inbounds for k in 1:n_
+                if is_fixed[k]
+                    full_buf[k] = fixed_value[k]
+                else
+                    full_buf[k] = y[j]
+                    j += 1
+                end
+            end
+            grad_full = g(full_buf)
+            j = 1
+            @inbounds for k in 1:n_
+                if !is_fixed[k]
+                    out_buf[j] = Float64(grad_full[k])
+                    j += 1
+                end
+            end
+            return out_buf
+        end
+    end
+    return CostFunctionWithGradient(f_wrapped, g_wrapped, up)
+end
 
 function _fix_multi_params(
     cf::CostFunction,
@@ -517,7 +667,7 @@ function _fix_multi_params(
 end
 
 function _migrad_with_multi_fixed(
-    cf::CostFunction,
+    cf::AbstractCostFunction,
     state::MinimumState,
     par_idxs::AbstractVector{<:Integer},
     v::AbstractVector{<:Real};
@@ -613,7 +763,7 @@ end
 
 function function_cross_multi(
     fmin::FunctionMinimum,
-    cf::CostFunction,
+    cf::AbstractCostFunction,
     par_idxs::AbstractVector{<:Integer},
     pmid::AbstractVector{<:Real},
     pdir::AbstractVector{<:Real};
@@ -698,7 +848,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function _migrad_with_fixed(
-    cf::CostFunction, state::MinimumState, i::Integer, v::Float64;
+    cf::AbstractCostFunction, state::MinimumState, i::Integer, v::Float64;
     tol::Float64, maxcalls::Integer, prec::MachinePrecision,
     strategy::Strategy = Strategy(0),
     warm_state::Union{Nothing,MinimumState} = nothing,
@@ -801,7 +951,7 @@ constrained-minimum (other params re-optimized) satisfies
 """
 function function_cross(
     fmin::FunctionMinimum,
-    cf::CostFunction,
+    cf::AbstractCostFunction,
     par_idx::Integer,
     dir::Real;
     tlr::Real = 0.1,
@@ -900,7 +1050,7 @@ bound (no extrapolation possible).
 """
 function function_cross_external(
     bfm,                # ::BoundedFunctionMinimum — typed at use site
-    cf::CostFunction,
+    cf::AbstractCostFunction,
     par_idx::Integer,
     dir::Real;
     tlr::Real = 0.1,

@@ -130,6 +130,130 @@
         @test fmin2.state.parameters.x ≈ fmin.state.parameters.x
     end
 
+    @testset "Phase F — AD gradient threads through MnContours / MINOS" begin
+        # The full MNCONTOUR chain (function_cross_multi / function_cross /
+        # minos / contour_exact) now accepts AbstractCostFunction. Verify:
+        # (1) AD path runs end-to-end without falling back to numerical;
+        # (2) AD result matches numerical-result on the same problem
+        #     (within tlr, since both algorithms target the same crossing);
+        # (3) FCN-call count drops dramatically on the AD path (the whole
+        #     point — eliminates 2·n·grad_ncycles numerical_gradient! calls
+        #     per probe).
+        using ForwardDiff
+        f = x -> (x[1] - 1.0)^2 + 10.0 * (x[2] - 2.0)^2 + (x[3] - 3.0)^2
+        # Numerical baseline
+        cf_num = CostFunction(f, 1.0)
+        fmin_num = migrad(cf_num, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1])
+        @test fmin_num.is_valid
+        ce_num = contour_exact(fmin_num, cf_num, 1, 2; npoints = 10)
+        @test ce_num.valid
+        @test length(ce_num.points) == 10
+        # AD path — same minimum, same contour
+        cf_ad = CostFunctionWithGradient(f, x -> ForwardDiff.gradient(f, x), 1.0)
+        fmin_ad = migrad(cf_ad, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1])
+        @test fmin_ad.is_valid
+        @test fmin_ad.state.parameters.x ≈ fmin_num.state.parameters.x atol = 1e-4
+        ce_ad = contour_exact(fmin_ad, cf_ad, 1, 2; npoints = 10)
+        @test ce_ad.valid
+        @test length(ce_ad.points) == 10
+        # FCN count must drop on AD path — that's the entire point.
+        # Bound at 50% of numerical (typically ~85-95% reduction).
+        @test ce_ad.nfcn < ce_num.nfcn ÷ 2
+        # Same contour points (sort by x-coord, compare pair-wise within
+        # tlr-scaled tolerance; both algorithms target the same crossing).
+        sort_pts = sort([(p[1], p[2]) for p in ce_num.points]; by = first)
+        sort_pts_ad = sort([(p[1], p[2]) for p in ce_ad.points]; by = first)
+        for k in 1:10
+            @test sort_pts[k][1] ≈ sort_pts_ad[k][1] atol = 0.05
+            @test sort_pts[k][2] ≈ sort_pts_ad[k][2] atol = 0.05
+        end
+    end
+
+    @testset "Phase F — high-level Minuit(grad=g); minos! threads AD" begin
+        # Codex Phase F review identified that the high-level
+        # Minuit API was silently dropping the AD gradient when
+        # routing through `migrad_bounded.jl` → BoundedFunctionMinimum.
+        # Fix: BoundedFunctionMinimum.internal_cf is now
+        # AbstractCostFunction, the CFwG path keeps cf_internal_grad
+        # instead of wrapping it back to plain CostFunction, and
+        # _fix_*_params(::CFwG) shares counters with the outer CF.
+        # This test guards against re-regression.
+        using ForwardDiff
+        ng_counter = Ref(0)
+        f = x -> (x[1] - 1)^2 + 10.0 * (x[2] - 2)^2 + (x[3] - 3)^2
+        g = function (x)
+            ng_counter[] += 1
+            return ForwardDiff.gradient(f, x)
+        end
+
+        # Unbounded path
+        ng_counter[] = 0
+        m = Minuit(f, [0.0, 0.0, 0.0]; error = [0.1, 0.1, 0.1], grad = g)
+        migrad!(m)
+        ng_after_migrad = ng_counter[]
+        @test ng_after_migrad > 0   # AD was used in migrad
+        minos!(m, 1)
+        @test ng_counter[] > ng_after_migrad  # AD threaded through minos
+        # Note: m.cfwg.ngrad reflects USER-FACING g calls (outer
+        # migrad), NOT inner cross-search calls. This mirrors how
+        # m.fcn.nfcn doesn't track inner-cross-search numerical FCN
+        # calls — both counters report on the user's CF wrapper only.
+        # `inner_min.nfcn` + `ContoursError.nfcn` are the inner-delta
+        # accessors. Inner-AD threading is verified via user-side
+        # `ng_counter[]` above.
+
+        # Bounded path (codex's specific failure case)
+        ng_counter[] = 0
+        m_b = Minuit(f, [0.0, 0.0, 0.0];
+                     error = [0.1, 0.1, 0.1], grad = g,
+                     limit_x0 = (-5.0, 5.0))
+        migrad!(m_b)
+        ng_after_migrad_b = ng_counter[]
+        @test ng_after_migrad_b > 0
+        minos!(m_b, 1)
+        @test ng_counter[] > ng_after_migrad_b   # bounded minos also used AD
+    end
+
+    @testset "Phase F — _fix_one_param/_fix_multi_params on CostFunctionWithGradient" begin
+        # Splice overloads must produce numerically-correct wrapped FCN
+        # AND wrapped gradient. Verify both directly.
+        using ForwardDiff
+        f = x -> x[1]^2 + 2.0 * x[2]^2 + 3.0 * x[3]^2 + 4.0 * x[4]^2 + 5.0 * x[5]^2
+        g = x -> ForwardDiff.gradient(f, x)
+        cf_ad = CostFunctionWithGradient(f, g, 1.0)
+
+        # Single-param fix: fix index 3 at value 0.5; free = (x1,x2,x4,x5)
+        cf_one = JuMinuit._fix_one_param(cf_ad, 3, 0.5, 5)
+        @test cf_one isa CostFunctionWithGradient
+        y4 = [0.1, 0.2, 0.4, 0.6]
+        # f(y) with index 3 = 0.5
+        expected_f = 0.1^2 + 2.0 * 0.2^2 + 3.0 * 0.5^2 + 4.0 * 0.4^2 + 5.0 * 0.6^2
+        @test cf_one(y4) ≈ expected_f
+        # g(y) is the gradient of the spliced f w.r.t. the FREE pars
+        # ∂f/∂x_k for free k. Manual: gradient of f at full = [0.1, 0.2, 0.5, 0.4, 0.6]
+        # is [2·0.1, 2·2·0.2, 2·3·0.5, 2·4·0.4, 2·5·0.6] = [0.2, 0.8, 3.0, 3.2, 6.0].
+        # Splice out index 3 → [0.2, 0.8, 3.2, 6.0]
+        @test cf_one.g(y4) ≈ [0.2, 0.8, 3.2, 6.0]
+        # Type stability of the wrapped call
+        @test (@inferred cf_one(y4)) isa Float64
+        # Zero per-call alloc for both f and g (Phase A V3 lift carries over)
+        cf_one(y4); cf_one.g(y4)  # warmup
+        @test (@allocated cf_one(y4)) == 0
+        # Note: g may allocate inside ForwardDiff (Dual stack); we test the
+        # WRAPPER overhead is zero, not ForwardDiff's internal allocs.
+
+        # Multi-param fix: fix indices [1, 3] at [0.5, 0.7]; free = (x2,x4,x5)
+        cf_multi = JuMinuit._fix_multi_params(cf_ad, [1, 3], [0.5, 0.7], 5)
+        @test cf_multi isa CostFunctionWithGradient
+        y3 = [0.2, 0.4, 0.6]
+        # f at full = [0.5, 0.2, 0.7, 0.4, 0.6]
+        expected_f = 0.5^2 + 2.0 * 0.2^2 + 3.0 * 0.7^2 + 4.0 * 0.4^2 + 5.0 * 0.6^2
+        @test cf_multi(y3) ≈ expected_f
+        # Gradient: [2·0.5, 2·2·0.2, 2·3·0.7, 2·4·0.4, 2·5·0.6] = [1.0, 0.8, 4.2, 3.2, 6.0]
+        # Splice out indices [1, 3] → [0.8, 3.2, 6.0]
+        @test cf_multi.g(y3) ≈ [0.8, 3.2, 6.0]
+    end
+
     @testset "Phase D — _get_scratch! lazy/replace semantics" begin
         # Verify the holder pattern: nothing → allocate; right size → reuse;
         # wrong size → reallocate (caller's external ref is intact).

@@ -55,7 +55,14 @@ struct BoundedFunctionMinimum
     ext_values::Vector{Float64}
     ext_errors::Vector{Float64}
     ext_covariance::Union{Nothing,Matrix{Float64}}
-    internal_cf::CostFunction
+    # Phase F: was concretely `CostFunction`. Now `AbstractCostFunction`
+    # so the AD gradient survives MIGRAD → MINOS / contour transitions
+    # at the high-level Minuit / Minuit.minos! / Minuit.draw_mncontour
+    # path (codex Phase F review: the low-level direct calls were already
+    # AD-correct; the user-facing wrapper was silently dropping the
+    # gradient through the plain `CostFunction` wrap at migrad_bounded.jl
+    # construction).
+    internal_cf::AbstractCostFunction
 end
 
 # Accessors mirroring iminuit-style
@@ -337,13 +344,13 @@ gradient before handing both to the unbounded `migrad(cf::CFwG, ...)`
 path. The 5-10× FCN-call savings of analytical gradients carry through
 to bounded fits.
 
-For follow-up MINOS / contour calls on the returned `BoundedFunctionMinimum`,
-the internal CF is exposed as a **plain `CostFunction`** sharing the
-same `nfcn` counter (the gradient information is dropped at that layer).
-This keeps the existing `CostFunction`-typed function_cross / minos /
-contour API working unchanged; inner MIGRADs inside MINOS use numerical
-gradient, which is fine because MINOS inner problems are smaller and
-the bulk of FCN evaluations happened in the outer MIGRAD.
+Phase F: previously this stored a *plain* `CostFunction` view of the
+internal FCN in `BoundedFunctionMinimum.internal_cf`, which dropped the
+analytical gradient on follow-up MINOS / contour calls — codex review
+caught the regression. The internal CF is now stored as the FULL
+`CostFunctionWithGradient` so the AD path survives MIGRAD → MINOS /
+contour transitions (the downstream `function_cross[_multi]` / `minos`
+/ `contour_exact` signatures already accept `AbstractCostFunction`).
 """
 function migrad(
     cf::CostFunctionWithGradient,
@@ -368,19 +375,12 @@ function migrad(
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
                        prec = prec)
 
-    # Plain-CostFunction view of the SAME internal `f` with SHARED nfcn
-    # counter. Stored on bfm so downstream MINOS/contour (which take
-    # `::CostFunction`) work without further dispatch changes.
-    plain_internal_cf = CostFunction(cf_internal_grad.f,
-                                      cf_internal_grad.up,
-                                      cf_internal_grad.nfcn)
-
     ext_values, ext_errors_vec, ext_cov_mat =
         _internal_to_external_results(fmin_int, params, cf.up)
 
     return BoundedFunctionMinimum(
         fmin_int, params, ext_values, ext_errors_vec, ext_cov_mat,
-        plain_internal_cf,
+        cf_internal_grad,
     )
 end
 

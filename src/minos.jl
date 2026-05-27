@@ -118,7 +118,7 @@ A [`MinosError`](@ref). Use `is_valid(e)` to check overall success.
 """
 function minos(
     fmin::FunctionMinimum,
-    cf::CostFunction,
+    cf::AbstractCostFunction,
     par_idx::Integer;
     tlr::Real = 0.1,
     maxcalls::Integer = 1000,
@@ -191,7 +191,7 @@ Compute MINOS errors for ALL free parameters. Convenience wrapper
 that calls the single-parameter overload in turn. Mirrors C++
 `MnMinos::operator()` which iterates over `0..n-1`.
 """
-function minos(fmin::FunctionMinimum, cf::CostFunction; kwargs...)
+function minos(fmin::FunctionMinimum, cf::AbstractCostFunction; kwargs...)
     n = length(fmin.state.parameters)
     return [minos(fmin, cf, i; kwargs...) for i in 1:n]
 end

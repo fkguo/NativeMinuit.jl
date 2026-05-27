@@ -1,7 +1,28 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 """
-    CostFunction{F,T}
+    AbstractCostFunction
+
+Supertype for every JuMinuit FCN wrapper. Two concrete subtypes ship:
+
+- [`CostFunction`](@ref) — numerical-gradient path (central-difference
+  via `numerical_gradient!`). The default.
+- `CostFunctionWithGradient` — analytical-gradient path; the user (or
+  a Package extension like ForwardDiff integration) provides
+  `g(x) → Vector{Float64}`. The MIGRAD loop's `numerical_gradient!`
+  dispatch is shadowed by `analytical_gradient!` for this subtype.
+
+Phase F: the cross-search / MINOS / contour drivers all take
+`cf::AbstractCostFunction` (not a concrete `CostFunction`) so the AD
+gradient path propagates through the inner-MIGRAD chain. The
+`_fix_one_param` / `_fix_multi_params` helpers have overloads for
+both subtypes that splice either just `f` (CostFunction) or both
+`f` and `g` (CostFunctionWithGradient).
+"""
+abstract type AbstractCostFunction end
+
+"""
+    CostFunction{F,T} <: AbstractCostFunction
 
 Wraps a user FCN `f::F` with an error definition `up::T` and an internal
 call counter. **Closure-specialized** via parametric `F` (ROADMAP §2.3
@@ -68,7 +89,7 @@ julia> reset_ncalls!(cf); ncalls(cf)
 0
 ```
 """
-struct CostFunction{F,T}
+struct CostFunction{F,T} <: AbstractCostFunction
     f::F
     up::T
     nfcn::Base.RefValue{Int}
