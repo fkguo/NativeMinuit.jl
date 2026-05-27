@@ -526,6 +526,7 @@ function _migrad_with_multi_fixed(
     prec::MachinePrecision,
     strategy::Strategy = Strategy(0),
     warm_state::Union{Nothing,MinimumState} = nothing,
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     n = length(state.parameters)
     is_fixed = falses(n)
@@ -582,7 +583,8 @@ function _migrad_with_multi_fixed(
         if seed_warm !== nothing
             inner_min = migrad(cf_fixed, seed_warm;
                                 tol = tol, maxfcn = Int(maxcalls),
-                                strategy = inner_strategy, prec = prec)
+                                strategy = inner_strategy, prec = prec,
+                                scratch = scratch)
             return inner_min, ncalls(cf_fixed)
         end
     end
@@ -604,7 +606,8 @@ function _migrad_with_multi_fixed(
 
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
-                        strategy = inner_strategy, prec = prec)
+                        strategy = inner_strategy, prec = prec,
+                        scratch = scratch)
     return inner_min, ncalls(cf_fixed)
 end
 
@@ -618,6 +621,7 @@ function function_cross_multi(
     maxcalls::Integer = 1000,
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     state = fmin.state
     n = length(state.parameters)
@@ -635,31 +639,48 @@ function function_cross_multi(
     pdir_f = Float64[Float64(pdir[i]) for i in 1:npar]
 
     # Probe closure: builds the multi-fix vector for a given α and runs
-    # the inner MIGRAD. THREADS THE WARM STATE forward across probes:
-    # within one MnFunctionCross call, C++ keeps a single MnMigrad
-    # instance whose internal MnUserParameterState is mutated by each
-    # `migrad()` invocation. The Julia equivalent is `warm_state_ref`:
-    # the previous probe's converged `MinimumState` (in (n-npar)-dim
-    # inner free-coord space) gets passed to `_migrad_with_multi_fixed`,
-    # which calls `warm_restart_state` to skip seed_state AND keep the
-    # warm inv_hessian. Cuts inner-MIGRAD nfcn ~50-60% on 10D contours.
+    # the inner MIGRAD. THREADS THE WARM STATE forward across probes
+    # (see _migrad_with_multi_fixed for the C++ MnMigrad single-instance
+    # rationale).
+    #
+    # Phase D — also pin a single MigradScratch across all probes of
+    # this cross-search. The inner_dim (n - npar) is constant within
+    # one function_cross_multi call, so one scratch instance amortizes
+    # ~15 vector + 3 matrix allocations across the 3-15 parabolic-fit
+    # iterations. When the caller supplies a `scratch` (e.g., from a
+    # contour_exact driver that's pooling across multiple cross-searches
+    # at the SAME inner_dim), we reuse THAT; otherwise we lazily
+    # construct one when the first probe needs it (kept in
+    # scratch_holder so the inner-dim==0 degenerate path doesn't
+    # allocate at all).
     warm_state_ref = Ref{Union{Nothing,MinimumState}}(nothing)
+    scratch_holder = Ref{Union{Nothing,MigradScratch}}(scratch)
     let pmid_f = pmid_f, pdir_f = pdir_f, npar = npar,
-        warm_state_ref = warm_state_ref
+        warm_state_ref = warm_state_ref,
+        scratch_holder = scratch_holder, n = n
         probe = function (aopt::Float64, budget::Integer)
             v_probe = Vector{Float64}(undef, npar)
             @inbounds for i in 1:npar
                 v_probe[i] = pmid_f[i] + aopt * pdir_f[i]
             end
+            # Lazy: allocate scratch on first non-degenerate probe;
+            # subsequent probes reuse. The all-fixed degenerate path
+            # (npar == n) inside _migrad_with_multi_fixed short-circuits
+            # before touching the scratch, so allocating here is wasted
+            # in that corner case — but harmless and tiny.
+            n_free_inner = n - npar
+            if n_free_inner >= 1
+                _get_scratch!(scratch_holder, n_free_inner)
+            end
             inner_min, nf = _migrad_with_multi_fixed(
                 cf, state, par_idxs, v_probe;
                 tol = 0.5 * tlr, maxcalls = budget,
                 prec = prec, strategy = strategy,
-                warm_state = warm_state_ref[])
+                warm_state = warm_state_ref[],
+                scratch = scratch_holder[])
             # On successful inner-MIGRAD, update the warm state for the
             # next probe. On failure keep the previous valid warm state
-            # (or `nothing` for the cold first probe) — corrupting
-            # future probes with a non-converged state is unsafe.
+            # (or `nothing` for the cold first probe).
             if inner_min.is_valid
                 warm_state_ref[] = inner_min.state
             end
@@ -681,6 +702,7 @@ function _migrad_with_fixed(
     tol::Float64, maxcalls::Integer, prec::MachinePrecision,
     strategy::Strategy = Strategy(0),
     warm_state::Union{Nothing,MinimumState} = nothing,
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     n = length(state.parameters)
     cf_fixed = _fix_one_param(cf, i, v, n)
@@ -700,7 +722,8 @@ function _migrad_with_fixed(
         if seed_warm !== nothing
             inner_min = migrad(cf_fixed, seed_warm;
                                 tol = tol, maxfcn = Int(maxcalls),
-                                strategy = inner_strategy, prec = prec)
+                                strategy = inner_strategy, prec = prec,
+                                scratch = scratch)
             return inner_min, ncalls(cf_fixed)
         end
     end
@@ -730,7 +753,8 @@ function _migrad_with_fixed(
 
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
-                        strategy = inner_strategy, prec = prec)
+                        strategy = inner_strategy, prec = prec,
+                        scratch = scratch)
     return inner_min, ncalls(cf_fixed)
 end
 
@@ -784,6 +808,7 @@ function function_cross(
     maxcalls::Integer = 1000,
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     state = fmin.state
     n = length(state.parameters)
@@ -803,19 +828,23 @@ function function_cross(
     step = Float64(dir) * sigma_i
     x_pivot = x_min[par_idx]
 
-    # Probe closure: runs inner MIGRAD at α along par_idx. Threads
-    # the warm STATE (full MinimumState including inv_hessian + refined
-    # gradient) across probes — see _migrad_with_multi_fixed for the
-    # full rationale; same mechanism on the single-parameter path.
+    # Probe closure: runs inner MIGRAD at α along par_idx. Threads the
+    # warm STATE across probes, AND pins one MigradScratch (inner_dim
+    # = n - 1, constant within this call). See function_cross_multi
+    # above for the full Phase D rationale.
     warm_state_ref = Ref{Union{Nothing,MinimumState}}(nothing)
+    scratch_holder = Ref{Union{Nothing,MigradScratch}}(scratch)
     let x_pivot = x_pivot, step = step,
-        warm_state_ref = warm_state_ref
+        warm_state_ref = warm_state_ref,
+        scratch_holder = scratch_holder, n = n
         probe = function (aopt::Float64, budget::Integer)
             v = x_pivot + aopt * step
+            _get_scratch!(scratch_holder, n - 1)
             inner_min, nf = _migrad_with_fixed(cf, state, par_idx, v;
                                 tol = 0.5 * tlr, maxcalls = budget,
                                 prec = prec, strategy = strategy,
-                                warm_state = warm_state_ref[])
+                                warm_state = warm_state_ref[],
+                                scratch = scratch_holder[])
             if inner_min.is_valid
                 warm_state_ref[] = inner_min.state
             end

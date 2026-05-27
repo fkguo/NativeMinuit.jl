@@ -122,9 +122,20 @@ function contour_exact(
     valy = state.parameters.x[par_y]
     par_idxs = [Int(par_x), Int(par_y)]
 
+    # Phase D — pool one MigradScratch per distinct inner_dim used by
+    # this driver. MINOS and the 4 axis points all run inner MIGRAD at
+    # n-1 free pars (one outer par fixed); ray points later use n-2
+    # (two outer pars fixed simultaneously). Allocating once per dim
+    # eliminates ~15 vector + 3 matrix allocs per probe × hundreds of
+    # probes per contour.
+    scratch_nm1 = n >= 2 ? MigradScratch(n - 1) : nothing
+    scratch_nm2 = n >= 3 ? MigradScratch(n - 2) : nothing
+
     # Step 1: MINOS on both axes
-    mex = minos(fmin, cf, par_x; tlr=tlr, strategy=strategy, prec=prec)
-    mey = minos(fmin, cf, par_y; tlr=tlr, strategy=strategy, prec=prec)
+    mex = minos(fmin, cf, par_x; tlr=tlr, strategy=strategy, prec=prec,
+                  scratch=scratch_nm1)
+    mey = minos(fmin, cf, par_y; tlr=tlr, strategy=strategy, prec=prec,
+                  scratch=scratch_nm1)
     nfcn = mex.nfcn + mey.nfcn
     (is_valid(mex) && is_valid(mey)) ||
         return ContoursError(Int(par_x), Int(par_y),
@@ -137,7 +148,8 @@ function contour_exact(
         m_axis, nf_axis = _migrad_with_multi_fixed(
             cf, state, [par_fix], [v_fix];
             tol = 0.5 * tlr, maxcalls = 1000,
-            prec = prec, strategy = strategy)
+            prec = prec, strategy = strategy,
+            scratch = scratch_nm1)
         if !m_axis.is_valid
             return nothing, nf_axis
         end
@@ -201,11 +213,14 @@ function contour_exact(
         xdircr = xdir / scalfac
         ydircr = ydir / scalfac
 
-        # Find the boundary along (xmid, ymid) + α · (xdircr, ydircr)
+        # Find the boundary along (xmid, ymid) + α · (xdircr, ydircr).
+        # Pass scratch_nm2 — ray-point inner MIGRAD fixes BOTH outer
+        # pars simultaneously (inner_dim = n - 2).
         cross = function_cross_multi(
             fmin, cf, par_idxs, [xmid, ymid], [xdircr, ydircr];
             tlr = tlr, maxcalls = max(maxcalls - nfcn, 100),
-            strategy = strategy, prec = prec)
+            strategy = strategy, prec = prec,
+            scratch = scratch_nm2)
         nfcn += cross.nfcn
 
         if !cross.valid || nfcn > maxcalls

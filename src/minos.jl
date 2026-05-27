@@ -124,6 +124,7 @@ function minos(
     maxcalls::Integer = 1000,
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     state = fmin.state
     n = length(state.parameters)
@@ -136,10 +137,14 @@ function minos(
     # (fMinParValue). Parallel-review #4 B2.
     min_par_value = state.parameters.x[par_idx]
 
-    # Upper direction (positive)
+    # Upper direction (positive). Threads the optional `scratch` —
+    # both upper + lower cross searches use the same inner_dim (n-1),
+    # so they can pool one MigradScratch across all ~6-10 inner-MIGRAD
+    # probes per side.
     up_cross = function_cross(fmin, cf, par_idx, +1.0;
                                 tlr = tlr, maxcalls = maxcalls,
-                                strategy = strategy, prec = prec)
+                                strategy = strategy, prec = prec,
+                                scratch = scratch)
     # 1-sigma external step (same as inside function_cross)
     sigma_i = sqrt(max(2.0 * cf.up * state.error.inv_hessian[par_idx, par_idx],
                         prec.eps2))
@@ -157,7 +162,8 @@ function minos(
     lo_cross = function_cross(fmin, cf, par_idx, -1.0;
                                 tlr = tlr,
                                 maxcalls = maxcalls,
-                                strategy = strategy, prec = prec)
+                                strategy = strategy, prec = prec,
+                                scratch = scratch)
     lower = lo_cross.valid ? -lo_cross.aopt * sigma_i : 0.0
     nfcn_total += lo_cross.nfcn
 

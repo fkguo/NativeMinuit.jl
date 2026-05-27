@@ -1,6 +1,128 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MigradScratch — per-fit scratch pool.
+#
+# Phase D (perf): when MnFunctionCross / MnContours runs N sequential
+# inner MIGRADs at the same dimension (one per parabolic-fit probe), each
+# `_migrad_loop` call allocates ~15 vectors + 3 symmetric matrices for
+# its in-iteration scratch — that's ~160 probes × ~17 allocs ≈ 2700
+# allocations per contour just for scratch. By pooling the scratch into
+# a single `MigradScratch{n}` and passing it to `_migrad_loop` via the
+# `scratch` kwarg, the contour driver allocates ONE scratch per inner
+# dimension (typically n-1 for MINOS + axis points, n-2 for ray points)
+# and reuses it across all probes.
+#
+# Buffers are stored in a mutable struct so the outer driver can pin
+# the same reference across probe iterations. All `Vector{Float64}` and
+# `Symmetric{Matrix{Float64}}` storage is allocated `undef` — the
+# `_migrad_loop` body writes every buffer before any read (sym_mul! with
+# β=0 zeros step; davidon_update!'s own fill! zeros vUpd_work; etc.), so
+# no zero-fill is needed at construction.
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    MigradScratch(n)
+
+Pre-allocated scratch buffers for one or more `_migrad_loop` invocations
+at dimension `n`. Reuse across calls saves ~15 vector + 3 symmetric
+matrix allocations per call — significant when MnContours / MINOS runs
+hundreds of inner MIGRADs at fixed inner dimension.
+
+Mutable so callers can pin one instance across multiple probes via the
+`Ref`/holder idiom. All fields are exposed for internal use; this
+struct is not part of the public API (no export).
+
+# Fields
+
+- `n::Int` — buffer length / matrix order.
+- `step, ls_work, grad_work, vg_work, dx_buf, dg_buf` — per-iteration
+  scratch vectors (length `n`).
+- `vUpd_work` — DFP update scratch (Symmetric{Matrix{Float64}}, n×n).
+- `x_a, g_a, g2_a, gs_a, V_a` and `_b` ping-pong sets — alternating
+  MinimumState buffer storage; one set wraps `s0`, the other receives
+  the next iteration's values.
+
+# Usage pattern (in `function_cross` / `function_cross_multi`)
+
+```julia
+scratch_holder = Ref{Union{Nothing,MigradScratch}}(nothing)
+for each_probe in probes
+    n_inner = ...                           # may differ across probes
+    scratch = _get_scratch!(scratch_holder, n_inner)
+    inner_min = migrad(cf_fixed, seed; scratch = scratch, ...)
+end
+```
+
+`_get_scratch!` (helper below) lazily constructs or replaces the
+scratch when the dimension changes; identical dimensions reuse.
+
+# Aliasing / thread-safety
+
+Same contract as `_fix_one_param` / `_fix_multi_params`: the scratch
+struct's buffers are NOT re-entrant. Pass distinct scratches across
+threads if you ever run parallel `_migrad_loop` calls.
+"""
+mutable struct MigradScratch
+    n::Int
+    step::Vector{Float64}
+    ls_work::Vector{Float64}
+    grad_work::Vector{Float64}
+    vg_work::Vector{Float64}
+    vUpd_work::Symmetric{Float64,Matrix{Float64}}
+    dx_buf::Vector{Float64}
+    dg_buf::Vector{Float64}
+    x_a::Vector{Float64};  x_b::Vector{Float64}
+    g_a::Vector{Float64};  g_b::Vector{Float64}
+    g2_a::Vector{Float64}; g2_b::Vector{Float64}
+    gs_a::Vector{Float64}; gs_b::Vector{Float64}
+    V_a::Symmetric{Float64,Matrix{Float64}}
+    V_b::Symmetric{Float64,Matrix{Float64}}
+end
+
+function MigradScratch(n::Integer)
+    n_ = Int(n)
+    n_ >= 1 ||
+        throw(ArgumentError("MigradScratch n must be ≥ 1, got $n_"))
+    MigradScratch(
+        n_,
+        Vector{Float64}(undef, n_),
+        Vector{Float64}(undef, n_),
+        Vector{Float64}(undef, n_),
+        Vector{Float64}(undef, n_),
+        Symmetric(Matrix{Float64}(undef, n_, n_), :U),
+        Vector{Float64}(undef, n_),
+        Vector{Float64}(undef, n_),
+        Vector{Float64}(undef, n_), Vector{Float64}(undef, n_),
+        Vector{Float64}(undef, n_), Vector{Float64}(undef, n_),
+        Vector{Float64}(undef, n_), Vector{Float64}(undef, n_),
+        Vector{Float64}(undef, n_), Vector{Float64}(undef, n_),
+        Symmetric(Matrix{Float64}(undef, n_, n_), :U),
+        Symmetric(Matrix{Float64}(undef, n_, n_), :U),
+    )
+end
+
+"""
+    _get_scratch!(holder, n) -> MigradScratch
+
+Lazy/replace helper: if `holder[]` is `nothing` or has wrong dimension,
+construct a fresh `MigradScratch(n)` and assign back; otherwise return
+the existing one. Used by the cross-search drivers to reuse scratch
+across probes of the same inner dimension while still handling
+dimension changes (MINOS n-1 → axis n-1 → ray n-2).
+"""
+@inline function _get_scratch!(
+    holder::Base.RefValue{Union{Nothing,MigradScratch}},
+    n::Integer,
+)
+    s = holder[]
+    if s === nothing || s.n != Int(n)
+        holder[] = MigradScratch(n)
+    end
+    return holder[]::MigradScratch
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # migrad.jl — the MIGRAD loop.
 #
 # Mirrors reference/Minuit2_cpp/src/VariableMetricBuilder.cxx.
@@ -87,12 +209,14 @@ function migrad(
     tol::Real = 0.1,
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
 
     seed = seed_state(cf, x0, errs, strategy, prec)
-    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec)
+    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
+                          scratch = scratch)
 end
 
 """
@@ -122,10 +246,12 @@ function migrad(
     tol::Real = 0.1,
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     n = length(seed)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
-    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec)
+    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
+                          scratch = scratch)
 end
 
 """
@@ -150,10 +276,19 @@ function migrad(
 end
 
 """
-    _migrad_loop(seed, cf, strategy, tol, maxfcn, prec) -> FunctionMinimum
+    _migrad_loop(seed, cf, strategy, tol, maxfcn, prec;
+                 scratch=nothing) -> FunctionMinimum
 
 The MIGRAD iteration loop proper. Public via `migrad(...)`; exposed for
 re-entry tests and benchmarks.
+
+The optional `scratch::MigradScratch` argument lets a caller pool the
+per-fit scratch buffers across multiple `_migrad_loop` invocations of
+the same dimension. When `scratch === nothing` (default) the loop
+allocates its own buffers — bit-for-bit identical to the pre-Phase-D
+behavior. When supplied, scratch dimension MUST match `length(seed)`
+or the call falls back to local allocation (defensive — should not
+happen if the caller uses [`_get_scratch!`](@ref) correctly).
 """
 function _migrad_loop(
     seed::MinimumState,
@@ -161,7 +296,8 @@ function _migrad_loop(
     strategy::Strategy,          # method dispatch on numerical_gradient! etc.
     tol::Real,                   # picks the right per-FCN-type implementation.
     maxfcn::Integer,
-    prec::MachinePrecision,
+    prec::MachinePrecision;
+    scratch::Union{Nothing,MigradScratch} = nothing,
 )
     n = length(seed)
 
@@ -200,7 +336,22 @@ function _migrad_loop(
     edm_corrected = s0.edm * (1.0 + 3.0 * s0.error.dcovar)
 
     # ─────────────────────────────────────────────────────────────────────
-    # Per-FIT scratch — allocated ONCE, shared across all iterations.
+    # Per-FIT scratch — bound either to a caller-supplied pool
+    # (`scratch::MigradScratch`, reused across probes inside MnContours /
+    # MINOS) or to a freshly-allocated local pool (when caller passed
+    # `scratch=nothing` — backward-compatible path).
+    #
+    # IMPORTANT ALIASING CONTRACT (Phase D codex review):
+    #   The returned `FunctionMinimum.state` wraps the scratch's buffers
+    #   directly. If a caller pools the SAME scratch across multiple
+    #   `_migrad_loop` invocations and then RETAINS the returned state
+    #   from an earlier call past the start of a later call, the
+    #   retained state's parameters / gradient / inv_hessian are MUTATED
+    #   by the later iteration. Current `minos` / `contour_exact` are
+    #   safe because they consume `aopt` / `validity` / scalar y-axis
+    #   values immediately and never retain inner states across pooled
+    #   probes (minos.jl:144, contours.jl:148, contours.jl:219). Treat
+    #   `scratch` as INTERNAL only.
     #
     # • `step`, `ls_work`, `grad_work`, `vg_work`, `vUpd_work` are pure
     #   in-iteration scratch (overwritten each use; no aliasing risk).
@@ -211,38 +362,39 @@ function _migrad_loop(
     #   the OTHER set — without ping-pong we'd overwrite s0's data
     #   mid-iteration. Two sets (A, B) alternate via `use_a` flag.
     #
-    # Net per-iteration allocations after this refactor: zero vectors,
-    # zero matrices — only four ~48-byte immutable struct wrappers
-    # (MinimumParameters/FunctionGradient/MinimumError/MinimumState).
-    # ─────────────────────────────────────────────────────────────────────
-    # `step` is fully written by `sym_mul!(step, V, g, -1.0, 0.0)` (β=0
-    # → step is not read) before each use, so `undef` is safe.
-    # `vUpd_work` stays `zeros` because `davidon_update!` reads its
-    # initial state in some branches.
-    step      = Vector{Float64}(undef, n)
-    ls_work   = Vector{Float64}(undef, n)
-    grad_work = Vector{Float64}(undef, n)
-    vg_work   = Vector{Float64}(undef, n)
-    vUpd_work = Symmetric(zeros(Float64, n, n), :U)
-    dx_buf    = Vector{Float64}(undef, n)
-    dg_buf    = Vector{Float64}(undef, n)
-
-    # Ping-pong state buffer sets (A and B).
+    # FAIL FAST on size mismatch — silent fallback would hide caller bugs.
+    # The drivers (`function_cross[_multi]`, `contour_exact`) ALWAYS
+    # preflight via `_get_scratch!`, so this throw can only fire from
+    # external/direct callers wiring the wrong scratch dimension.
     #
-    # V_a / V_b allocated `undef` — the lower triangle starts as garbage.
-    # First use: `copyto!(parent(nV_buf), parent(s0.error.inv_hessian))`
-    # copies the FULL parent matrix from the seed (which is `zeros(n,n)`
-    # in `seed.jl:88`), so the lower triangle becomes 0 on first use.
-    # Subsequent ops (davidon_update! via BLAS `syr!`, make_posdef via
-    # full `copy`) preserve the zero lower triangle. This invariant
-    # means we don't need `zeros(n,n)` here — saves one n²·8-byte fill
-    # per fit.
-    x_a   = Vector{Float64}(undef, n);  x_b   = Vector{Float64}(undef, n)
-    g_a   = Vector{Float64}(undef, n);  g_b   = Vector{Float64}(undef, n)
-    g2_a  = Vector{Float64}(undef, n);  g2_b  = Vector{Float64}(undef, n)
-    gs_a  = Vector{Float64}(undef, n);  gs_b  = Vector{Float64}(undef, n)
-    V_a   = Symmetric(Matrix{Float64}(undef, n, n), :U)
-    V_b   = Symmetric(Matrix{Float64}(undef, n, n), :U)
+    # Note on `undef` initialization: `step` is fully written by
+    # `sym_mul!(step, V, g, -1.0, 0.0)` (β=0 → step is not read) before
+    # each use. `vUpd_work` is `fill!(parent(vUpd_work), 0.0)`-zeroed
+    # by `davidon_update!` itself (davidon.jl:123). Ping-pong V_a / V_b
+    # have their lower triangles overwritten via `copyto!(parent(...), ...)`
+    # before any read; subsequent in-place DFP / make_posdef ops preserve
+    # the upper-triangle authoritative semantics. So `undef` everywhere
+    # is safe and saves one n² zero-fill per buffer at construction.
+    # ─────────────────────────────────────────────────────────────────────
+    if scratch !== nothing && scratch.n != n
+        throw(DimensionMismatch(
+            "MigradScratch.n=$(scratch.n) ≠ seed dim $n; the driver " *
+            "should call `_get_scratch!(holder, n)` before `_migrad_loop`."))
+    end
+    s_eff = scratch === nothing ? MigradScratch(n) : scratch
+    step      = s_eff.step
+    ls_work   = s_eff.ls_work
+    grad_work = s_eff.grad_work
+    vg_work   = s_eff.vg_work
+    vUpd_work = s_eff.vUpd_work
+    dx_buf    = s_eff.dx_buf
+    dg_buf    = s_eff.dg_buf
+    x_a   = s_eff.x_a;  x_b   = s_eff.x_b
+    g_a   = s_eff.g_a;  g_b   = s_eff.g_b
+    g2_a  = s_eff.g2_a; g2_b  = s_eff.g2_b
+    gs_a  = s_eff.gs_a; gs_b  = s_eff.gs_b
+    V_a   = s_eff.V_a
+    V_b   = s_eff.V_b
     use_a = true   # next iter writes to set A; s0 ends up wrapping A
 
     made_pos_def_flag = false
@@ -350,7 +502,23 @@ function _migrad_loop(
             # Matrix; we only need to copy the upper triangle but copyto!
             # on the full storage is faster (no branches) and the lower
             # half is unused by Symmetric(:U) semantics anyway.
-            copyto!(parent(nV_buf), parent(s0.error.inv_hessian))
+            #
+            # Self-copy guard (Phase D): when `scratch` is reused across
+            # `MnFunctionCross` probes AND the previous probe's final
+            # write landed on the same ping-pong slot the new iter just
+            # selected, `s0.error.inv_hessian` (wrapping prev's final
+            # V_a/V_b) can ALIAS `nV_buf`. `copyto!(M, M)` on plain
+            # `Matrix{Float64}` is a well-defined no-op today, but
+            # treating the storage identity check as the invariant
+            # protects against any future move to view-based / sparse
+            # inv_hessian storage where `copyto!` overlap is UB.
+            # (Phase A reviewer's NICE-TO-HAVE; cost = one pointer
+            # comparison per inner iter, ~ns.)
+            dst_M = parent(nV_buf)
+            src_M = parent(s0.error.inv_hessian)
+            if dst_M !== src_M
+                copyto!(dst_M, src_M)
+            end
             new_dcov, _ = davidon_update!(nV_buf, dx_buf, dg_buf, s0.error.dcovar,
                                            vg_work, vUpd_work)
             # Reset status to MnHesseValid (matches C++ DavidonErrorUpdator.cxx:67-72
