@@ -52,6 +52,10 @@ Result of `function_cross`. Mirrors C++ `MnCross`
 - `fcn_limit::Bool` — `true` if the call budget was exhausted.
 - `par_limit::Bool` — `true` if a parameter bound was hit (Phase 1+
   only; always `false` in first cut).
+- `ext_state::Union{Nothing,Vector{Float64}}` — the inner-bounded-MIGRAD's
+  converged EXTERNAL parameter vector at the crossing (bounded path
+  only; always `nothing` for unbounded `function_cross`, and `nothing`
+  for invalid results). Used by [`MinosError`](@ref) M4 snapshot fields.
 """
 struct MnCross
     state::MinimumState
@@ -61,12 +65,21 @@ struct MnCross
     new_min::Bool
     fcn_limit::Bool
     par_limit::Bool
+    # M4 (bounded path): the inner-bounded-MIGRAD's converged EXTERNAL
+    # parameter vector at the crossing (with par_idx held at the trial
+    # ext value). Populated by `function_cross_external` so the caller
+    # (`_minos_external_via_function_cross`) can publish a full ext
+    # snapshot via `MinosError.{upper,lower}_state`. `nothing` for the
+    # unbounded path (caller assembles ext from `state.parameters.x`
+    # via `_assemble_crossing_state`) and for invalid results.
+    ext_state::Union{Nothing,Vector{Float64}}
 end
 
 MnCross(state::MinimumState, aopt::Real, nfcn::Integer; valid=true,
-         new_min=false, fcn_limit=false, par_limit=false) =
+         new_min=false, fcn_limit=false, par_limit=false,
+         ext_state::Union{Nothing,Vector{Float64}} = nothing) =
     MnCross(state, Float64(aopt), Int(nfcn), valid, new_min,
-            fcn_limit, par_limit)
+            fcn_limit, par_limit, ext_state)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Parabola helpers — Phase 1.x A3/A4 (parallel-review #4 A3/A4).
@@ -216,15 +229,23 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
                      state_fallback::MinimumState;
                      tlr::Float64 = 0.1,
                      maxcalls::Integer = 1000,
-                     prec::MachinePrecision = MachinePrecision()) where {F<:Function}
-    aim = fmin_val + up
+                     prec::MachinePrecision = MachinePrecision(),
+                     up_scale::Float64 = 1.0) where {F<:Function}
+    # P5: `up_scale` (= sigma² for the MnMinos `sigma=k` API) scales the
+    # effective ErrorDef so the crossing aim becomes `fmin + up · sigma²`.
+    # Mirrors iminuit's `_TemporaryUp(self._fcn, factor=sigma²)` wrapper
+    # around MnMinos: all subsequent references to `up` inside the search
+    # see `up · sigma²`. Tolerances (`tlf`, `f[1]`-seed) scale together so
+    # the algorithm's relative convergence behavior is preserved.
+    up_eff = up * up_scale
+    aim = fmin_val + up_eff
 
     # **Crossing convergence tolerances are HARDCODED 0.01** per C++
     # MnFunctionCross.cxx:38-40 (the user-supplied `tlr` is repurposed
     # only as the inner-MIGRAD tolerance via 0.5·tlr). Without this
     # override the crossing test would be 10× looser than C++ at the
     # default user `tlr = 0.1` (Opus review #5 BLOCKING #1).
-    tlf = 0.01 * up        # crossing function-value tolerance
+    tlf = 0.01 * up_eff    # crossing function-value tolerance
     tla_base = 0.01        # crossing α-tolerance (scaled per iter)
 
     maxitr = 15
@@ -236,10 +257,10 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
     # f[1] follows C++ line 141: max(min0.Fval(), aminsv + 0.1*up). Since
     # we cache fmin (≡ min0.Fval()), this collapses to fmin + 0.1*up.
     # We skip the α=0 MIGRAD entirely (perf win; documented deviation).
-    f[1] = fmin_val + 0.1 * up
+    f[1] = fmin_val + 0.1 * up_eff
 
     # ── Quadratic seed for α (C++ line 142) ──────────────────────────────
-    aopt_seed = sqrt(up / (f[1] - fmin_val)) - 1.0
+    aopt_seed = sqrt(up_eff / (f[1] - fmin_val)) - 1.0
     # Convergence at α=0 (extremely rare; only fires if user tlr ≥ 1)
     if abs(f[1] - aim) < tlf
         return MnCross(state_fallback, aopt_seed, nfcn; valid=true)
@@ -800,7 +821,10 @@ function function_cross_multi(
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
+    sigma::Real = 1.0,
 )
+    sigma > 0 ||
+        throw(ArgumentError("sigma must be positive, got $sigma"))
     state = fmin.state
     n = length(state.parameters)
     npar = length(par_idxs)
@@ -867,7 +891,8 @@ function function_cross_multi(
         end
         return _cross_core(probe, fmin_val, up, state;
                             tlr = Float64(tlr),
-                            maxcalls = maxcalls, prec = prec)
+                            maxcalls = maxcalls, prec = prec,
+                            up_scale = Float64(sigma)^2)
     end
 end
 
@@ -967,6 +992,12 @@ constrained-minimum (other params re-optimized) satisfies
 - `maxcalls::Integer=1000` — call budget across all inner MIGRADs.
 - `strategy::Strategy=Strategy(0)` — passed to inner MIGRADs.
 - `prec::MachinePrecision`.
+- `sigma::Real=1.0` — confidence level in σ-units. The crossing aim
+  becomes `fmin + up · sigma²` (mirrors iminuit's `minos(cl=)` scaling
+  of `MnFunctionCross.aim`). At sigma=1 the behavior is C++-identical
+  to a single MnFunctionCross call; at sigma=k the returned `aopt`
+  converges to ≈ k (in the parabolic approximation), so the caller's
+  `aopt · σ_1` product is the k-σ error.
 
 # Returns
 
@@ -992,7 +1023,10 @@ function function_cross(
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
+    sigma::Real = 1.0,
 )
+    sigma > 0 ||
+        throw(ArgumentError("sigma must be positive, got $sigma"))
     state = fmin.state
     n = length(state.parameters)
     1 <= par_idx <= n ||
@@ -1036,7 +1070,8 @@ function function_cross(
         end
         return _cross_core(probe, fmin_val, up, state;
                             tlr = Float64(tlr),
-                            maxcalls = maxcalls, prec = prec)
+                            maxcalls = maxcalls, prec = prec,
+                            up_scale = Float64(sigma)^2)
     end
 end
 
@@ -1092,7 +1127,10 @@ function function_cross_external(
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
+    sigma::Real = 1.0,
 )
+    sigma > 0 ||
+        throw(ArgumentError("sigma must be positive, got $sigma"))
     params = bfm.params
     n_total = n_pars(params)
     1 <= par_idx <= n_total ||
@@ -1161,6 +1199,14 @@ function function_cross_external(
         Inf
     end
     limset = Ref(false)
+    # M4: capture the inner-bounded-MIGRAD's converged EXTERNAL parameter
+    # vector at the last successful probe so the caller can publish a
+    # full ext snapshot via `MinosError.{upper,lower}_state`. `_cross_core`
+    # returns the converged `last_min.state` (internal coords); we hold
+    # the ext slice in a closure-captured Ref that the probe overwrites
+    # on each `inner_bfm.is_valid` call. After `_cross_core` returns
+    # valid, `last_ext_state[]` holds the converged ext snapshot.
+    last_ext_state = Ref{Union{Nothing,Vector{Float64}}}(nothing)
 
     # Build probe closure. At each alpha, set par to `ext_min + aopt *
     # step_ext` (clamped against the bound if aopt > aulim), copy ALL
@@ -1172,6 +1218,7 @@ function function_cross_external(
     let par_idx = Int(par_idx), step_ext = step_ext,
         ext_min = ext_min, par = par, params = params,
         aulim = aulim, limset = limset,
+        last_ext_state = last_ext_state,
         ext_values = bfm.ext_values,
         inner_strategy = inner_strategy
         probe = function (aopt::Float64, budget::Integer)
@@ -1218,6 +1265,13 @@ function function_cross_external(
                                 tol = 0.5 * tlr, maxfcn = Int(budget),
                                 strategy = inner_strategy, prec = prec,
                                 threaded_gradient = threaded_gradient)
+            # M4: snapshot the converged ext values so the caller can
+            # publish them on `MinosError.{upper,lower}_state`. Only
+            # update when the inner MIGRAD reached a valid minimum —
+            # invalid probes' ext vectors are not physically meaningful.
+            if inner_bfm.internal.is_valid
+                last_ext_state[] = copy(inner_bfm.ext_values)
+            end
             # nfcn correctly = the inner bounded migrad's call count
             # (NOT ncalls(cf), which is the OUTER cf and never gets
             # incremented because bounded migrad wraps cf into
@@ -1226,7 +1280,8 @@ function function_cross_external(
         end
         result = _cross_core(probe, fmin_val, up, bfm.internal.state;
                               tlr = Float64(tlr),
-                              maxcalls = maxcalls, prec = prec)
+                              maxcalls = maxcalls, prec = prec,
+                              up_scale = Float64(sigma)^2)
         # Round-4 codex BLOCKING fix: the probe clamps ext_val when
         # aopt > aulim, but `_cross_core` still records the UNCLAMPED
         # aopt. If the inner-fval at the clamped bound happens to be
@@ -1246,7 +1301,8 @@ function function_cross_external(
             result = MnCross(result.state, aulim, result.nfcn;
                               valid = false, par_limit = true,
                               new_min = result.new_min,
-                              fcn_limit = result.fcn_limit)
+                              fcn_limit = result.fcn_limit,
+                              ext_state = last_ext_state[])
         end
         # Round-3 partial-truncation fix: search exited invalid AND
         # we hit the bound during the walk → relabel as par_limit.
@@ -1254,7 +1310,24 @@ function function_cross_external(
             result = MnCross(result.state, result.aopt, result.nfcn;
                               valid = false, par_limit = true,
                               new_min = result.new_min,
-                              fcn_limit = result.fcn_limit)
+                              fcn_limit = result.fcn_limit,
+                              ext_state = last_ext_state[])
+        end
+        # M4: attach the captured ext snapshot for the SUCCESS path
+        # too — the inner-MIGRAD's converged ext values at the crossing.
+        # `_cross_core` reconstructs MnCross internally without ext_state,
+        # so we rebuild here ONLY when the result is valid and we have a
+        # captured snapshot (we leave failure-mode results alone to keep
+        # ext_state==nothing as their semantic; bounded `par_limit` got
+        # the snapshot via the wraps above when relevant).
+        if result.valid && last_ext_state[] !== nothing &&
+           result.ext_state === nothing
+            result = MnCross(result.state, result.aopt, result.nfcn;
+                              valid = result.valid,
+                              new_min = result.new_min,
+                              fcn_limit = result.fcn_limit,
+                              par_limit = result.par_limit,
+                              ext_state = last_ext_state[])
         end
         return result
     end
