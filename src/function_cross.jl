@@ -437,27 +437,36 @@ function _fix_one_param(cf::CostFunction, i::Integer, v::Float64, n::Integer)
     up = cf.up
     i_ = Int(i)
     n_ = Int(n)
-    # Pre-allocate the full-length splice buffer ONCE at wrapper construction
-    # and capture it. The closure body writes the free slots from `y` and
-    # the fixed slot from `v` on every call (loop structure identical to the
-    # historical V1 implementation — we *only* hoist the alloc, not the
-    # gather pattern, to keep LLVM's branch + memory layout decisions
-    # unchanged). V1 paid `jl_alloc_genericmemory_unchecked` per call
-    # (confirmed via `code_llvm` IR inspection in Phase A); V3 saves the
-    # alloc + the GC bookkeeping it carries. Measured wrap overhead drops
-    # from +42 ns to +12 ns per call on an isolated bench (n=10, n_free=9).
+    # Per-thread splice-buffer pool (Phase G).
     #
-    # Thread-safety: this closure is NOT re-entrant — the shared full_buf
-    # would race under concurrent calls. Safe under current callers
-    # (MnFunctionCross / MnContours / MINOS run inner MIGRAD
-    # single-threaded; `numerical_gradient!(..., threaded=true)` is only
-    # exercised on the outer user CostFunction, never on cf_fixed
-    # wrappers — verified by `grep -rn "Threads" src/`, no hits inside the
-    # cross-search path). If future code needs concurrent cf_fixed calls,
-    # switch full_buf to per-thread storage indexed by `Threads.threadid()`.
-    full_buf = Vector{Float64}(undef, n_)
-    wrapped = let full_buf = full_buf, i_ = i_, n_ = n_, v = v, f = f
+    # The closure body writes the free slots from `y` and the fixed slot
+    # from `v` on every call. Loop structure identical to Phase A V3 — we
+    # *only* hoist the alloc + scale it to per-thread, not change the
+    # gather pattern, to keep LLVM's branch + memory layout decisions
+    # unchanged.
+    #
+    # Single-threaded Julia: `Threads.maxthreadid() == 1`, so `full_bufs`
+    # has length 1 and `Threads.threadid()` always returns 1 →
+    # ZERO behavioral / memory / perf change vs Phase A V3 default.
+    #
+    # Multi-threaded Julia (`julia -t N`): allocate one buffer per
+    # possible threadid (`maxthreadid()` ≥ N, with one extra for the
+    # interactive thread on Julia 1.10+). When the inner-gradient
+    # `Threads.@threads :static for i in 1:n` calls `cf(xw)` from
+    # parallel tasks, each task indexes a distinct `full_bufs[tid]`
+    # → no race. Memory cost = N × n × 8 bytes (tiny: 9 × 10 × 8 = 720
+    # bytes for the typical M3 + 10D fit).
+    #
+    # User FCN `f` is the caller's responsibility for thread safety —
+    # if `f` has hidden mutable state (cache, RNG, file I/O) the user
+    # must guard it (documented in `Minuit(..., threaded_gradient=true)`
+    # docstring).
+    nbuf = max(1, Threads.maxthreadid())
+    full_bufs = [Vector{Float64}(undef, n_) for _ in 1:nbuf]
+    wrapped = let full_bufs = full_bufs, i_ = i_, n_ = n_, v = v, f = f
         function (y::AbstractVector{<:Real})
+            # `` deliberately omitted on the tid index — bounds-check cost (~1 ns) is negligible vs the FCN call (≥100 ns), and the check protects against silent memory corruption if Julia's threadpool model ever expands at runtime. The body of f(full_buf) is still `` where it matters.
+            full_buf = full_bufs[Threads.threadid()]
             @inbounds for k in 1:(i_ - 1)
                 full_buf[k] = y[k]
             end
@@ -498,20 +507,22 @@ function _fix_one_param(cf::CostFunctionWithGradient, i::Integer, v::Float64, n:
     g = cf.g
     up = cf.up
     # Counters are FRESH (not shared with outer cf) — symmetric with the
-    # numerical `_fix_one_param(::CostFunction, ...)` overload above and
-    # with the `_wrap_fcn_internal_to_external(::CostFunction, ...)`
-    # helper in migrad_bounded.jl. Codex Phase F review noted that
-    # `m.cfwg.ngrad` doesn't reflect inner cross-search gradient calls —
-    # that's by design (mirrors `m.fcn.nfcn` not reflecting inner numerical
-    # gradient calls; the user-facing CF counter tracks USER-FACING calls).
+    # numerical `_fix_one_param(::CostFunction, ...)` overload above.
     # `inner_min.nfcn` and `ContoursError.nfcn` carry the inner delta if
     # callers need to introspect.
     i_ = Int(i)
     n_ = Int(n)
-    full_buf = Vector{Float64}(undef, n_)
-    out_buf  = Vector{Float64}(undef, n_ - 1)
-    f_wrapped = let full_buf = full_buf, i_ = i_, n_ = n_, v = v, f = f
+    # Per-thread `full_buf` AND per-thread `out_buf` (the n-1 gradient
+    # splice scratch). Same Phase G rationale as the numerical-gradient
+    # overload above — single-threaded Julia gets 1 buffer each (zero
+    # overhead vs Phase F); multi-threaded gets one per `threadid()`.
+    nbuf = max(1, Threads.maxthreadid())
+    full_bufs = [Vector{Float64}(undef, n_) for _ in 1:nbuf]
+    out_bufs  = [Vector{Float64}(undef, n_ - 1) for _ in 1:nbuf]
+    f_wrapped = let full_bufs = full_bufs, i_ = i_, n_ = n_, v = v, f = f
         function (y::AbstractVector{<:Real})
+            # `` deliberately omitted on the tid index — bounds-check cost (~1 ns) is negligible vs the FCN call (≥100 ns), and the check protects against silent memory corruption if Julia's threadpool model ever expands at runtime. The body of f(full_buf) is still `` where it matters.
+            full_buf = full_bufs[Threads.threadid()]
             @inbounds for k in 1:(i_ - 1)
                 full_buf[k] = y[k]
             end
@@ -522,9 +533,12 @@ function _fix_one_param(cf::CostFunctionWithGradient, i::Integer, v::Float64, n:
             return f(full_buf)
         end
     end
-    g_wrapped = let full_buf = full_buf, out_buf = out_buf,
+    g_wrapped = let full_bufs = full_bufs, out_bufs = out_bufs,
                      i_ = i_, n_ = n_, v = v, g = g
         function (y::AbstractVector{<:Real})
+            tid = Threads.threadid()
+            full_buf = full_bufs[tid]
+            out_buf  = out_bufs[tid]
             @inbounds for k in 1:(i_ - 1)
                 full_buf[k] = y[k]
             end
@@ -583,10 +597,14 @@ function _fix_multi_params(
         fixed_value[kk] = Float64(v[idx])
     end
     n_free = n_ - count(is_fixed)
-    full_buf = Vector{Float64}(undef, n_)
-    out_buf  = Vector{Float64}(undef, n_free)
-    f_wrapped = let full_buf = full_buf, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
+    # Per-thread buffer pools — Phase G threading support.
+    nbuf = max(1, Threads.maxthreadid())
+    full_bufs = [Vector{Float64}(undef, n_) for _ in 1:nbuf]
+    out_bufs  = [Vector{Float64}(undef, n_free) for _ in 1:nbuf]
+    f_wrapped = let full_bufs = full_bufs, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
         function (y::AbstractVector{<:Real})
+            # `` deliberately omitted on the tid index — bounds-check cost (~1 ns) is negligible vs the FCN call (≥100 ns), and the check protects against silent memory corruption if Julia's threadpool model ever expands at runtime. The body of f(full_buf) is still `` where it matters.
+            full_buf = full_bufs[Threads.threadid()]
             j = 1
             @inbounds for k in 1:n_
                 if is_fixed[k]
@@ -599,10 +617,13 @@ function _fix_multi_params(
             return f(full_buf)
         end
     end
-    g_wrapped = let full_buf = full_buf, out_buf = out_buf,
+    g_wrapped = let full_bufs = full_bufs, out_bufs = out_bufs,
                      is_fixed = is_fixed, fixed_value = fixed_value,
                      n_ = n_, g = g
         function (y::AbstractVector{<:Real})
+            tid = Threads.threadid()
+            full_buf = full_bufs[tid]
+            out_buf  = out_bufs[tid]
             j = 1
             @inbounds for k in 1:n_
                 if is_fixed[k]
@@ -645,12 +666,15 @@ function _fix_multi_params(
         is_fixed[kk] = true
         fixed_value[kk] = Float64(v[idx])
     end
-    # Pre-allocate `full_buf` once and capture it; closure body keeps the
-    # exact V1 branch loop and only avoids the per-call alloc. Rationale
-    # + thread-safety contract identical to `_fix_one_param` above.
-    full_buf = Vector{Float64}(undef, n_)
-    wrapped = let full_buf = full_buf, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
+    # Per-thread splice-buffer pool — same rationale as `_fix_one_param`
+    # above. Single-threaded: 1 buffer, zero overhead. Multi-threaded:
+    # safe under inner-gradient parallel calls.
+    nbuf = max(1, Threads.maxthreadid())
+    full_bufs = [Vector{Float64}(undef, n_) for _ in 1:nbuf]
+    wrapped = let full_bufs = full_bufs, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
         function (y::AbstractVector{<:Real})
+            # `` deliberately omitted on the tid index — bounds-check cost (~1 ns) is negligible vs the FCN call (≥100 ns), and the check protects against silent memory corruption if Julia's threadpool model ever expands at runtime. The body of f(full_buf) is still `` where it matters.
+            full_buf = full_bufs[Threads.threadid()]
             j = 1
             @inbounds for k in 1:n_
                 if is_fixed[k]
@@ -677,6 +701,7 @@ function _migrad_with_multi_fixed(
     strategy::Strategy = Strategy(0),
     warm_state::Union{Nothing,MinimumState} = nothing,
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     n = length(state.parameters)
     is_fixed = falses(n)
@@ -734,7 +759,8 @@ function _migrad_with_multi_fixed(
             inner_min = migrad(cf_fixed, seed_warm;
                                 tol = tol, maxfcn = Int(maxcalls),
                                 strategy = inner_strategy, prec = prec,
-                                scratch = scratch)
+                                scratch = scratch,
+                                threaded_gradient = threaded_gradient)
             return inner_min, ncalls(cf_fixed)
         end
     end
@@ -757,7 +783,8 @@ function _migrad_with_multi_fixed(
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec,
-                        scratch = scratch)
+                        scratch = scratch,
+                        threaded_gradient = threaded_gradient)
     return inner_min, ncalls(cf_fixed)
 end
 
@@ -772,6 +799,7 @@ function function_cross_multi(
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     state = fmin.state
     n = length(state.parameters)
@@ -827,7 +855,8 @@ function function_cross_multi(
                 tol = 0.5 * tlr, maxcalls = budget,
                 prec = prec, strategy = strategy,
                 warm_state = warm_state_ref[],
-                scratch = scratch_holder[])
+                scratch = scratch_holder[],
+                threaded_gradient = threaded_gradient)
             # On successful inner-MIGRAD, update the warm state for the
             # next probe. On failure keep the previous valid warm state
             # (or `nothing` for the cold first probe).
@@ -853,6 +882,7 @@ function _migrad_with_fixed(
     strategy::Strategy = Strategy(0),
     warm_state::Union{Nothing,MinimumState} = nothing,
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     n = length(state.parameters)
     cf_fixed = _fix_one_param(cf, i, v, n)
@@ -873,7 +903,8 @@ function _migrad_with_fixed(
             inner_min = migrad(cf_fixed, seed_warm;
                                 tol = tol, maxfcn = Int(maxcalls),
                                 strategy = inner_strategy, prec = prec,
-                                scratch = scratch)
+                                scratch = scratch,
+                                threaded_gradient = threaded_gradient)
             return inner_min, ncalls(cf_fixed)
         end
     end
@@ -904,7 +935,8 @@ function _migrad_with_fixed(
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec,
-                        scratch = scratch)
+                        scratch = scratch,
+                        threaded_gradient = threaded_gradient)
     return inner_min, ncalls(cf_fixed)
 end
 
@@ -959,6 +991,7 @@ function function_cross(
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     state = fmin.state
     n = length(state.parameters)
@@ -994,7 +1027,8 @@ function function_cross(
                                 tol = 0.5 * tlr, maxcalls = budget,
                                 prec = prec, strategy = strategy,
                                 warm_state = warm_state_ref[],
-                                scratch = scratch_holder[])
+                                scratch = scratch_holder[],
+                                threaded_gradient = threaded_gradient)
             if inner_min.is_valid
                 warm_state_ref[] = inner_min.state
             end
@@ -1057,6 +1091,7 @@ function function_cross_external(
     maxcalls::Integer = 1000,
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
+    threaded_gradient::Bool = false,
 )
     params = bfm.params
     n_total = n_pars(params)
@@ -1181,7 +1216,8 @@ function function_cross_external(
             inner_params = Parameters(inner_pars, prec)
             inner_bfm = migrad(cf, inner_params;
                                 tol = 0.5 * tlr, maxfcn = Int(budget),
-                                strategy = inner_strategy, prec = prec)
+                                strategy = inner_strategy, prec = prec,
+                                threaded_gradient = threaded_gradient)
             # nfcn correctly = the inner bounded migrad's call count
             # (NOT ncalls(cf), which is the OUTER cf and never gets
             # incremented because bounded migrad wraps cf into

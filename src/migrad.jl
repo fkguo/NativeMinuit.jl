@@ -210,13 +210,15 @@ function migrad(
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
 
     seed = seed_state(cf, x0, errs, strategy, prec)
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
-                          scratch = scratch)
+                          scratch = scratch,
+                          threaded_gradient = threaded_gradient)
 end
 
 """
@@ -247,11 +249,13 @@ function migrad(
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     n = length(seed)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
-                          scratch = scratch)
+                          scratch = scratch,
+                          threaded_gradient = threaded_gradient)
 end
 
 """
@@ -298,6 +302,7 @@ function _migrad_loop(
     maxfcn::Integer,
     prec::MachinePrecision;
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     n = length(seed)
 
@@ -472,7 +477,8 @@ function _migrad_loop(
             # disjoint buffer sets, so the copyto! is well-defined.
             new_grad = FunctionGradient(ng_buf, ng2_buf, ngs_buf)
             numerical_gradient!(new_grad, grad_work, new_par, s0.gradient,
-                                 cf, strategy, prec)
+                                 cf, strategy, prec;
+                                 threaded = threaded_gradient)
 
             # ── Step 6: EDM using OLD error matrix (C++ line 300).
             # `estimate_edm!` reuses vg_work; the allocating `estimate_edm`

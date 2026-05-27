@@ -87,6 +87,13 @@ mutable struct Minuit
     strategy::Strategy
     tol::Float64
     print_level::Int
+    # Phase G: when `true`, the inner `numerical_gradient!` parallelizes
+    # its `for i in 1:n` per-parameter loop via `Threads.@threads`. Requires
+    # Julia started with `julia -t N`. The user FCN must be thread-safe
+    # (no hidden RNG / cache / file I/O state); cf_fixed splice buffers
+    # are already per-thread via Phase G.1. Default `false` (single-threaded
+    # behavior identical to pre-Phase G).
+    threaded_gradient::Bool
 end
 
 function Minuit(
@@ -115,6 +122,11 @@ function Minuit(
     strategy::Union{Strategy,Integer} = Strategy(0),
     tol::Real = 0.1,
     print_level::Integer = 0,
+    # Phase G: parallel inner numerical-gradient. Requires `julia -t N`.
+    # Default `false` keeps the (single-threaded) reference behavior;
+    # opt-in when (a) FCN > 500 ns/call, (b) n ≥ 4, (c) FCN is thread-
+    # safe (no hidden mutable state).
+    threaded_gradient::Bool = false,
     # Catch-all for per-parameter `error_<name>`, `fix_<name>`, `limit_<name>`
     # kwargs in the IMinuit.jl style.
     kwargs...,
@@ -201,7 +213,8 @@ function Minuit(
         CostFunctionWithGradient(fcn, grad, up_resolved, cf.nfcn, Ref(0))
     strat = strategy isa Strategy ? strategy : Strategy(Int(strategy))
     return Minuit(cf, params, nothing, Dict{Int,MinosError}(), prec,
-                  cfwg, strat, Float64(tol), Int(print_level))
+                  cfwg, strat, Float64(tol), Int(print_level),
+                  Bool(threaded_gradient))
 end
 
 # IMinuit.jl-style: named-parameter constructor where each parameter
@@ -225,6 +238,7 @@ function Minuit(fcn;
                 strategy::Union{Strategy,Integer} = Strategy(0),
                 tol::Real = 0.1,
                 print_level::Integer = 0,
+                threaded_gradient::Bool = false,
                 kwargs...)
     # Separate `error_*`, `fix_*`, `limit_*`, and meta from the
     # parameter-name kwargs.
@@ -260,6 +274,7 @@ function Minuit(fcn;
                   errordef = errordef, prec = prec,
                   grad = grad, strategy = strategy, tol = tol,
                   print_level = print_level,
+                  threaded_gradient = threaded_gradient,
                   other_kws...)
 end
 
@@ -284,7 +299,8 @@ function Minuit(fcn, m::Minuit; kwargs...)
     return Minuit(fcn, x0; name = nm, error = er, fixed = fx, limits = lim,
                             up = m.fcn.up, prec = m.prec,
                             strategy = m.strategy, tol = m.tol,
-                            print_level = m.print_level, kwargs...)
+                            print_level = m.print_level,
+                            threaded_gradient = m.threaded_gradient, kwargs...)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -310,7 +326,8 @@ for the duration of the inner MIGRAD call.
 function migrad!(m::Minuit;
                   strategy::Strategy = m.strategy,
                   tol::Real = m.tol,
-                  maxfcn::Union{Integer,Nothing} = nothing)
+                  maxfcn::Union{Integer,Nothing} = nothing,
+                  threaded_gradient::Bool = m.threaded_gradient)
     # iminuit-style implicit resume: if we already converged once,
     # build a temporary Parameters carrying those values forward. The
     # user's m.params stays untouched so that `reset(m)` + migrad
@@ -319,11 +336,13 @@ function migrad!(m::Minuit;
     if m.cfwg !== nothing
         m.fmin = migrad(m.cfwg, params_to_use;
                          strategy = strategy, tol = tol, maxfcn = maxfcn,
-                         prec = m.prec)
+                         prec = m.prec,
+                         threaded_gradient = threaded_gradient)
     else
         m.fmin = migrad(m.fcn, params_to_use;
                          strategy = strategy, tol = tol, maxfcn = maxfcn,
-                         prec = m.prec)
+                         prec = m.prec,
+                         threaded_gradient = threaded_gradient)
     end
     return m
 end
@@ -359,7 +378,9 @@ Run MINOS for parameter `par` (integer index or String name). Updates
 `m.minos_errors`. Requires `m.fmin` to be available (call `migrad!`
 first). Returns `m`.
 """
-function minos!(m::Minuit, par::Integer; kwargs...)
+function minos!(m::Minuit, par::Integer;
+                threaded_gradient::Bool = m.threaded_gradient,
+                kwargs...)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad!(m)` before `minos!(m)`"))
     # MINOS derives sigma_i = sqrt(2·up·V[i,i]) from the inverse
@@ -394,7 +415,8 @@ function minos!(m::Minuit, par::Integer; kwargs...)
         # dropping the AD gradient for bounded MINOS.)
         ext_cf = m.cfwg === nothing ? m.fcn : m.cfwg
         m.minos_errors[Int(par)] = _minos_external_via_function_cross(
-            m.fmin, ext_cf, Int(par); kwargs...)
+            m.fmin, ext_cf, Int(par);
+            threaded_gradient = threaded_gradient, kwargs...)
     else
         # Unbounded — search in the user FCN's frame directly.
         # m.fmin.internal_cf == m.fcn here; m.params.int_of_ext[par]
@@ -402,7 +424,8 @@ function minos!(m::Minuit, par::Integer; kwargs...)
         # that mixed (some bounded, some not) configurations route
         # consistently.
         err = minos(m.fmin.internal, m.fmin.internal_cf,
-                    m.params.int_of_ext[par]; kwargs...)
+                    m.params.int_of_ext[par];
+                    threaded_gradient = threaded_gradient, kwargs...)
         m.minos_errors[Int(par)] = err
     end
     return m
@@ -420,6 +443,7 @@ function _minos_external_via_function_cross(
     maxcalls::Integer = 1000,
     strategy::Strategy = Strategy(1),
     prec::MachinePrecision = MachinePrecision(),
+    threaded_gradient::Bool = false,
 )
     par = bfm.params.pars[par_idx]
     ext_min = bfm.ext_values[par_idx]
@@ -445,10 +469,12 @@ function _minos_external_via_function_cross(
 
     cr_up = function_cross_external(bfm, cf, par_idx, +1.0;
                                      tlr = tlr, maxcalls = maxcalls,
-                                     strategy = strategy, prec = prec)
+                                     strategy = strategy, prec = prec,
+                                     threaded_gradient = threaded_gradient)
     cr_lo = function_cross_external(bfm, cf, par_idx, -1.0;
                                      tlr = tlr, maxcalls = maxcalls,
-                                     strategy = strategy, prec = prec)
+                                     strategy = strategy, prec = prec,
+                                     threaded_gradient = threaded_gradient)
 
     # External errors = aopt · (truncated ext step). Three cases per
     # side:
@@ -521,6 +547,7 @@ The `bins=...` kwarg is an IMinuit.jl-compatible alias for `npoints`
 function contour(m::Minuit, par_x::Integer, par_y::Integer;
                   npoints::Integer = 20,
                   bins::Union{Integer,Nothing} = nothing,
+                  threaded_gradient::Bool = m.threaded_gradient,
                   kwargs...)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad!(m)` before `contour(m, ...)`"))
@@ -530,7 +557,8 @@ function contour(m::Minuit, par_x::Integer, par_y::Integer;
     # Use the internal-coord-wrapped CostFunction (parallel-review #4
     # A7/B4 — see minos! for the rationale).
     return contour(m.fmin.internal, m.fmin.internal_cf, ix, iy;
-                    npoints = npts, kwargs...)
+                    npoints = npts,
+                    threaded_gradient = threaded_gradient, kwargs...)
 end
 
 function contour(m::Minuit, px::AbstractString, py::AbstractString;

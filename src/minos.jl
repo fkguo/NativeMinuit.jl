@@ -125,6 +125,7 @@ function minos(
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     state = fmin.state
     n = length(state.parameters)
@@ -144,7 +145,8 @@ function minos(
     up_cross = function_cross(fmin, cf, par_idx, +1.0;
                                 tlr = tlr, maxcalls = maxcalls,
                                 strategy = strategy, prec = prec,
-                                scratch = scratch)
+                                scratch = scratch,
+                                threaded_gradient = threaded_gradient)
     # 1-sigma external step (same as inside function_cross)
     sigma_i = sqrt(max(2.0 * cf.up * state.error.inv_hessian[par_idx, par_idx],
                         prec.eps2))
@@ -163,7 +165,8 @@ function minos(
                                 tlr = tlr,
                                 maxcalls = maxcalls,
                                 strategy = strategy, prec = prec,
-                                scratch = scratch)
+                                scratch = scratch,
+                                threaded_gradient = threaded_gradient)
     lower = lo_cross.valid ? -lo_cross.aopt * sigma_i : 0.0
     nfcn_total += lo_cross.nfcn
 

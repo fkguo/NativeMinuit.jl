@@ -225,6 +225,17 @@ function numerical_gradient!(
         # foreign-task scenarios).
         n_buffers = max(Threads.maxthreadid(), Threads.nthreads())
         x_work_perthread = [copy(x_work) for _ in 1:n_buffers]
+        # Phase G — `:static` scheduling. Codex review: under non-`:static`
+        # schedules Julia DOES NOT guarantee `Threads.threadid()` stays
+        # constant within a single iteration body (task may migrate
+        # between yields), which would break the per-thread buffer
+        # indexing in cf_fixed's `full_bufs[threadid()]`. `:static` IS
+        # guaranteed to keep threadid stable within an iter under the
+        # implicit no-yield contract our numeric FCN bodies satisfy.
+        # Trade-off: M3 P/E-core asymmetry means `:static`'s round-robin
+        # lets fast cores wait on slow cores → measured ~1.25× speedup
+        # (vs `:dynamic` ~1.39× but UNSAFE under thread-migration). The
+        # 0.14× gap is acceptable cost for correctness.
         Threads.@threads :static for i in 1:n
             tid = Threads.threadid()
             xw = x_work_perthread[tid]

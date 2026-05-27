@@ -110,6 +110,7 @@ function contour_exact(
     tlr::Real = 0.1,
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
+    threaded_gradient::Bool = false,
 )
     state = fmin.state
     n = length(state.parameters)
@@ -133,9 +134,9 @@ function contour_exact(
 
     # Step 1: MINOS on both axes
     mex = minos(fmin, cf, par_x; tlr=tlr, strategy=strategy, prec=prec,
-                  scratch=scratch_nm1)
+                  scratch=scratch_nm1, threaded_gradient=threaded_gradient)
     mey = minos(fmin, cf, par_y; tlr=tlr, strategy=strategy, prec=prec,
-                  scratch=scratch_nm1)
+                  scratch=scratch_nm1, threaded_gradient=threaded_gradient)
     nfcn = mex.nfcn + mey.nfcn
     (is_valid(mex) && is_valid(mey)) ||
         return ContoursError(Int(par_x), Int(par_y),
@@ -149,7 +150,8 @@ function contour_exact(
             cf, state, [par_fix], [v_fix];
             tol = 0.5 * tlr, maxcalls = 1000,
             prec = prec, strategy = strategy,
-            scratch = scratch_nm1)
+            scratch = scratch_nm1,
+            threaded_gradient = threaded_gradient)
         if !m_axis.is_valid
             return nothing, nf_axis
         end
@@ -220,7 +222,8 @@ function contour_exact(
             fmin, cf, par_idxs, [xmid, ymid], [xdircr, ydircr];
             tlr = tlr, maxcalls = max(maxcalls - nfcn, 100),
             strategy = strategy, prec = prec,
-            scratch = scratch_nm2)
+            scratch = scratch_nm2,
+            threaded_gradient = threaded_gradient)
         nfcn += cross.nfcn
 
         if !cross.valid || nfcn > maxcalls
@@ -244,6 +247,7 @@ function contour(
     par_x::Integer,
     par_y::Integer;
     npoints::Integer = 20,
+    threaded_gradient::Bool = false,
     kwargs...,
 )
     state = fmin.state
@@ -261,8 +265,8 @@ function contour(
     valy = state.parameters.x[par_y]
 
     # MINOS on both axes
-    mex = minos(fmin, cf, par_x; kwargs...)
-    mey = minos(fmin, cf, par_y; kwargs...)
+    mex = minos(fmin, cf, par_x; threaded_gradient = threaded_gradient, kwargs...)
+    mey = minos(fmin, cf, par_y; threaded_gradient = threaded_gradient, kwargs...)
     nfcn = mex.nfcn + mey.nfcn
 
     if !is_valid(mex) || !is_valid(mey)

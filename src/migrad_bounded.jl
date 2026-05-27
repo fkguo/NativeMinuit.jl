@@ -305,6 +305,7 @@ function migrad(
     tol::Real = 0.1,
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
+    threaded_gradient::Bool = false,
 )
     n_total = n_pars(params)
     n_active = n_free(params)
@@ -322,7 +323,8 @@ function migrad(
     # Run internal MIGRAD
     fmin_int = migrad(cf_internal, int_vals, int_errs;
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
-                       prec = prec)
+                       prec = prec,
+                       threaded_gradient = threaded_gradient)
 
     # ── Convert internal results back to external ────────────────
     ext_values, ext_errors_vec, ext_cov_mat =
@@ -359,6 +361,7 @@ function migrad(
     tol::Real = 0.1,
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
+    threaded_gradient::Bool = false,
 )
     n_total = n_pars(params)
     n_active = n_free(params)
@@ -370,10 +373,12 @@ function migrad(
 
     cf_internal_grad = _wrap_fcn_internal_to_external(cf, params)
 
-    # Internal MIGRAD dispatches to the CFwG path → uses analytical gradient
+    # Internal MIGRAD dispatches to the CFwG path → uses analytical gradient.
+    # threaded_gradient is no-op for AD path but accepted for API symmetry.
     fmin_int = migrad(cf_internal_grad, int_vals, int_errs;
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
-                       prec = prec)
+                       prec = prec,
+                       threaded_gradient = threaded_gradient)
 
     ext_values, ext_errors_vec, ext_cov_mat =
         _internal_to_external_results(fmin_int, params, cf.up)

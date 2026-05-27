@@ -213,11 +213,15 @@ function numerical_gradient!(
     prev::FunctionGradient,
     cf::CostFunctionWithGradient,
     strategy::Strategy,
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    threaded::Bool = false,
 )
-    # x_work argument unused for AD path (kept for signature symmetry
+    # `x_work` argument unused for AD path (kept for signature symmetry
     # with the central-diff overload so the MIGRAD loop dispatches
-    # cleanly).
+    # cleanly). `threaded` kwarg accepted for Phase G symmetry but
+    # IGNORED — `analytical_gradient!` makes a single `cf.g(par.x)`
+    # call (the AD library handles its own parallelism if any), so
+    # there's no per-parameter loop here to thread.
     return analytical_gradient!(out, par, cf, prev, prec)
 end
 
@@ -255,13 +259,19 @@ function migrad(
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
 
     seed = seed_state(cf, x0, errs, strategy, prec)
+    # Note: `threaded_gradient` is a no-op for the AD path (the gradient
+    # is one call into `cf.g`, not a per-parameter loop). Accepted here
+    # for API symmetry with the numerical path; downstream
+    # `numerical_gradient!(::CFwG, ...)` accepts but ignores it.
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
-                          scratch = scratch)
+                          scratch = scratch,
+                          threaded_gradient = threaded_gradient)
 end
 
 """
@@ -283,9 +293,11 @@ function migrad(
     maxfcn::Union{Integer,Nothing} = nothing,
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
+    threaded_gradient::Bool = false,
 )
     n = length(seed)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
-                          scratch = scratch)
+                          scratch = scratch,
+                          threaded_gradient = threaded_gradient)
 end

@@ -254,6 +254,57 @@
         @test cf_multi.g(y3) ≈ [0.8, 3.2, 6.0]
     end
 
+    @testset "Phase G — _fix_*_params per-thread full_buf sanity" begin
+        # Verify the per-thread buffer pool doesn't break single-threaded
+        # use. Allocations should be ~maxthreadid()×n bytes upfront but
+        # zero per-call (just like Phase A V3).
+        cf = CostFunction(x -> sum(abs2, x), 1.0)
+        cf_one = JuMinuit._fix_one_param(cf, 3, 0.5, 5)
+        y4 = [0.1, 0.2, 0.3, 0.4]
+        cf_one(y4)  # warmup
+        # Same numerical result as Phase A V3
+        @test cf_one(y4) ≈ 0.1^2 + 0.2^2 + 0.5^2 + 0.3^2 + 0.4^2
+        # Zero per-call alloc still holds (Phase G keeps Phase A invariant)
+        @test (@allocated cf_one(y4)) == 0
+
+        cf_multi = JuMinuit._fix_multi_params(cf, [1, 3], [0.5, 0.5], 5)
+        y3 = [0.1, 0.2, 0.3]
+        cf_multi(y3)
+        @test cf_multi(y3) ≈ 0.5^2 + 0.1^2 + 0.5^2 + 0.2^2 + 0.3^2
+        @test (@allocated cf_multi(y3)) == 0
+    end
+
+    @testset "Phase G — threaded_gradient kwarg backward-compat" begin
+        # When threaded_gradient=false (default), result must be
+        # byte-identical to Phase F.
+        f = x -> (x[1]-1)^2 + 10*(x[2]-2)^2 + (x[3]-3)^2
+        cf = CostFunction(f, 1.0)
+        fmin_default = JuMinuit.migrad(cf, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1])
+
+        cf2 = CostFunction(f, 1.0)
+        fmin_explicit_false = JuMinuit.migrad(cf2, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1];
+                                                threaded_gradient = false)
+
+        @test fmin_default.state.parameters.x ≈ fmin_explicit_false.state.parameters.x
+        @test fmin_default.state.parameters.fval ≈ fmin_explicit_false.state.parameters.fval
+
+        # threaded_gradient=true threads the per-coord gradient evaluation.
+        # On single-threaded Julia (nthreads=1) it falls back to sequential,
+        # producing identical result. Numerical result equivalence is the
+        # blocking test; speedup is bench-only.
+        cf3 = CostFunction(f, 1.0)
+        fmin_threaded = JuMinuit.migrad(cf3, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1];
+                                          threaded_gradient = true)
+        @test fmin_threaded.state.parameters.x ≈ fmin_default.state.parameters.x atol = 1e-10
+        @test fmin_threaded.state.parameters.fval ≈ fmin_default.state.parameters.fval atol = 1e-10
+
+        # High-level Minuit API
+        m = Minuit(f, [0.0, 0.0, 0.0]; error = [0.1, 0.1, 0.1], threaded_gradient = true)
+        migrad!(m)
+        @test m.fmin.internal.is_valid
+        @test m.fmin.ext_values ≈ fmin_default.state.parameters.x atol = 1e-4
+    end
+
     @testset "Phase D — _get_scratch! lazy/replace semantics" begin
         # Verify the holder pattern: nothing → allocate; right size → reuse;
         # wrong size → reallocate (caller's external ref is intact).
