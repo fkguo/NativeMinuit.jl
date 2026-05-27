@@ -40,4 +40,5 @@ using Test
     include("test_iminuit_compat_data.jl")
     include("test_simplex_scan.jl")
     include("test_eigen_corr.jl")
+    include("test_phase1_cleanup.jl")
 end
