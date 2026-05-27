@@ -83,6 +83,82 @@ errordef(cf::CostFunctionWithGradient) = cf.up
 ngrad_calls(cf::CostFunctionWithGradient) = cf.ngrad[]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CostFunctionAD — convenience factory backed by Package Extensions.
+#
+# Defined here as a stub `function CostFunctionAD end`. Actual methods
+# are added at load time by `ext/JuMinuitForwardDiffExt.jl` when the
+# user has `using ForwardDiff` loaded alongside `using JuMinuit`.
+#
+# Usage:
+#     using JuMinuit, ForwardDiff   # extension auto-activates
+#     cf = CostFunctionAD(my_chi2, 1.0)
+#     # equivalent to:
+#     cf = CostFunctionWithGradient(my_chi2,
+#                                    x -> ForwardDiff.gradient(my_chi2, x),
+#                                    1.0)
+#
+# Calling `CostFunctionAD(f)` WITHOUT `using ForwardDiff` raises an
+# informative error pointing the user to the package extension. We don't
+# want ForwardDiff as a hard dependency (it's a 30+ MB transitive load)
+# — Julia 1.9+ weakdeps + extensions is the standard idiom.
+#
+# Beyond C++ Minuit2: this is the user-facing entry point for the AD
+# gradient path that's impossible in C++ Minuit2 (where MnFcn's
+# `vector<double>` signature blocks AD type promotion). See README
+# "Beyond C++ Minuit2" section for the design rationale.
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    CostFunctionAD(f, up=1.0; chunk_size=nothing) -> CostFunctionWithGradient
+
+Wrap a user FCN `f(x::AbstractVector{<:Real})::Real` into a
+[`CostFunctionWithGradient`](@ref) whose gradient is computed via
+`ForwardDiff.gradient(f, x)`.
+
+**Requires `using ForwardDiff`** alongside `using JuMinuit` (Julia 1.9+
+package extension). Without ForwardDiff loaded, calling this throws an
+informative error.
+
+# Arguments
+
+- `f` — user FCN. Must be generic over element type (i.e. avoid
+  `function f(x::Vector{Float64}) ...`; write `function f(x) ...`) so
+  ForwardDiff can promote inputs to `ForwardDiff.Dual`.
+- `up::Real=1.0` — error definition (1 for χ², 0.5 for NLL).
+- `chunk_size::Union{Int,Nothing}=nothing` — ForwardDiff chunk size.
+  `nothing` lets ForwardDiff pick automatically. For n > 12 a smaller
+  chunk (e.g., 4-6) can reduce memory pressure.
+
+# When to use
+
+- FCN ≥ ~500 ns/call AND n ≤ ~30: AD typically wins over numerical
+- HEP amplitude fits with complex intermediates: ForwardDiff works
+  through `Complex{Dual}`; no special user code needed
+- AD-incompatible FCN (mutates Float64 buffers, hard-codes types,
+  calls C libraries): use plain `CostFunction` instead
+
+# Examples
+
+```julia
+using JuMinuit, ForwardDiff
+chi2(par) = sum((data .- model.(x_data, Ref(par))).^2 ./ errors.^2)
+cf = CostFunctionAD(chi2, 1.0)
+fmin = migrad(cf, x0, errs)
+```
+
+# Beyond C++ Minuit2
+
+C++ Minuit2's `MnFcn::operator()(const vector<double>&)` is a virtual
+function — virtual functions cannot be C++ templates, so the input
+type is locked to `double`. Generic AD (ForwardDiff Dual, Enzyme, etc.)
+cannot promote through this signature. **Julia has no such barrier**:
+user FCNs are generic on element type by default, so swapping
+`Vector{Float64}` for `Vector{Dual{...}}` requires no user code change.
+This factory is the visible end of that capability.
+"""
+function CostFunctionAD end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Analytical-gradient evaluation
 # ─────────────────────────────────────────────────────────────────────────────
 

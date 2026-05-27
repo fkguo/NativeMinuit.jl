@@ -97,6 +97,7 @@ export Minuit, migrad!, minos!
 # correlation/covariance matrix with the same signature).
 export args, matrix, set_precision
 export CostFunctionWithGradient, analytical_gradient, analytical_gradient!
+export CostFunctionAD
 
 # IMinuit.jl drop-in helpers (iminuit_compat.jl)
 export Data, chisq, model_fit, @model_fit

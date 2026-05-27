@@ -86,4 +86,54 @@ using ForwardDiff
         @test out.g2 == prev.g2
         @test out.gstep == prev.gstep
     end
+
+    @testset "Phase F.2 — CostFunctionAD factory (ForwardDiff extension)" begin
+        # ForwardDiff is in [extras] / test target, so loading it here
+        # triggers the JuMinuitForwardDiffExt package extension. The
+        # extension defines a concrete `CostFunctionAD(f, up; ...)`
+        # method; without ForwardDiff loaded the call would
+        # MethodError-pointing-at-stub.
+        ext = Base.get_extension(JuMinuit, :JuMinuitForwardDiffExt)
+        @test ext !== nothing
+
+        # Basic factory usage
+        f = x -> (x[1] - 1)^2 + 4 * (x[2] - 2)^2
+        cf = CostFunctionAD(f, 1.0)
+        @test cf isa CostFunctionWithGradient
+        # Gradient matches manual: ∇f = [2(x[1]-1), 8(x[2]-2)]
+        @test cf.g([0.0, 0.0]) ≈ [-2.0, -16.0] atol = 1e-12
+        @test cf.g([1.0, 2.0]) ≈ [0.0, 0.0] atol = 1e-12
+
+        # End-to-end migrad
+        fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
+        @test fmin.is_valid
+        @test fmin.state.parameters.x ≈ [1.0, 2.0] atol = 1e-6
+
+        # chunk_size kwarg path
+        cf_chunked = CostFunctionAD(f, 1.0; chunk_size = 2)
+        @test cf_chunked.g([0.5, 0.5]) ≈ cf.g([0.5, 0.5])
+
+        # Complex-intermediate FCN (X3872-style): real params,
+        # complex amplitude, abs² at the end. ForwardDiff handles via
+        # `Complex{Dual}`. This is the "Beyond C++ Minuit2" capability.
+        function chi2_complex(par)
+            mass, coupling = par
+            s = 3.5
+            amp = coupling / (s - mass^2 - im * mass * 0.1)
+            return abs2(amp)
+        end
+        cf_c = CostFunctionAD(chi2_complex)
+        # Numerical reference (central diff)
+        h = 1e-7
+        x0 = [1.5, 2.0]
+        g_num = [
+            (chi2_complex([x0[1]+h, x0[2]]) - chi2_complex([x0[1]-h, x0[2]]))/(2h),
+            (chi2_complex([x0[1], x0[2]+h]) - chi2_complex([x0[1], x0[2]-h]))/(2h),
+        ]
+        @test cf_c.g(x0) ≈ g_num atol = 1e-5
+
+        # Default up=1.0 path
+        cf_default = CostFunctionAD(f)
+        @test cf_default.up == 1.0
+    end
 end
