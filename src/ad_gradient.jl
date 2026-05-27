@@ -356,6 +356,7 @@ function migrad(
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
+    storage_level::Integer = 0,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
@@ -373,7 +374,8 @@ function migrad(
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
-                          verify_threading = verify_threading)
+                          verify_threading = verify_threading,
+                          storage_level = storage_level)
 end
 
 """
@@ -397,11 +399,13 @@ function migrad(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
+    storage_level::Integer = 0,
 )
     n = length(seed)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
-                          verify_threading = verify_threading)
+                          verify_threading = verify_threading,
+                          storage_level = storage_level)
 end

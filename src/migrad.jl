@@ -383,6 +383,7 @@ function migrad(
     threaded_gradient::Bool = false,
     verify_threading::Bool = threaded_gradient,
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
+    storage_level::Integer = 0,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
@@ -394,7 +395,8 @@ function migrad(
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
-                          verify_threading = verify_threading)
+                          verify_threading = verify_threading,
+                          storage_level = storage_level)
 end
 
 """
@@ -427,6 +429,7 @@ function migrad(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
+    storage_level::Integer = 0,
 )
     n = length(seed)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
@@ -437,7 +440,8 @@ function migrad(
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
-                          verify_threading = verify_threading)
+                          verify_threading = verify_threading,
+                          storage_level = storage_level)
 end
 
 """
@@ -486,8 +490,13 @@ function _migrad_loop(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
+    storage_level::Integer = 0,
 )
     n = length(seed)
+    # M6: per-iteration history. Empty when `storage_level == 0`
+    # (default) — the snapshot pass below is skipped entirely so
+    # there's no allocation overhead in the zero-alloc gate path.
+    history = MinimumState[]
 
     # Phase H — thread-safety verification. When `threaded_gradient=true`
     # AND `verify_threading=true`, run one sequential + one threaded
@@ -526,17 +535,24 @@ function _migrad_loop(
             seed, seed, cf.up;
             is_valid = false,
             reached_call_limit = true,
+            states = history, storage_level = Int(storage_level),
         )
     end
 
     if n == 0
-        return FunctionMinimum(seed, seed, cf.up; is_valid = false)
+        return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+                                states = history,
+                                storage_level = Int(storage_level))
     end
     if !is_valid(seed)
-        return FunctionMinimum(seed, seed, cf.up; is_valid = false)
+        return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+                                states = history,
+                                storage_level = Int(storage_level))
     end
     if seed.edm < 0
-        return FunctionMinimum(seed, seed, cf.up; is_valid = false)
+        return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+                                states = history,
+                                storage_level = Int(storage_level))
     end
 
     s0 = seed
@@ -740,6 +756,15 @@ function _migrad_loop(
             s0 = MinimumState(new_par, new_err, new_grad, new_edm, ncalls(cf))
             edm_corrected = new_edm * (1.0 + 3.0 * new_err.dcovar)
 
+            # M6: snapshot per-iteration state when storage_level >= 1.
+            # Deep-copies all internal storage because the ping-pong
+            # buffers will be overwritten next iter, mutating any
+            # shallow snapshot we'd push here. The copy is paid only
+            # by callers who explicitly opted in via storage_level=1.
+            if storage_level >= 1
+                push!(history, _snapshot_state(s0))
+            end
+
             use_a = !use_a   # flip so next iter writes to the OTHER set
         end
 
@@ -767,6 +792,13 @@ function _migrad_loop(
             end
             s0 = s_hesse
             new_edm_h = s0.edm
+
+            # M6: snapshot the post-Hesse refined state too — it's a
+            # genuine algorithmic step (not just a DFP iter) that the
+            # caller doing convergence-plot work would want to see.
+            if storage_level >= 1
+                push!(history, _snapshot_state(s0))
+            end
 
             # Re-iterate the outer loop if Hesse moved edm above tolerance
             # AND above machine accuracy (C++ lines 160-168)
@@ -804,5 +836,28 @@ function _migrad_loop(
         above_max_edm = above_max,
         hesse_failed = hesse_failed_flag,
         made_pos_def = made_pos_def_flag,
+        states = history,
+        storage_level = Int(storage_level),
     )
+end
+
+# M6: deep-copy a MinimumState so it can be safely retained past the
+# next ping-pong iteration (`_migrad_loop` overwrites the V_a/V_b /
+# x_a/x_b / g_a/g_b buffers each iter, mutating any shallow reference
+# in-place). Only called when `storage_level >= 1` so the alloc cost
+# is paid only by callers who explicitly opted in.
+function _snapshot_state(s::MinimumState)
+    par_old = s.parameters
+    par = par_old.has_step_size ?
+           MinimumParameters(copy(par_old.x), copy(par_old.dirin), par_old.fval) :
+           MinimumParameters(copy(par_old.x), par_old.fval)
+    g_old = s.gradient
+    grad = FunctionGradient(copy(g_old.grad), copy(g_old.g2), copy(g_old.gstep);
+                             analytical = g_old.analytical)
+    err_old = s.error
+    # `parent(...)` strips the Symmetric wrapper; `copy` then makes a
+    # fresh Matrix. Wrap as :U (the convention used throughout).
+    inv_h = Symmetric(copy(parent(err_old.inv_hessian)), :U)
+    err = MinimumError(inv_h, err_old.dcovar, err_old.status, err_old.available)
+    return MinimumState(par, err, grad, s.edm, s.nfcn)
 end

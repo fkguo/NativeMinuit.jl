@@ -29,6 +29,15 @@ Status flags (mirror C++ `FunctionMinimum`):
 - `above_max_edm` — final EDM is more than 10× the requested tolerance.
 - `hesse_failed` — Hesse refinement (Phase 1) failed.
 - `made_pos_def` — MnPosDef perturbed the error matrix.
+
+M6 (GAP_AUDIT) — per-iteration history:
+
+- `states::Vector{MinimumState}` — per-iteration snapshots when MIGRAD
+  was invoked with `storage_level >= 1`. Empty (`MinimumState[]`) by
+  default (`storage_level = 0`) — keeps the zero-alloc gate happy.
+- `storage_level::Int` — `0` (default) for no history, `1` for
+  per-iteration snapshots. Mirrors C++
+  `BasicFunctionMinimum.h:109,165`.
 """
 struct FunctionMinimum
     state::MinimumState
@@ -39,6 +48,14 @@ struct FunctionMinimum
     above_max_edm::Bool
     hesse_failed::Bool
     made_pos_def::Bool
+    # M6: per-iteration MIGRAD history, populated when `_migrad_loop`
+    # was invoked with `storage_level >= 1`. Each entry is a
+    # deep-copied snapshot of `s0` at the end of one DFP iteration
+    # (snapshot needed because the loop's ping-pong buffers would
+    # otherwise mutate the entries on subsequent iterations). The seed
+    # is NOT prepended here — callers can read `seed` separately.
+    states::Vector{MinimumState}
+    storage_level::Int
 end
 
 function FunctionMinimum(state::MinimumState, seed::MinimumState, up::Real;
@@ -46,10 +63,13 @@ function FunctionMinimum(state::MinimumState, seed::MinimumState, up::Real;
                           reached_call_limit::Bool = false,
                           above_max_edm::Bool = false,
                           hesse_failed::Bool = false,
-                          made_pos_def::Bool = false)
+                          made_pos_def::Bool = false,
+                          states::Vector{MinimumState} = MinimumState[],
+                          storage_level::Integer = 0)
     FunctionMinimum(state, seed, Float64(up),
                     is_valid, reached_call_limit, above_max_edm,
-                    hesse_failed, made_pos_def)
+                    hesse_failed, made_pos_def,
+                    states, Int(storage_level))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
