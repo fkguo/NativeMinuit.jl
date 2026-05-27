@@ -38,6 +38,12 @@ The asymmetric error result for a single parameter. Mirrors C++
   MIGRAD from the better point).
 - `upper_fcn_limit::Bool`, `lower_fcn_limit::Bool` — call budget hit.
 - `nfcn::Int` — total FCN calls across both directions.
+- `upper_state::Union{Nothing,Vector{Float64}}`,
+  `lower_state::Union{Nothing,Vector{Float64}}` — full parameter
+  snapshot at the ±σ crossing endpoint. `nothing` when that side
+  did not converge cleanly. Mirrors C++ `MinosError::UpperState()` /
+  `LowerState()` (`MinosError.h:73-74`). Useful for HEP correlated-
+  systematic studies and at-bound diagnostics — see GAP_AUDIT.md M4.
 
 # Note on sign convention
 
@@ -65,11 +71,22 @@ struct MinosError
     upper_par_limit::Bool
     lower_par_limit::Bool
     nfcn::Int
+    # M4 (GAP_AUDIT): full parameter snapshot at the ±σ crossing
+    # endpoints. C++ `MinosError::UpperState()` / `LowerState()`
+    # (MinosError.h:73-74). `nothing` when that side did not converge
+    # cleanly. The unbounded path assembles via
+    # `_assemble_crossing_state` from the inner state + the scanned
+    # parameter's crossing value; the bounded path reads
+    # `MnCross.ext_state` (captured by `function_cross_external`'s
+    # probe-Ref).
+    upper_state::Union{Nothing,Vector{Float64}}
+    lower_state::Union{Nothing,Vector{Float64}}
 end
 
 # Backward-compatible constructor (legacy callers that don't pass
-# par_limit fields). Defaults the par_limit flags to false. Public
-# API; bounded MINOS path passes them explicitly.
+# par_limit / state fields). Defaults par_limit flags to false and
+# state snapshots to `nothing`. Public API; bounded MINOS path passes
+# them explicitly.
 function MinosError(par_idx::Int, min_par_value::Float64,
                      upper::Float64, lower::Float64,
                      upper_valid::Bool, lower_valid::Bool,
@@ -81,7 +98,26 @@ function MinosError(par_idx::Int, min_par_value::Float64,
                 upper_new_min, lower_new_min,
                 upper_fcn_limit, lower_fcn_limit,
                 false, false,   # par_limit defaults
-                nfcn)
+                nfcn,
+                nothing, nothing)   # state snapshot defaults
+end
+
+# Backward-compatible constructor: par_limit fields explicit, state
+# snapshots defaulted to `nothing` (callers that ran BEFORE M4 landed).
+function MinosError(par_idx::Int, min_par_value::Float64,
+                     upper::Float64, lower::Float64,
+                     upper_valid::Bool, lower_valid::Bool,
+                     upper_new_min::Bool, lower_new_min::Bool,
+                     upper_fcn_limit::Bool, lower_fcn_limit::Bool,
+                     upper_par_limit::Bool, lower_par_limit::Bool,
+                     nfcn::Int)
+    MinosError(par_idx, min_par_value, upper, lower,
+                upper_valid, lower_valid,
+                upper_new_min, lower_new_min,
+                upper_fcn_limit, lower_fcn_limit,
+                upper_par_limit, lower_par_limit,
+                nfcn,
+                nothing, nothing)
 end
 
 """
@@ -98,7 +134,7 @@ is_valid(e::MinosError) = e.upper_valid && e.lower_valid
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    minos(fmin, cf, par_idx; tlr=0.1, maxcalls=1000,
+    minos(fmin, cf, par_idx; tlr=0.1, maxcalls=1000, sigma=1,
           strategy=Strategy(0), prec=MachinePrecision()) -> MinosError
 
 Compute asymmetric ±σ errors for parameter `par_idx`. Mirrors
@@ -111,10 +147,16 @@ Compute asymmetric ±σ errors for parameter `par_idx`. Mirrors
   integration).
 - Inner MIGRAD uses Strategy(0) by default. Strategy 1/2 affects the
   `tlr` propagation but not HESSE refinement.
+- `sigma::Real=1` — confidence level in σ-units (P5). Threads
+  `up · sigma²` into MnFunctionCross's `aim` (mirrors iminuit's
+  `_TemporaryUp`). The returned `upper` / `lower` then correspond
+  to the k-σ contour on the parameter.
 
 # Returns
 
 A [`MinosError`](@ref). Use `is_valid(e)` to check overall success.
+`upper_state` / `lower_state` carry the full parameter vector at
+the ±σ crossing endpoint (`nothing` when that side did not converge).
 """
 function minos(
     fmin::FunctionMinimum,
@@ -126,7 +168,10 @@ function minos(
     prec::MachinePrecision = MachinePrecision(),
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
+    sigma::Real = 1.0,
 )
+    sigma > 0 ||
+        throw(ArgumentError("sigma must be positive, got $sigma"))
     state = fmin.state
     n = length(state.parameters)
     1 <= par_idx <= n ||
@@ -137,6 +182,7 @@ function minos(
     # The C++ Min() returns the parameter value at the minimum
     # (fMinParValue). Parallel-review #4 B2.
     min_par_value = state.parameters.x[par_idx]
+    par_idx_i = Int(par_idx)
 
     # Upper direction (positive). Threads the optional `scratch` —
     # both upper + lower cross searches use the same inner_dim (n-1),
@@ -146,8 +192,11 @@ function minos(
                                 tlr = tlr, maxcalls = maxcalls,
                                 strategy = strategy, prec = prec,
                                 scratch = scratch,
-                                threaded_gradient = threaded_gradient)
-    # 1-sigma external step (same as inside function_cross)
+                                threaded_gradient = threaded_gradient,
+                                sigma = sigma)
+    # 1-sigma external step (same as inside function_cross). NOTE: for
+    # sigma=k, aopt at convergence ≈ k so `aopt · sigma_i` is the k-σ
+    # error (P5).
     sigma_i = sqrt(max(2.0 * cf.up * state.error.inv_hessian[par_idx, par_idx],
                         prec.eps2))
     # Invalid-side encoding: 0.0 (NOT NaN), avoiding NaN propagation
@@ -158,6 +207,13 @@ function minos(
     # consistently fall into the 0.0 branch here. Round-3 I-2 (Opus);
     # bounded behavior refined in round-6.
     upper = up_cross.valid ? up_cross.aopt * sigma_i : 0.0
+    # M4: full parameter snapshot at the upper ±σ crossing. The inner
+    # state has dimension n-1 (par_idx removed); reinsert par_idx at
+    # its slot with value `min_par_value + aopt · sigma_i`.
+    upper_state = up_cross.valid ?
+        _assemble_crossing_state(up_cross.state, par_idx_i,
+                                  min_par_value + up_cross.aopt * sigma_i,
+                                  n) : nothing
     nfcn_total = up_cross.nfcn
 
     # Lower direction (negative). aopt comes out positive; flip sign.
@@ -166,12 +222,17 @@ function minos(
                                 maxcalls = maxcalls,
                                 strategy = strategy, prec = prec,
                                 scratch = scratch,
-                                threaded_gradient = threaded_gradient)
+                                threaded_gradient = threaded_gradient,
+                                sigma = sigma)
     lower = lo_cross.valid ? -lo_cross.aopt * sigma_i : 0.0
+    lower_state = lo_cross.valid ?
+        _assemble_crossing_state(lo_cross.state, par_idx_i,
+                                  min_par_value - lo_cross.aopt * sigma_i,
+                                  n) : nothing
     nfcn_total += lo_cross.nfcn
 
     return MinosError(
-        Int(par_idx),
+        par_idx_i,
         min_par_value,
         upper,
         lower,
@@ -184,7 +245,31 @@ function minos(
         up_cross.par_limit,
         lo_cross.par_limit,
         nfcn_total,
+        upper_state,
+        lower_state,
     )
+end
+
+# Internal: assemble the full n-dim parameter vector at a MnFunctionCross
+# crossing endpoint. `inner_state` carries the (n-1)-dim inner-MIGRAD's
+# converged free-coord values; we re-insert the scanned parameter
+# (`par_idx`, value `par_val`) at its slot. Mirrors the C++
+# `MinosError::UpperState() / LowerState()` snapshot (MinosError.h:73-74).
+function _assemble_crossing_state(inner_state::MinimumState,
+                                   par_idx::Int, par_val::Float64, n::Int)
+    inner_x = inner_state.parameters.x
+    # Defensive: shape mismatch implies the inner_state isn't the (n-1)-dim
+    # cross-search state — fall through to `nothing` rather than scramble.
+    length(inner_x) == n - 1 || return nothing
+    out = Vector{Float64}(undef, n)
+    @inbounds for k in 1:(par_idx - 1)
+        out[k] = inner_x[k]
+    end
+    @inbounds out[par_idx] = par_val
+    @inbounds for k in (par_idx + 1):n
+        out[k] = inner_x[k - 1]
+    end
+    return out
 end
 
 """

@@ -466,7 +466,10 @@ function _minos_external_via_function_cross(
     strategy::Strategy = Strategy(1),
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
+    sigma::Real = 1.0,
 )
+    sigma > 0 ||
+        throw(ArgumentError("sigma must be positive, got $sigma"))
     par = bfm.params.pars[par_idx]
     ext_min = bfm.ext_values[par_idx]
     ext_err = bfm.ext_errors[par_idx]
@@ -492,11 +495,13 @@ function _minos_external_via_function_cross(
     cr_up = function_cross_external(bfm, cf, par_idx, +1.0;
                                      tlr = tlr, maxcalls = maxcalls,
                                      strategy = strategy, prec = prec,
-                                     threaded_gradient = threaded_gradient)
+                                     threaded_gradient = threaded_gradient,
+                                     sigma = sigma)
     cr_lo = function_cross_external(bfm, cf, par_idx, -1.0;
                                      tlr = tlr, maxcalls = maxcalls,
                                      strategy = strategy, prec = prec,
-                                     threaded_gradient = threaded_gradient)
+                                     threaded_gradient = threaded_gradient,
+                                     sigma = sigma)
 
     # External errors = aopt · (truncated ext step). Three cases per
     # side:
@@ -523,6 +528,15 @@ function _minos_external_via_function_cross(
         0.0
     end
 
+    # M4: full ext-coord snapshot at the ±σ crossing. The bounded path
+    # gets these from `MnCross.ext_state` (populated by
+    # `function_cross_external`'s probe-Ref capture). `nothing` when no
+    # valid inner BFM was ever reached on that side. The at-bound
+    # `par_limit` case captures the snapshot from the last
+    # truncated-but-valid probe — physically the "state at the bound".
+    upper_state = cr_up.ext_state
+    lower_state = cr_lo.ext_state
+
     # `upper_valid`/`lower_valid` lifted: clean crossing OR at-limit
     # both count as "MINOS analysis completed". Matches iminuit's
     # m.merrors[name].is_valid semantics (saturating against a bound is
@@ -539,7 +553,8 @@ function _minos_external_via_function_cross(
                        cr_up.new_min, cr_lo.new_min,
                        cr_up.fcn_limit, cr_lo.fcn_limit,
                        cr_up.par_limit, cr_lo.par_limit,
-                       cr_up.nfcn + cr_lo.nfcn)
+                       cr_up.nfcn + cr_lo.nfcn,
+                       upper_state, lower_state)
 end
 function minos!(m::Minuit, par_name::AbstractString; kwargs...)
     par_idx = ext_index(m.params, String(par_name))
@@ -923,21 +938,23 @@ IMinuit.jl-compatible alias for [`minos!`](@ref). When `var` is `nothing`,
 runs MINOS on all free parameters. `var` may be an integer index, a
 String/Symbol name, or a `Vector` of either.
 
-The `sigma` kwarg (confidence level in σ-units) and `maxcall` are
-accepted for parity but currently `sigma > 1` would require a
-configurable `up·sigma²` scaling on the MnFunctionCross aim, which is
-Phase 1.x deferred. `sigma == 1` (the default) is fully supported.
+The `sigma` kwarg (confidence level in σ-units) is threaded through
+the MnFunctionCross `up · sigma²` scaling (P5 — see
+[`function_cross`](@ref) for details). At sigma=1 the behavior is
+C++-MnMinos-identical; at sigma=k the upper/lower errors correspond
+to the k-σ contour. `maxcall` is accepted for IMinuit.jl parity but
+currently unused.
 """
 function minos(m::Minuit, var = nothing;
                 sigma::Real = 1, maxcall::Integer = 0, kwargs...)
-    isapprox(sigma, 1.0) ||
-        throw(ArgumentError("MINOS sigma ≠ 1 is Phase 1.x deferred; got $sigma"))
+    sigma > 0 ||
+        throw(ArgumentError("MINOS sigma must be positive, got $sigma"))
     if var === nothing
-        return minos!(m; kwargs...)
+        return minos!(m; sigma = sigma, kwargs...)
     elseif var isa Integer
-        return minos!(m, Int(var); kwargs...)
+        return minos!(m, Int(var); sigma = sigma, kwargs...)
     elseif var isa AbstractString || var isa Symbol
-        return minos!(m, String(var); kwargs...)
+        return minos!(m, String(var); sigma = sigma, kwargs...)
     elseif var isa AbstractVector
         for v in var
             minos(m, v; sigma = sigma, maxcall = maxcall, kwargs...)
