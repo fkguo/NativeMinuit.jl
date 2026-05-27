@@ -59,6 +59,11 @@ The notebook's `using IMinuit` cell should be changed to
 
 ## Citing
 
-If you reuse this fit setup or data in a publication, please cite
-the original analysis (paper details forthcoming) and acknowledge
-JuMinuit.jl.
+If you reuse this fit setup or data in a publication, please cite the
+original analysis and acknowledge JuMinuit.jl:
+
+> V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
+> "How does the X(3872) show up in e⁺e⁻ collisions: Dip versus peak",
+> *Phys. Rev. D* **109** (2024) 11, L111501,
+> [arXiv:2404.12003](https://arxiv.org/abs/2404.12003),
+> [INSPIRE 2778938](https://inspirehep.net/literature/2778938).

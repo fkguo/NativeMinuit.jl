@@ -26,6 +26,12 @@ commit history for older runs.
 
 ## X(3872) dip fit — 3 params, FCN ~ 38 μs/call, 4 data points
 
+Published analysis: V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
+"How does the X(3872) show up in e⁺e⁻ collisions: Dip versus peak",
+*Phys. Rev. D* **109** (2024) 11, L111501,
+[arXiv:2404.12003](https://arxiv.org/abs/2404.12003),
+[INSPIRE 2778938](https://inspirehep.net/literature/2778938).
+
 | scheme       | migrad+hesse | minos (3 params) | mncontour (20 pts) |
 |--------------|-------------:|-----------------:|-------------------:|
 | `jm_ad`      |  **3.1 ms**  |  **77 ms**       |  **32 ms**         |

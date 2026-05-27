@@ -5,6 +5,12 @@
 # IMinuit.jl (PyCall → Python iminuit). Includes correctness cross-check
 # at each stage.
 #
+# Source of the published fit:
+#   V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
+#   "How does the X(3872) show up in e+e- collisions: Dip versus peak",
+#   Phys. Rev. D 109 (2024) 11, L111501, arXiv:2404.12003.
+#   https://inspirehep.net/literature/2778938
+#
 # Run with:  julia -t 8 --project=../../scripts BenchmarkExamples/X3872_dip/bench_full.jl
 
 using JuMinuit

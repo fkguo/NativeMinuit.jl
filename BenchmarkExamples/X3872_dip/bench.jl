@@ -2,6 +2,12 @@
 # Real X3872 dip-fit benchmark: numerical vs AD vs threaded numerical.
 # Reproduces the fit from BenchmarkExamples/X3872_dip/Xdip_published.ipynb
 # (resonance-amplitude dip-structure fit with 3 free parameters).
+#
+# Source of the published fit:
+#   V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
+#   "How does the X(3872) show up in e+e- collisions: Dip versus peak",
+#   Phys. Rev. D 109 (2024) 11, L111501, arXiv:2404.12003.
+#   https://inspirehep.net/literature/2778938
 
 using JuMinuit
 using DataFrames, CSV, QuadGK

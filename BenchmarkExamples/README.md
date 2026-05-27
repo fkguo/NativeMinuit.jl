@@ -26,7 +26,11 @@ Fit of an effective coupled-channel amplitude to the e⁺e⁻ → J/ψπ⁺π⁻
 data in the X(3872) mass region, demonstrating a dip structure near
 the DD̄* threshold. The published version of the analysis underlying
 
-> F.-K. Guo & ... (2024), preprint in preparation.
+> V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
+> "How does the X(3872) show up in e⁺e⁻ collisions: Dip versus peak",
+> *Phys. Rev. D* **109** (2024) 11, L111501,
+> [arXiv:2404.12003](https://arxiv.org/abs/2404.12003),
+> [INSPIRE 2778938](https://inspirehep.net/literature/2778938).
 
 Files:
 - `Xdip_published.ipynb` — clean version of the published notebook
