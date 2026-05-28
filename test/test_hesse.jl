@@ -66,4 +66,72 @@
         m = migrad(cf, [1.0, 2.0], [0.1, 0.1])
         @test (@inferred hesse(cf, m.state, Strategy(1))) isa MinimumState
     end
+
+    # ─────────────────────────────────────────────────────────────────
+    # Regression: `_hesse_diagonal_failure` must NOT clamp `1/g2` to 1.0
+    # when `g2` is well-defined (even if `1/g2` is below `eps2`).
+    #
+    # See `BenchmarkExamples/IAM_2Pformfactor` failure mode discussion
+    # in the `_hesse_diagonal_failure` docstring. The C++ reference
+    # has a double-`eps2` check that produces `V = I` everywhere when
+    # one parameter is locally FCN-flat (sag=0 bail) AND all other
+    # parameters have huge `g2` (steep FCN). The resulting Newton step
+    # `−V·g ≈ −g` blows up under line search.
+    #
+    # We intentionally diverge from C++: use `1/g2` whenever `g2` itself
+    # is well-defined. The principle matches `MnSeedGenerator.cxx:69-70`.
+    # ─────────────────────────────────────────────────────────────────
+    @testset "Regression: _hesse_diagonal_failure preserves 1/g2 for huge g2" begin
+        # 2-param FCN: steep in x[1], FLAT in x[2]. At x=[0,0]:
+        #   f = 1e9 · x[1]² + 0·x[2]
+        #   g  = [2e9·x[1], 0]
+        #   g2 = [2e9, 0]
+        # The diagonal pass succeeds on x[1] (g2=2e9 huge), fails on
+        # x[2] (sag=0 forever → bail to `_hesse_diagonal_failure`).
+        # Pre-fix:  V.diag = [1.0, 1.0]   (the bug)
+        # Post-fix: V.diag = [5e-10, 1.0] (1/g2 preserved for x[1])
+        cf = CostFunction(x -> 1e9 * x[1]^2 + 0.0 * x[2], 1.0)
+        seed = JuMinuit.seed_state(cf, [0.5, 0.5], [0.1, 0.1],
+                                    Strategy(2), JuMinuit.MachinePrecision())
+        # The seed status is MnHesseFailed (sag=0 on param 2 bails the
+        # diagonal pass) — this matches C++ behavior and is the EXPECTED
+        # status for this pathological FCN.
+        @test seed.error.status == MnHesseFailed
+        V = parent(seed.error.inv_hessian)
+        # The bug being regressed: V[1,1] must NOT be 1.0 (the clamp
+        # value). After the fix, V[1,1] = 1/g2[1] ≈ 5e-10.
+        @test V[1, 1] < 1e-5  # asserting "not clamped to 1"
+        @test V[1, 1] > 0.0   # asserting "not degenerate either"
+        # For the truly-degenerate param 2 (g2=0 < eps2), the fallback
+        # to 1.0 is correct — `1/0` is not meaningful.
+        @test V[2, 2] == 1.0
+    end
+
+    @testset "Regression: _migrad_loop accepts a bailed-hesse seed" begin
+        # Companion to the above: after `_hesse_diagonal_failure` returns
+        # a MnHesseFailed-status seed with USABLE diagonal V, the
+        # `_migrad_loop` entry gate must NOT bail (matches C++ behavior
+        # where `BasicMinimumSeed::IsValid()` returns the seed's own
+        # `fValid` flag, which is `true` after construction regardless
+        # of the underlying state's validity).
+        #
+        # Pre-fix: `_migrad_loop` bailed at the `!is_valid(seed)` check,
+        # returning fmin.is_valid=false with nfcn unchanged from the seed.
+        # Post-fix: MIGRAD iterates from the bailed-hesse seed.
+        cf = CostFunction(x -> 1e9 * x[1]^2 + 0.0 * x[2], 1.0)
+        seed = JuMinuit.seed_state(cf, [0.5, 0.5], [0.1, 0.1],
+                                    Strategy(2), JuMinuit.MachinePrecision())
+        @test seed.error.status == MnHesseFailed   # bailed, as expected
+        n_seed = JuMinuit.ncalls(cf)
+        # `_migrad_loop` must run — at minimum, evaluate FCN more than
+        # the seed did and reach the minimum of the x[1] subspace.
+        fmin = JuMinuit._migrad_loop(seed, cf, Strategy(2), 0.1,
+                                      200 + 100 * 2 + 5 * 4,
+                                      JuMinuit.MachinePrecision())
+        @test JuMinuit.ncalls(cf) > n_seed   # MIGRAD actually iterated
+        # The non-degenerate subspace converges: x[1] -> 0 (minimum of 1e9·x[1]²)
+        @test abs(fmin.state.parameters.x[1]) < 1e-3
+        # The x[1] residual is small (FCN at minimum should be ≈ 0 along x[1])
+        @test fmin.state.parameters.fval < 1.0
+    end
 end

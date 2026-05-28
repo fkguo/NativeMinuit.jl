@@ -383,9 +383,57 @@ end
     _hesse_diagonal_failure(state, g2, prec, nfcn, status) -> MinimumState
 
 Build the failure-mode `MinimumState` with a diagonal inverse-Hessian
-of `1/g2[i]` (clamped to 1 when g2 is too small). Mirrors C++
+of `1/g2[j]` (clamped to 1 when g2[j] is degenerate). Mirrors C++
 `MnHesse.cxx:177-184` (and the analogous block at lines 216-223 for
-maxcalls overrun).
+maxcalls overrun) — with a documented divergence on the very-large-g2
+case described below.
+
+# Intentional divergence from C++
+
+C++ uses a **double** eps2 check:
+
+```cpp
+double tmp = g2(j) < prec.Eps2() ? 1. : 1. / g2(j);
+vhmat(j, j) = tmp < prec.Eps2() ? 1. : tmp;
+```
+
+The first check guards against `1/0` when `g2 < eps2` (good). The
+second check fires when `1/g2 < eps2`, i.e. `g2 > 1/eps2 ≈ 6.7e7`,
+and replaces the meaningful `1/g2` with `1.0`. That second clamp is
+actively harmful: `1/g2 = 1e-10` means the parameter is **very well
+determined** (FCN is steep along that direction), and replacing it
+with `1.0` tells MIGRAD the parameter is **poorly** determined — the
+opposite of the truth.
+
+The downstream consequence we hit on `BenchmarkExamples/IAM_2Pformfactor`:
+when MnHesse bails at the last parameter (FCN-flat → sag=0) AND all
+preceding params have huge g2 (steep FCN), the C++ formula produces
+`V = I` everywhere. The Newton step `−V·g ≈ −g` (with `|g| ~ 1e6`)
+is then so large that line-search backtracks to `slam ~ 1e-3` while
+the FCN keeps rising, and MIGRAD bails "No improvement". The same
+trap fires in iminuit at Strategy(2) on the same x_failed point —
+**this is a C++ bug, not a JuMinuit transcription error**.
+
+We diverge by using `1/g2` whenever `g2` is well-defined (drop the
+second clamp), which matches the semantics of
+`MnSeedGenerator.cxx:69-70` (`mat(i,i) = abs(g2[i]) > Eps2 ? 1/g2[i] : 1`).
+With the IAM x_failed point, the resulting `V.diag = [1/g2_i, ..., 1]`
+gives a small, well-conditioned Newton step that lets MIGRAD escape
+the basin.
+
+# Edge cases
+
+- `g2[j] = Inf` → `1/g2 = 0` (not "tiny" — exactly 0). We treat 0 as
+  degenerate (V cannot be zero — MnPosDef would lift it but the
+  signal is wrong) and fall back to 1.
+- `g2[j] = NaN` → `isfinite` is false → fall back to 1.
+- `g2[j] = -1e10` (negative — should have been caught by
+  `negative_g2_line_search` earlier, but defensively) →
+  `abs(g2) > eps2` is true, `1/g2 = -1e-10` (negative). MnPosDef
+  downstream would flip the sign; here we let it through (matches
+  MnSeedGenerator's behavior — `1/g2[i]` not `1/abs(g2[i])`).
+
+See `scratch/iam_seed_at_failed.jl` for the live reproduction.
 """
 function _hesse_diagonal_failure(state::MinimumState, g2::Vector{Float64},
                                   prec::MachinePrecision, nfcn::Integer,
@@ -393,8 +441,8 @@ function _hesse_diagonal_failure(state::MinimumState, g2::Vector{Float64},
     n = length(g2)
     M = zeros(Float64, n, n)
     @inbounds for j in 1:n
-        tmp = g2[j] < prec.eps2 ? 1.0 : 1.0 / g2[j]
-        M[j, j] = tmp < prec.eps2 ? 1.0 : tmp
+        v = abs(g2[j]) > prec.eps2 ? 1.0 / g2[j] : 1.0
+        M[j, j] = (isfinite(v) && v != 0.0) ? v : 1.0
     end
     err = MinimumError(Symmetric(M, :U), status)
     return MinimumState(state.parameters, err, state.gradient,
