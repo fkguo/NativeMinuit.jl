@@ -549,7 +549,28 @@ function _migrad_loop(
                                 states = history,
                                 storage_level = Int(storage_level))
     end
-    if !is_valid(seed)
+    # Seed acceptance gate. Mirrors C++ VariableMetricBuilder.cxx:82
+    # `if (!seed.IsValid())`, but with the subtlety that C++
+    # `BasicMinimumSeed::IsValid()` returns the seed's INDEPENDENT
+    # `fValid` flag (always `true` after construction by
+    # `MnSeedGenerator`), NOT the underlying `MinimumState`'s component
+    # validity. So C++ effectively NEVER bails here in practice —
+    # `seed.IsValid()` is a no-op as long as the seed object was built.
+    #
+    # JuMinuit's `is_valid(seed::MinimumState)` is stricter — it
+    # short-circuits to `false` whenever `seed.error.status` is
+    # `MnHesseFailed` or `MnInvertFailed`. That over-rejects the
+    # `seed_state(Strategy(2))` bootstrap case where MnHesse bails on a
+    # locally-degenerate parameter but still produces a USABLE diagonal
+    # V via `_hesse_diagonal_failure` (post-fix: `1/g2` not 1.0). The
+    # bailed-hesse seed has good params, good gradient, and a workable
+    # diagonal V — MIGRAD can and should iterate from it.
+    #
+    # We therefore check structural validity only: parameters set,
+    # gradient set, error matrix *available* (any status). Downstream
+    # `sym_invert!`, `make_posdef`, and the EDM estimator will catch a
+    # genuinely-singular V via their own error paths.
+    if !is_valid(seed.parameters) || !is_valid(seed.gradient) || !is_available(seed.error)
         return FunctionMinimum(seed, seed, cf.up; is_valid = false,
                                 states = history,
                                 storage_level = Int(storage_level))
