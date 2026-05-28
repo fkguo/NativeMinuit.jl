@@ -36,6 +36,7 @@ using Test
     include("test_contour_exact.jl")
     include("test_threaded_gradient.jl")
     include("test_plot_recipes.jl")
+    include("test_plot_text.jl")
     include("test_iminuit_compat.jl")
     include("test_iminuit_compat_data.jl")
     include("test_simplex_scan.jl")

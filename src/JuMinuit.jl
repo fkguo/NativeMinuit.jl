@@ -56,6 +56,7 @@ include("eigen_corr.jl")
 include("iminuit_compat.jl")
 include("serialize.jl")
 include("plot_recipes.jl")
+include("plot_text.jl")
 include("precompile_workload.jl")
 
 # Phase 0 public surface (will grow as files are added).
@@ -114,5 +115,8 @@ export eigenvalues, global_cc
 export mncontour, profile, mnprofile
 export draw_contour, draw_mncontour, draw_profile, draw_mnprofile, draw_mnmatrix
 export scipy
+
+# Terminal / SSH / headless-CI ASCII renderer (plot_text.jl, gap M2)
+export mn_plot_text
 
 end # module JuMinuit
