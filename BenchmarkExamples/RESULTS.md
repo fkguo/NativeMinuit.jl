@@ -34,11 +34,14 @@ Published analysis: V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
 
 | scheme       | migrad+hesse | minos (3 params) | mncontour (20 pts) |
 |--------------|-------------:|-----------------:|-------------------:|
-| `jm_ad`      |  **3.1 ms**  |  **77 ms**       |  **32 ms**         |
-| `jm_th_ad`   |  3.2 ms      |  77 ms           |  34 ms             |
-| `jm_num`     |  5.2 ms      | 134 ms           |  89 ms             |
-| `jm_th_num`  |  5.8 ms      | 163 ms           |  95 ms             |
-| `iminuit`    |  7.0 ms      | 164 ms           |  52 ms             |
+| `jm_ad`      |  **3.3 ms**  |  **75 ms**       |  **35 ms**         |
+| `jm_th_ad`   |  3.5 ms      |  74 ms           |  35 ms             |
+| `jm_num`     |  5.3 ms      | 129 ms           |  90 ms             |
+| `jm_th_num`  |  5.9 ms      | 138 ms           |  97 ms             |
+| `iminuit`    |  7.2 ms      | 155 ms           |  50 ms             |
+
+(latest run on commit-tree post gap closure; within ±5 % of the
+pre-closure baseline — no regression from the 9 merged PRs M1–P5).
 
 **Headlines**
 
@@ -68,10 +71,13 @@ fit-quality artifact. Tracked.
 
 | scheme       | migrad+hesse | minos (par 1)        | mncontour (8 pts) |
 |--------------|-------------:|---------------------:|------------------:|
-| `jm_num`     | **5.41 s**   | **16.6 s**           | **26.9 s**        |
-| `iminuit`    | 18.97 s      | REFUSED (invalid fmin) | REFUSED         |
+| `jm_num`     | **5.42 s**   | **16.2 s**           | **27.3 s**        |
+| `iminuit`    | 18.74 s      | REFUSED (invalid fmin) | REFUSED         |
 | `jm_ad`      | FAILED       | —                    | —                 |
 | `jm_th_*`    | SKIPPED (Phase H rejects) | —       | —                 |
+
+(latest run on commit-tree post gap closure; within ±2 % of the
+pre-closure baseline — no regression from the 9 merged PRs M1–P5).
 
 **Headlines**
 

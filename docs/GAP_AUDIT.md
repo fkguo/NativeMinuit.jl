@@ -13,14 +13,34 @@ The two pre-existing follow-ups from
 (MINOS early termination on tight wells; IAM 9-LEC early-termination
 divergence) are tracked separately and not re-listed here.
 
-## Summary
+## Status (2026-05-27 closure pass)
+
+| gap | resolved by | merged |
+|---|---|---|
+| M1 print_level / iteration trace | PR #5 `feat/M1-print-level` | 8a37bf2 |
+| M2 mn_plot_text ASCII renderer | PR #3 `feat/M2-mn_plot_text` | 2fc38b4 |
+| M3 per-parameter mutators | PR #2 `feat/M3-per-param-mutators` | 3641aaf |
+| M4 MinosError ±σ state snapshot | PR #4 `feat/phase1-cleanup-...` | 3eeeb08 |
+| M5 seed_state prior_cov branch | PR #4 (same) | 3eeeb08 |
+| M6 FunctionMinimum storage_level | PR #4 (same) | 3eeeb08 |
+| P1 HessianGradientCalculator | PR #1 `feat/P1-P2-Hessian...` | 72f55e3 |
+| P2 AD-HESSE companion refresh | PR #1 (same) | 72f55e3 |
+| P5 minos(...; sigma=k) for k ≠ 1 | PR #4 (same) | 3eeeb08 |
+| P3 contour vs contour_exact | (verified iminuit-compat; docs-only) | — |
+| P4 packed-storage layout | (COSMETIC; no action) | — |
+
+All gaps surfaced by the audit have been closed in main.
+
+Pre-closure / historical state preserved below for context.
+
+## Summary (pre-closure)
 
 | category | count | notes |
 |---|---|---|
 | ✓ ported | ~50 | full MIGRAD/HESSE/MINOS/CONTOURS/SIMPLEX/SCAN spine + bounds + Davidon + NegativeG2 + EDM + posdef + covariance-squeeze + linesearch + parameter transforms + Minuit struct + iminuit_compat |
 | ◻ deferred (covered by ROADMAP §9) | ~22 | Fumili family, MPI, BFGS, ROOT shims, hand-rolled BLAS, ABObj layer, ... |
-| ❌ MISSING (not in ROADMAP §9) | **6** | ← actionable, see below |
-| ~ PARTIAL implementations | **5** | "first cut" items intended but not finished |
+| ❌ MISSING (not in ROADMAP §9) | 6 → **0** | all 6 closed (M1–M6) |
+| ~ PARTIAL implementations | 5 → **0** | P1+P2 ported; P3 verified; P4 COSMETIC; P5 closed |
 
 ## ❌ MISSING — actionable
 

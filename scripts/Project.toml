@@ -1,9 +1,16 @@
 [deps]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+IMinuit = "beb75e20-2205-47e6-ad51-640e9c2309f1"
+Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 JuMinuit = "5523a57a-07f4-4aae-a9fd-d526bcb5d194"
+QuadGK = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
 RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
 julia = "1.10"
