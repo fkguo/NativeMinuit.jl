@@ -131,4 +131,57 @@ trigger is enough, or whether option 2 (per-coord adaptive clamp) is needed.
 - The SR1+TR backend on `feat/sr1-trust-region` cannot fix this — trust region
   by design bounds step magnitude, while the basin escape from x_jm requires
   the OPPOSITE (a giant step). Documented in
-  `docs/SR1_TR_DESIGN.md` §2.6.
+  `docs/SR1_TR_DESIGN.md` §2.6. That branch is shelved (option B from the
+  earlier session triage: keep as reference, do not merge); the work served as
+  the motivation that led to this audit.
+
+## Resolution
+
+Adopted **option 1 + do-while + status-gated entry shortcut** (per-iter cost
+hybrid) across three commits on this branch:
+
+1. **`fix(hesse): restore C++ MnHesse.cxx:177-180 second clamp (revert PR #6)`**
+   — `_hesse_diagonal_failure` now mirrors C++ exactly. At IAM x_jm warm start,
+   the MnHesse-fail fallback produces `V ≈ I` (was `V ≈ diag(1/g2) ≈ 1e-10·I`
+   under PR #6).
+
+2. **`feat(migrad): do-while inner loop + status-gated entry shortcut`** —
+   `_migrad_loop`'s inner DFP loop converted from check-first
+   (`while edm > edmval`) to do-while (`while true … break` with termination
+   check at the bottom), mirroring C++ `VariableMetricBuilder.cxx:237/341`
+   semantics exactly.
+
+   Added a status-gated entry shortcut at the top of the loop: when
+   `(edm_corrected <= edmval) && (status == MnHesseValid)`, skip the body
+   immediately. This is a documented JuMinuit-only divergence from C++ that
+   preserves the warm-restart `function_cross_multi` / MINOS / contour_exact
+   contract (no-op when seed is already converged and V is trustworthy).
+   The placeholder-V cases (status `MnHesseFailed` / `MnMadePosDef` /
+   `MnInvertFailed`) bypass the shortcut — which is exactly where do-while
+   semantics matter for correctness (the IAM x_jm basin walk).
+
+3. The companion test `test/test_hesse.jl::"Regression: _hesse_diagonal_failure
+   preserves 1/g2 for huge g2"` was inverted to assert `V[1,1] == 1.0` (the
+   restored clamp) rather than `V[1,1] < 1e-5`.
+
+### Empirical verdict (post-resolution)
+
+| Config | Pre-resolution | Post-resolution | iminuit reference |
+|---|---|---|---|
+| x_jm S=2 single-shot | 325.80 (wrong basin) | **322.5966** (correct basin) | 322.5859 |
+| x_jm S=2 + retry | 325.80, nfcn=64 | **322.5966**, nfcn=123 | n/a |
+| x_jm S=0/1 single-shot | 325.80, nfcn=37 | 325.80, nfcn=37 (warm-restart no-op preserved by status gate) | 325.80 |
+| paras0 S=2 cold-shot | 325.80 (via retry+Simplex) | **1268.65 stuck** (matches iminuit) | 1268.65 stuck |
+| paras0 S=1 cold-shot | 325.80 (different basin) | 330.75 (x_jm 8D basin + x[9]=1e-4) | 409.89 (x_im basin) |
+
+paras0+S=2 trap: real regression vs PR #6, **but exact parity with iminuit
+S=2**. Mitigated by the standard HEP workflow `S=0/1 from cold → polish at
+S=2 after entering a basin`. See README "S=2 cold-seed pathology" note.
+
+### Branches involved
+
+- `feat/sr1-trust-region` — the SR1+Trust-Region backend exploration that
+  led to identifying this issue. Shelved (not merged) per the session triage;
+  no longer needed once `feat/davidon-cxx-audit` lands.
+- `feat/davidon-cxx-audit` — this branch. Contains the audit doc, the three
+  resolution commits, and updated regression test.
