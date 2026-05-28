@@ -347,7 +347,8 @@ function migrad!(m::Minuit;
                   tol::Real = m.tol,
                   maxfcn::Union{Integer,Nothing} = nothing,
                   threaded_gradient::Bool = m.threaded_gradient,
-                  verify_threading::Bool = m.verify_threading)
+                  verify_threading::Bool = m.verify_threading,
+                  print_level::Integer = m.print_level)
     # iminuit-style implicit resume: if we already converged once,
     # build a temporary Parameters carrying those values forward. The
     # user's m.params stays untouched so that `reset(m)` + migrad
@@ -358,13 +359,15 @@ function migrad!(m::Minuit;
                          strategy = strategy, tol = tol, maxfcn = maxfcn,
                          prec = m.prec,
                          threaded_gradient = threaded_gradient,
-                         verify_threading = verify_threading)
+                         verify_threading = verify_threading,
+                         print_level = print_level)
     else
         m.fmin = migrad(m.fcn, params_to_use;
                          strategy = strategy, tol = tol, maxfcn = maxfcn,
                          prec = m.prec,
                          threaded_gradient = threaded_gradient,
-                         verify_threading = verify_threading)
+                         verify_threading = verify_threading,
+                         print_level = print_level)
     end
     return m
 end
@@ -402,6 +405,7 @@ first). Returns `m`.
 """
 function minos!(m::Minuit, par::Integer;
                 threaded_gradient::Bool = m.threaded_gradient,
+                print_level::Integer = m.print_level,
                 kwargs...)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad!(m)` before `minos!(m)`"))
@@ -438,7 +442,8 @@ function minos!(m::Minuit, par::Integer;
         ext_cf = m.cfwg === nothing ? m.fcn : m.cfwg
         m.minos_errors[Int(par)] = _minos_external_via_function_cross(
             m.fmin, ext_cf, Int(par);
-            threaded_gradient = threaded_gradient, kwargs...)
+            threaded_gradient = threaded_gradient,
+            print_level = print_level, kwargs...)
     else
         # Unbounded — search in the user FCN's frame directly.
         # m.fmin.internal_cf == m.fcn here; m.params.int_of_ext[par]
@@ -447,7 +452,8 @@ function minos!(m::Minuit, par::Integer;
         # consistently.
         err = minos(m.fmin.internal, m.fmin.internal_cf,
                     m.params.int_of_ext[par];
-                    threaded_gradient = threaded_gradient, kwargs...)
+                    threaded_gradient = threaded_gradient,
+                    print_level = print_level, kwargs...)
         m.minos_errors[Int(par)] = err
     end
     return m
@@ -467,6 +473,7 @@ function _minos_external_via_function_cross(
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
+    print_level::Integer = 0,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -492,16 +499,30 @@ function _minos_external_via_function_cross(
     end
     step_lo = max(step_lo, 0.0)
 
+    # gap M1: outer-guarded to avoid the @sprintf String alloc at level 0
+    # (this helper is called per bounded-MINOS parameter request).
+    if print_level >= 1
+        _trace_info(print_level, "MnMinos",
+                    @sprintf("Determination of upper error for par=%d (value=%.10g)",
+                              par_idx, ext_min))
+    end
     cr_up = function_cross_external(bfm, cf, par_idx, +1.0;
                                      tlr = tlr, maxcalls = maxcalls,
                                      strategy = strategy, prec = prec,
                                      threaded_gradient = threaded_gradient,
-                                     sigma = sigma)
+                                     sigma = sigma,
+                                     print_level = print_level)
+    if print_level >= 1
+        _trace_info(print_level, "MnMinos",
+                    @sprintf("Determination of lower error for par=%d (value=%.10g)",
+                              par_idx, ext_min))
+    end
     cr_lo = function_cross_external(bfm, cf, par_idx, -1.0;
                                      tlr = tlr, maxcalls = maxcalls,
                                      strategy = strategy, prec = prec,
                                      threaded_gradient = threaded_gradient,
-                                     sigma = sigma)
+                                     sigma = sigma,
+                                     print_level = print_level)
 
     # External errors = aopt · (truncated ext step). Three cases per
     # side:
@@ -1085,14 +1106,16 @@ Internally:
 Returns `m` for chaining.
 """
 function hesse(m::Minuit; strategy::Strategy = Strategy(1),
-                           maxcall::Integer = 0)
+                           maxcall::Integer = 0,
+                           print_level::Integer = m.print_level)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad(m)` before `hesse(m)`"))
     bfm = m.fmin
 
     # Refresh the internal-coord Hessian.
     new_state = JuMinuit.hesse(bfm.internal_cf, bfm.internal.state, strategy;
-                                 prec = m.prec)
+                                 prec = m.prec,
+                                 print_level = print_level)
 
     # Wrap into a fresh FunctionMinimum reflecting the CURRENT covariance
     # state, not the union of historical states. iminuit's semantics is

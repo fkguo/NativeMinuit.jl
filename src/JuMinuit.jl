@@ -28,6 +28,7 @@ using Printf
 
 include("precision.jl")
 include("strategy.jl")
+include("trace.jl")
 include("state.jl")
 include("fcn.jl")
 include("linalg.jl")

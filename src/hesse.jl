@@ -80,6 +80,7 @@ function hesse(
     strategy::Strategy = Strategy(1);
     prec::MachinePrecision = MachinePrecision(),
     maxcalls::Integer = 0,
+    print_level::Integer = 0,
 )
     # HESSE computes 2nd derivatives by central differences on `cf(x)`
     # — the user's analytical gradient (when `cf isa
@@ -94,6 +95,14 @@ function hesse(
     x = copy(state.parameters.x)
     amin = cf(x)
     aimsag = sqrt(prec.eps2) * (abs(amin) + cf.up)
+
+    # gap M1: header for level 1. Mirrors C++ `print.Info(...)` calls
+    # at MnHesse.cxx top of operator().
+    if print_level >= 1
+        _trace_info(print_level, "MnHesse",
+                    @sprintf("start: n=%d  fval=%.10g  ncycles=%d  maxcalls=%d",
+                             n, amin, strategy.hessian_ncycles, maxcalls))
+    end
 
     # Scratch — independent vectors so we don't mutate state.gradient
     g2 = copy(state.gradient.g2)
@@ -249,7 +258,19 @@ function hesse(
 
         vhmat[i, i] = g2[i]
 
+        # gap M1: outer guard — without it the @sprintf would fire per
+        # parameter at level 0 (O(n) wasted Strings per HESSE).
+        if print_level >= 2
+            _trace_info(print_level, "MnHesse",
+                        @sprintf("diag i=%d  g2=%.6g  d=%.6g  converged=%s",
+                                  i, g2[i], dirin[i], converged ? "yes" : "no"))
+        end
+
         if ncalls(cf) > maxcalls
+            if print_level >= 1
+                _trace_warn(print_level, "MnHesse",
+                            @sprintf("maxcalls exceeded during diagonal pass at i=%d", i))
+            end
             return _hesse_diagonal_failure(state, g2, prec, ncalls(cf), MnHesseFailed)
         end
     end
@@ -284,12 +305,23 @@ function hesse(
     # ── Off-diagonal pass ─────────────────────────────────────────
     # All pairs (i, j) with i < j.
     if n > 1
+        # gap M1: O(n²) inner loop — outer guard is essential. Without
+        # it the @sprintf would alloc one String per (i,j) pair at
+        # every level (including 0) — 190 wasted allocs for n=20.
+        if print_level >= 2
+            _trace_info(print_level, "MnHesse", "starting off-diagonal pass")
+        end
         for i in 1:n
             x[i] += dirin[i]
             for j in (i + 1):n
                 x[j] += dirin[j]
                 fs1 = cf(x)
                 vhmat[i, j] = (fs1 + amin - yy[i] - yy[j]) / (dirin[i] * dirin[j])
+                if print_level >= 2
+                    _trace_info(print_level, "MnHesse",
+                                @sprintf("off-diag i=%d j=%d  H=%.6g",
+                                          i, j, vhmat[i, j]))
+                end
                 x[j] -= dirin[j]
             end
             x[i] -= dirin[i]
@@ -330,6 +362,14 @@ function hesse(
     # In-place EDM — reuse `yy` (already length n, contents no longer needed
     # after the off-diagonal pass completed above).
     new_edm = estimate_edm!(yy, refined_grad, new_err)
+
+    if print_level >= 1
+        status_str = new_err_status == MnHesseValid ? "valid" :
+                     new_err_status == MnMadePosDef ? "made-pos-def" : "invalid"
+        _trace_info(print_level, "MnHesse",
+                    @sprintf("done: status=%s  edm=%.6g  dcovar=%.4g  ncalls=%d",
+                             status_str, new_edm, new_dcov, ncalls(cf)))
+    end
 
     return MinimumState(state.parameters, new_err, refined_grad,
                         new_edm, ncalls(cf))

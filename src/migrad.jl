@@ -384,6 +384,7 @@ function migrad(
     verify_threading::Bool = threaded_gradient,
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
     storage_level::Integer = 0,
+    print_level::Integer = 0,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
@@ -396,7 +397,8 @@ function migrad(
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
                           verify_threading = verify_threading,
-                          storage_level = storage_level)
+                          storage_level = storage_level,
+                          print_level = print_level)
 end
 
 """
@@ -430,6 +432,7 @@ function migrad(
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
     storage_level::Integer = 0,
+    print_level::Integer = 0,
 )
     n = length(seed)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
@@ -441,7 +444,8 @@ function migrad(
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
                           verify_threading = verify_threading,
-                          storage_level = storage_level)
+                          storage_level = storage_level,
+                          print_level = print_level)
 end
 
 """
@@ -491,6 +495,7 @@ function _migrad_loop(
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
     storage_level::Integer = 0,
+    print_level::Integer = 0,
 )
     n = length(seed)
     # M6: per-iteration history. Empty when `storage_level == 0`
@@ -558,6 +563,21 @@ function _migrad_loop(
     s0 = seed
     # Initial-state EDM correction (C++ line 229)
     edm_corrected = s0.edm * (1.0 + 3.0 * s0.error.dcovar)
+
+    # ── print_level tracing (gap M1) ──────────────────────────────
+    # Level 1: header banner + initial iter=0 line. Level 3: initial
+    # parameter + gradient vectors. Mirrors C++ VariableMetricBuilder.cxx
+    # :101 "Start iterating until Edm is <" and MnTraceObject.cxx debug
+    # entry.
+    if print_level >= 1
+        _trace_info(print_level, "MnMigrad",
+                    @sprintf("Start iterating: edmval=%.4g  maxfcn=%d  n=%d",
+                             edmval, maxfcn, n))
+        _trace_iter(print_level, "MnMigrad", 0, s0.parameters.fval,
+                    s0.edm, s0.error.dcovar, ncalls(cf))
+        _trace_state(print_level, "MnMigrad", 0, s0.parameters.x,
+                     s0.gradient.grad)
+    end
 
     # ─────────────────────────────────────────────────────────────────────
     # Per-FIT scratch — bound either to a caller-supplied pool
@@ -641,6 +661,10 @@ function _migrad_loop(
     maxfcn_eff = Int(maxfcn)
     ipass = 0
     iterate = true
+    # DFP step counter — incremented at each accepted iteration of the
+    # inner while loop. Tracing reports this as "iter" so the user sees
+    # the same counter iminuit / C++ MnPrint::Oneline uses.
+    iter_dfp = 0
 
     while iterate
         iterate = false
@@ -661,6 +685,13 @@ function _migrad_loop(
             if gdel > 0
                 s0 = make_posdef(s0, prec)
                 made_pos_def_flag = true
+                # gap M1: outer guard avoids the literal-String alloc at level 0.
+                # `_trace_info`'s own gate is for callers that prefer the
+                # one-line form when the @sprintf cost is amortized.
+                if print_level >= 2
+                    _trace_info(print_level, "MnMigrad",
+                                "matrix not pos.def; MnPosDef applied")
+                end
                 sym_mul!(step, s0.error.inv_hessian, s0.gradient.grad, -1.0, 0.0)
                 gdel = dot(step, s0.gradient.grad)
                 if gdel > 0
@@ -670,6 +701,13 @@ function _migrad_loop(
 
             # ── Step 3: line search
             pp = line_search(cf, s0.parameters, step, gdel, prec; work_x = ls_work)
+            # gap M1: outer-guarded so the @sprintf only runs at level ≥ 2.
+            # This sits in the hot DFP inner loop — without the guard the
+            # String alloc fires every iter even at level 0.
+            if print_level >= 2
+                _trace_info(print_level, "MnMigrad",
+                            @sprintf("line search: y=%.10g  x=%.4g", pp.y, pp.x))
+            end
 
             # ── Step 4: no-improvement check (C++ line 278)
             if abs(pp.y - s0.parameters.fval) <= abs(s0.parameters.fval) * prec.eps
@@ -765,6 +803,25 @@ function _migrad_loop(
                 push!(history, _snapshot_state(s0))
             end
 
+            # M1: per-iteration trace + counter increment (always; the
+            # `print_level` gate is inside the helpers, which no-op
+            # cheaply at level 0).
+            iter_dfp += 1
+            if print_level >= 1
+                _trace_iter(print_level, "MnMigrad", iter_dfp,
+                            s0.parameters.fval, s0.edm, s0.error.dcovar,
+                            ncalls(cf))
+                # gnorm sub-line is level ≥ 2 only — inner guard avoids
+                # the @sprintf String alloc when level == 1.
+                if print_level >= 2
+                    _trace_info(print_level, "MnMigrad",
+                                @sprintf("gnorm=%.6g",
+                                          sqrt(dot(new_grad.grad, new_grad.grad))))
+                end
+                _trace_state(print_level, "MnMigrad", iter_dfp,
+                             s0.parameters.x, s0.gradient.grad)
+            end
+
             use_a = !use_a   # flip so next iter writes to the OTHER set
         end
 
@@ -781,17 +838,29 @@ function _migrad_loop(
             # full original budget) but we have ncalls already; let Hesse
             # use the leftover up to maxfcn_eff. Hesse internally floors
             # at its own default budget.
+            if print_level >= 1
+                _trace_info(print_level, "MnMigrad",
+                            @sprintf("entering inner HESSE refinement (strategy=%d  dcovar=%.4g)",
+                                      strategy.level, s0.error.dcovar))
+            end
             budget_left = maxfcn_eff - ncalls(cf)
             s_hesse = hesse(cf, s0, strategy;
-                             prec = prec, maxcalls = max(budget_left, 1))
+                             prec = prec, maxcalls = max(budget_left, 1),
+                             print_level = print_level)
             hessian_computed = true
             if !is_valid(s_hesse)
                 hesse_failed_flag = true
+                if print_level >= 1
+                    _trace_warn(print_level, "MnMigrad",
+                                "inner HESSE returned invalid state — terminating MIGRAD")
+                end
                 # Keep s0 as-is (C++ comment line 152: "Invalid Hessian - exit")
                 break
             end
             s0 = s_hesse
             new_edm_h = s0.edm
+            _trace_iter(print_level, "MnMigrad", -1, s0.parameters.fval,
+                        new_edm_h, s0.error.dcovar, ncalls(cf))
 
             # M6: snapshot the post-Hesse refined state too — it's a
             # genuine algorithmic step (not just a DFP iter) that the
@@ -828,6 +897,16 @@ function _migrad_loop(
     above_max = edm_corrected > 10 * edmval
 
     is_valid_final = !reached_limit && !above_max && !hesse_failed_flag && is_valid(final)
+
+    if print_level >= 1
+        status = is_valid_final ? "VALID" :
+                 (reached_limit ? "call-limit hit" :
+                  above_max ? "above-max-edm" :
+                  hesse_failed_flag ? "hesse-failed" : "INVALID")
+        _trace_info(print_level, "MnMigrad",
+                    @sprintf("done: %s  iters=%d  edm=%.6g  ncalls=%d",
+                             status, iter_dfp, final.edm, ncalls(cf)))
+    end
 
     return FunctionMinimum(
         final, seed, cf.up;

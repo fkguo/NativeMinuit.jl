@@ -169,6 +169,7 @@ function minos(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
+    print_level::Integer = 0,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -184,6 +185,16 @@ function minos(
     min_par_value = state.parameters.x[par_idx]
     par_idx_i = Int(par_idx)
 
+    # gap M1: per-direction headers mirror C++ MnMinos.cxx:105
+    # "Determination of upper/lower Minos error for parameter ...".
+    # Outer-guarded — minos is called per parameter, so we avoid the
+    # @sprintf String alloc per direction × per parameter at level 0.
+    if print_level >= 1
+        _trace_info(print_level, "MnMinos",
+                    @sprintf("Determination of upper error for par=%d (value=%.10g)",
+                              par_idx, min_par_value))
+    end
+
     # Upper direction (positive). Threads the optional `scratch` —
     # both upper + lower cross searches use the same inner_dim (n-1),
     # so they can pool one MigradScratch across all ~6-10 inner-MIGRAD
@@ -193,7 +204,8 @@ function minos(
                                 strategy = strategy, prec = prec,
                                 scratch = scratch,
                                 threaded_gradient = threaded_gradient,
-                                sigma = sigma)
+                                sigma = sigma,
+                                print_level = print_level)
     # 1-sigma external step (same as inside function_cross). NOTE: for
     # sigma=k, aopt at convergence ≈ k so `aopt · sigma_i` is the k-σ
     # error (P5).
@@ -216,6 +228,12 @@ function minos(
                                   n) : nothing
     nfcn_total = up_cross.nfcn
 
+    if print_level >= 1
+        _trace_info(print_level, "MnMinos",
+                    @sprintf("Determination of lower error for par=%d (value=%.10g)",
+                              par_idx, min_par_value))
+    end
+
     # Lower direction (negative). aopt comes out positive; flip sign.
     lo_cross = function_cross(fmin, cf, par_idx, -1.0;
                                 tlr = tlr,
@@ -223,13 +241,21 @@ function minos(
                                 strategy = strategy, prec = prec,
                                 scratch = scratch,
                                 threaded_gradient = threaded_gradient,
-                                sigma = sigma)
+                                sigma = sigma,
+                                print_level = print_level)
     lower = lo_cross.valid ? -lo_cross.aopt * sigma_i : 0.0
     lower_state = lo_cross.valid ?
         _assemble_crossing_state(lo_cross.state, par_idx_i,
                                   min_par_value - lo_cross.aopt * sigma_i,
                                   n) : nothing
     nfcn_total += lo_cross.nfcn
+
+    if print_level >= 1
+        valid_str = up_cross.valid && lo_cross.valid ? "VALID" : "PARTIAL"
+        _trace_info(print_level, "MnMinos",
+                    @sprintf("done par=%d  +%.6g  -%.6g  ncalls=%d  %s",
+                             par_idx, upper, -lower, nfcn_total, valid_str))
+    end
 
     return MinosError(
         par_idx_i,
@@ -281,6 +307,8 @@ that calls the single-parameter overload in turn. Mirrors C++
 """
 function minos(fmin::FunctionMinimum, cf::AbstractCostFunction; kwargs...)
     n = length(fmin.state.parameters)
+    # `print_level` (if present in kwargs) is plumbed through `kwargs...`
+    # to the single-parameter overload above.
     return [minos(fmin, cf, i; kwargs...) for i in 1:n]
 end
 

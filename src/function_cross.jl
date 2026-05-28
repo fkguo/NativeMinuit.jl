@@ -230,7 +230,8 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
                      tlr::Float64 = 0.1,
                      maxcalls::Integer = 1000,
                      prec::MachinePrecision = MachinePrecision(),
-                     up_scale::Float64 = 1.0) where {F<:Function}
+                     up_scale::Float64 = 1.0,
+                     print_level::Integer = 0) where {F<:Function}
     # P5: `up_scale` (= sigma² for the MnMinos `sigma=k` API) scales the
     # effective ErrorDef so the crossing aim becomes `fmin + up · sigma²`.
     # Mirrors iminuit's `_TemporaryUp(self._fcn, factor=sigma²)` wrapper
@@ -239,6 +240,18 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
     # the algorithm's relative convergence behavior is preserved.
     up_eff = up * up_scale
     aim = fmin_val + up_eff
+
+    # gap M1: header. The C++ analog is `print.Info(...)` calls at
+    # MnFunctionCross.cxx:108-122. Print `up_eff` (post-sigma-scale)
+    # so the trace reflects what the algorithm actually uses.
+    # Outer-guarded so the @sprintf only runs at level ≥ 1 (this is
+    # called per MINOS direction; avoiding even one alloc per direction
+    # keeps level=0 a clean no-op).
+    if print_level >= 1
+        _trace_info(print_level, "MnFunctionCross",
+                    @sprintf("start: fmin=%.10g  up=%.4g  aim=%.10g  tlr=%.4g  maxcalls=%d",
+                              fmin_val, up_eff, aim, tlr, maxcalls))
+    end
 
     # **Crossing convergence tolerances are HARDCODED 0.01** per C++
     # MnFunctionCross.cxx:38-40 (the user-supplied `tlr` is repurposed
@@ -270,6 +283,14 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
     # ── Probe 1: α = aopt_seed (C++ "min1" / our seed-1 MIGRAD) ────────
     min1, nf1 = _probe(aopt_seed, maxcalls - nfcn)
     nfcn += nf1
+    # gap M1: outer-guarded — without this the @sprintf fires per probe
+    # at level 0. MINOS triggers `function_cross` 2× per parameter
+    # which translates to 4-20+ probes for a typical fit.
+    if print_level >= 2
+        _trace_info(print_level, "MnFunctionCross",
+                    @sprintf("probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s",
+                              ipt + 1, aopt_seed, fval(min1), min1.is_valid))
+    end
     fval(min1) < fmin_val - tlf &&
         return MnCross(min1.state, NaN, nfcn; valid=false, new_min=true)
     min1.reached_call_limit &&
@@ -297,6 +318,11 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
         aopt = a[1] + 0.2 * l300_step_count
         m, nf = _probe(aopt, maxcalls - nfcn)
         nfcn += nf
+        if print_level >= 2
+            _trace_info(print_level, "MnFunctionCross",
+                        @sprintf("L300 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s",
+                                  ipt + 1, aopt, fval(m), m.is_valid))
+        end
         fval(m) < fmin_val - tlf &&
             return MnCross(m.state, NaN, nfcn; valid=false, new_min=true)
         m.reached_call_limit &&
@@ -330,6 +356,11 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
 
     m, nf = _probe(aopt, maxcalls - nfcn)
     nfcn += nf
+    if print_level >= 2
+        _trace_info(print_level, "MnFunctionCross",
+                    @sprintf("L460 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s",
+                              ipt + 1, aopt, fval(m), m.is_valid))
+    end
     fval(m) < fmin_val - tlf &&
         return MnCross(m.state, NaN, nfcn; valid=false, new_min=true)
     m.reached_call_limit &&
@@ -420,6 +451,11 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
         # Probe at new aopt (C++ lines 481-487)
         m, nf = _probe(aopt_new, maxcalls - nfcn)
         nfcn += nf
+        if print_level >= 2
+            _trace_info(print_level, "MnFunctionCross",
+                        @sprintf("L500 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s",
+                                  ipt + 1, aopt_new, fval(m), m.is_valid))
+        end
         fval(m) < fmin_val - tlf &&
             return MnCross(m.state, NaN, nfcn; valid=false, new_min=true)
         m.reached_call_limit &&
@@ -434,6 +470,10 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
         last_min = m
     end
 
+    if print_level >= 1
+        _trace_warn(print_level, "MnFunctionCross",
+                    @sprintf("did not converge in %d iters", maxitr))
+    end
     return MnCross(state_fallback, NaN, nfcn; valid=false)
 end
 
@@ -723,6 +763,7 @@ function _migrad_with_multi_fixed(
     warm_state::Union{Nothing,MinimumState} = nothing,
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
+    print_level::Integer = 0,
 )
     n = length(state.parameters)
     is_fixed = falses(n)
@@ -781,7 +822,8 @@ function _migrad_with_multi_fixed(
                                 tol = tol, maxfcn = Int(maxcalls),
                                 strategy = inner_strategy, prec = prec,
                                 scratch = scratch,
-                                threaded_gradient = threaded_gradient)
+                                threaded_gradient = threaded_gradient,
+                                print_level = print_level)
             return inner_min, ncalls(cf_fixed)
         end
     end
@@ -805,7 +847,8 @@ function _migrad_with_multi_fixed(
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec,
                         scratch = scratch,
-                        threaded_gradient = threaded_gradient)
+                        threaded_gradient = threaded_gradient,
+                        print_level = print_level)
     return inner_min, ncalls(cf_fixed)
 end
 
@@ -822,6 +865,7 @@ function function_cross_multi(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
+    print_level::Integer = 0,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -880,7 +924,8 @@ function function_cross_multi(
                 prec = prec, strategy = strategy,
                 warm_state = warm_state_ref[],
                 scratch = scratch_holder[],
-                threaded_gradient = threaded_gradient)
+                threaded_gradient = threaded_gradient,
+                print_level = print_level)
             # On successful inner-MIGRAD, update the warm state for the
             # next probe. On failure keep the previous valid warm state
             # (or `nothing` for the cold first probe).
@@ -892,7 +937,8 @@ function function_cross_multi(
         return _cross_core(probe, fmin_val, up, state;
                             tlr = Float64(tlr),
                             maxcalls = maxcalls, prec = prec,
-                            up_scale = Float64(sigma)^2)
+                            up_scale = Float64(sigma)^2,
+                            print_level = print_level)
     end
 end
 
@@ -908,6 +954,7 @@ function _migrad_with_fixed(
     warm_state::Union{Nothing,MinimumState} = nothing,
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
+    print_level::Integer = 0,
 )
     n = length(state.parameters)
     cf_fixed = _fix_one_param(cf, i, v, n)
@@ -929,7 +976,8 @@ function _migrad_with_fixed(
                                 tol = tol, maxfcn = Int(maxcalls),
                                 strategy = inner_strategy, prec = prec,
                                 scratch = scratch,
-                                threaded_gradient = threaded_gradient)
+                                threaded_gradient = threaded_gradient,
+                                print_level = print_level)
             return inner_min, ncalls(cf_fixed)
         end
     end
@@ -961,7 +1009,8 @@ function _migrad_with_fixed(
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec,
                         scratch = scratch,
-                        threaded_gradient = threaded_gradient)
+                        threaded_gradient = threaded_gradient,
+                        print_level = print_level)
     return inner_min, ncalls(cf_fixed)
 end
 
@@ -1024,6 +1073,7 @@ function function_cross(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
+    print_level::Integer = 0,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -1062,7 +1112,8 @@ function function_cross(
                                 prec = prec, strategy = strategy,
                                 warm_state = warm_state_ref[],
                                 scratch = scratch_holder[],
-                                threaded_gradient = threaded_gradient)
+                                threaded_gradient = threaded_gradient,
+                                print_level = print_level)
             if inner_min.is_valid
                 warm_state_ref[] = inner_min.state
             end
@@ -1071,7 +1122,8 @@ function function_cross(
         return _cross_core(probe, fmin_val, up, state;
                             tlr = Float64(tlr),
                             maxcalls = maxcalls, prec = prec,
-                            up_scale = Float64(sigma)^2)
+                            up_scale = Float64(sigma)^2,
+                            print_level = print_level)
     end
 end
 
@@ -1128,6 +1180,7 @@ function function_cross_external(
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
+    print_level::Integer = 0,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -1269,7 +1322,8 @@ function function_cross_external(
             inner_bfm = migrad(cf, inner_params;
                                 tol = 0.5 * tlr, maxfcn = Int(budget),
                                 strategy = inner_strategy, prec = prec,
-                                threaded_gradient = threaded_gradient)
+                                threaded_gradient = threaded_gradient,
+                                print_level = print_level)
             # M4: snapshot the converged ext values so the caller can
             # publish them on `MinosError.{upper,lower}_state`. Only
             # update when the inner MIGRAD reached a valid minimum —
@@ -1286,7 +1340,8 @@ function function_cross_external(
         result = _cross_core(probe, fmin_val, up, bfm.internal.state;
                               tlr = Float64(tlr),
                               maxcalls = maxcalls, prec = prec,
-                              up_scale = Float64(sigma)^2)
+                              up_scale = Float64(sigma)^2,
+                              print_level = print_level)
         # Round-4 codex BLOCKING fix: the probe clamps ext_val when
         # aopt > aulim, but `_cross_core` still records the UNCLAMPED
         # aopt. If the inner-fval at the clamped bound happens to be

@@ -307,6 +307,7 @@ function migrad(
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
     verify_threading::Bool = threaded_gradient,
+    print_level::Integer = 0,
 )
     n_total = n_pars(params)
     n_active = n_free(params)
@@ -326,7 +327,8 @@ function migrad(
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
                        prec = prec,
                        threaded_gradient = threaded_gradient,
-                       verify_threading = verify_threading)
+                       verify_threading = verify_threading,
+                       print_level = print_level)
 
     # ── Convert internal results back to external ────────────────
     ext_values, ext_errors_vec, ext_cov_mat =
@@ -365,6 +367,7 @@ function migrad(
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
+    print_level::Integer = 0,
 )
     n_total = n_pars(params)
     n_active = n_free(params)
@@ -383,7 +386,8 @@ function migrad(
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
                        prec = prec,
                        threaded_gradient = threaded_gradient,
-                       verify_threading = verify_threading)
+                       verify_threading = verify_threading,
+                       print_level = print_level)
 
     ext_values, ext_errors_vec, ext_cov_mat =
         _internal_to_external_results(fmin_int, params, cf.up)
