@@ -955,6 +955,7 @@ function _migrad_with_fixed(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     print_level::Integer = 0,
+    other_param_seed::Union{Nothing,AbstractVector{<:Real}} = nothing,
 )
     n = length(state.parameters)
     cf_fixed = _fix_one_param(cf, i, v, n)
@@ -982,19 +983,70 @@ function _migrad_with_fixed(
         end
     end
 
-    # COLD PATH: seed from the outer-minimum x (parameter i removed),
-    # with per-coord errors derived from the outer inv_hessian.
-    # C++ MnUserParameterState constructs free-parameter errors as
-    # sqrt(2·up·V[i,i]) (reference/Minuit2_cpp/src/MnUserParameterState.cxx
-    # :151-154).
+    # COLD PATH: seed the inner MIGRAD from a length-(n-1) starting
+    # vector. Three-way priority (codex round-1 MEDIUM — "or cold-
+    # fallback from the last warm position"; this is the JuMinuit-local
+    # interpretation, NOT a literal C++ reproduction):
+    #
+    #   1. If `warm_state` is supplied (probe 2..N path where
+    #      `warm_restart_state` failed — negative g2, edm refinement
+    #      diverged, etc.): use the LAST VALID converged x. This is
+    #      JuMinuit's analog to C++'s single-MnMigrad-instance
+    #      pattern: when JuMinuit's pre-MIGRAD g2 hygiene check
+    #      bails, we salvage the previous probe's converged position
+    #      (rebuild g2/hessian from scratch, keep x) rather than
+    #      re-applying the α=1 pre-shift OR snapping back to x_min.
+    #      Note: this is NOT literal C++ behavior — C++ MnFunctionCross
+    #      aborts the cross-search on `!min1.IsValid()` (line 225-226)
+    #      and does not retry. JuMinuit's `warm_restart_state` is a
+    #      finer-grained hygiene check (g2 sign + edm) than C++'s
+    #      MnMigrad-level IsValid; cold-restarting from the prior x
+    #      with fresh g2 is a reasonable middle ground that empirically
+    #      preserves convergence on side-basin-prone profiles.
+    #
+    #   2. Elif `other_param_seed` is supplied (probe 1, MnMinos
+    #      pre-shift from `minos.jl`): use it.
+    #
+    #   3. Else (probe 1, no pre-shift caller): outer-minimum x with
+    #      parameter `i` removed. Historical Phase-1 behavior.
+    #
+    # The pre-shift matters when the χ² profile along par_idx is
+    # strongly non-convex and the unshifted (other params at outer
+    # min) starting point sits on a steep wall: gradient descent
+    # from there can land the inner MIGRAD in a side basin, biasing
+    # subsequent warm-started probes and silently invalidating the
+    # MINOS crossing search. Mirrors C++ MnMinos.cxx:143-165 which
+    # SetValue's the other params to their 1σ-correlated guess
+    # before constructing MnFunctionCross.
     x_min = state.parameters.x
     y0 = Vector{Float64}(undef, n - 1)
-    @inbounds for k in 1:(i - 1)
-        y0[k] = x_min[k]
+    if warm_state !== nothing && length(warm_state) == n - 1
+        # Priority 1: cold-fallback from last warm position.
+        warm_x = warm_state.parameters.x
+        @inbounds for k in 1:(n - 1)
+            y0[k] = warm_x[k]
+        end
+    elseif other_param_seed !== nothing
+        # Priority 2: probe 1 with MnMinos pre-shift.
+        length(other_param_seed) == n - 1 ||
+            throw(DimensionMismatch(
+                "other_param_seed length $(length(other_param_seed)) != n-1 = $(n-1)"))
+        @inbounds for k in 1:(n - 1)
+            y0[k] = Float64(other_param_seed[k])
+        end
+    else
+        # Priority 3: probe 1 unshifted.
+        @inbounds for k in 1:(i - 1)
+            y0[k] = x_min[k]
+        end
+        @inbounds for k in (i + 1):n
+            y0[k - 1] = x_min[k]
+        end
     end
-    @inbounds for k in (i + 1):n
-        y0[k - 1] = x_min[k]
-    end
+    # Per-coord errors derived from the outer inv_hessian. C++
+    # MnUserParameterState constructs free-parameter errors as
+    # sqrt(2·up·V[i,i]) (reference/Minuit2_cpp/src/MnUserParameterState.cxx
+    # :151-154).
     errs = Vector{Float64}(undef, n - 1)
     V = state.error.inv_hessian
     scale = 2.0 * cf.up
@@ -1005,13 +1057,60 @@ function _migrad_with_fixed(
         errs[k - 1] = sqrt(max(scale * V[k, k], prec.eps2))
     end
 
+    # Inner MIGRAD initial covariance: extract the (n-1)×(n-1) block
+    # of the outer V with row/col `i` removed, pass as `prior_cov` so
+    # the inner DFP starts with the OUTER's correlation structure
+    # rather than the diagonal-from-errs default. Mirrors C++ MnMigrad's
+    # single-instance pattern (MnFunctionCross.cxx:106) which constructs
+    # MnMigrad from the outer MnUserParameterState's full covariance and
+    # reuses it across all probes. Without this, the inner DFP must
+    # rebuild correlations from scratch in each probe → on strongly-
+    # correlated, non-convex profiles the inner MIGRAD can land in a
+    # side basin (X(3872) par[2] lower / par[3] lower pathology).
+    #
+    # The block-extracted V_outer[~i, ~i] is the MARGINAL covariance of
+    # the (n-1) free params; it equals the inverse of the SCHUR
+    # COMPLEMENT of the outer Hessian, NOT inv(H_oo). Near the minimum
+    # this is a strict upper bound on the constrained inv(H_oo) in PSD
+    # sense — conservative but informative; DFP refines from there.
+    inner_prior_cov = if state.error isa MinimumError && isa(V, AbstractMatrix)
+        _extract_minor_cov(V, i, n)
+    else
+        nothing
+    end
+
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec,
                         scratch = scratch,
                         threaded_gradient = threaded_gradient,
-                        print_level = print_level)
+                        print_level = print_level,
+                        prior_cov = inner_prior_cov)
     return inner_min, ncalls(cf_fixed)
+end
+
+"""
+    _extract_minor_cov(V, i, n) -> Matrix{Float64}
+
+Extract the (n-1)×(n-1) minor of `V` by removing row+column `i`. Helper
+for MnMinos inner-MIGRAD prior covariance seeding. Returns a `Matrix`
+(not a view) so the caller can pass it to `prior_cov=` without aliasing
+the outer Hessian.
+"""
+function _extract_minor_cov(V::AbstractMatrix, i::Int, n::Int)
+    n >= 2 || throw(ArgumentError("_extract_minor_cov needs n ≥ 2"))
+    1 <= i <= n || throw(ArgumentError("i $i out of bounds for n=$n"))
+    M = Matrix{Float64}(undef, n - 1, n - 1)
+    @inbounds for col in 1:n
+        col == i && continue
+        cc = col < i ? col : col - 1
+        for row in 1:n
+            row == i && continue
+            rr = row < i ? row : row - 1
+            M[rr, cc] = V[row, col]
+        end
+    end
+    return M
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1047,6 +1146,15 @@ constrained-minimum (other params re-optimized) satisfies
   to a single MnFunctionCross call; at sigma=k the returned `aopt`
   converges to ≈ k (in the parabolic approximation), so the caller's
   `aopt · σ_1` product is the k-σ error.
+- `other_param_seed::Union{Nothing,AbstractVector{<:Real}}=nothing` —
+  optional length-(n-1) starting vector for the inner MIGRAD on the
+  free parameters (par_idx removed). When provided, used as the COLD-
+  path seed of probe 1; consumed (i.e. cleared to `nothing` so later
+  probes get warm-state continuation, not the original α=1 seed).
+  Mirrors C++ MnMinos's pre-shift (MnMinos.cxx:143-165) — without it,
+  the inner MIGRAD on strongly-correlated, non-convex profiles can
+  descend into side basins. Caller (`minos.jl`) supplies the pre-
+  shifted seed; other callers (e.g. contours) leave it `nothing`.
 
 # Returns
 
@@ -1074,6 +1182,7 @@ function function_cross(
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
     print_level::Integer = 0,
+    other_param_seed::Union{Nothing,AbstractVector{<:Real}} = nothing,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -1083,6 +1192,9 @@ function function_cross(
         throw(ArgumentError("par_idx $par_idx out of bounds for n=$n"))
     n > 1 ||
         throw(ArgumentError("function_cross requires n > 1 (cannot fix the only parameter)"))
+    other_param_seed === nothing || length(other_param_seed) == n - 1 ||
+        throw(DimensionMismatch(
+            "other_param_seed length $(length(other_param_seed)) != n-1 = $(n-1)"))
 
     x_min = state.parameters.x
     fmin_val = state.parameters.fval
@@ -1099,11 +1211,20 @@ function function_cross(
     # warm STATE across probes, AND pins one MigradScratch (inner_dim
     # = n - 1, constant within this call). See function_cross_multi
     # above for the full Phase D rationale.
+    #
+    # `other_param_seed` is passed unchanged to every probe; it is
+    # consumed only in `_migrad_with_fixed`'s COLD path AND only when
+    # `warm_state` is `nothing` (i.e. probe 1). On probe 2..N, even
+    # if warm-restart fails, the cold-fallback uses `warm_state.x`
+    # (codex C++-faithful interpretation) — never the original α=1
+    # seed, so subsequent probes don't reset to the linear-tangent
+    # prediction once the inner MIGRAD has found the actual valley.
     warm_state_ref = Ref{Union{Nothing,MinimumState}}(nothing)
     scratch_holder = Ref{Union{Nothing,MigradScratch}}(scratch)
     let x_pivot = x_pivot, step = step,
         warm_state_ref = warm_state_ref,
-        scratch_holder = scratch_holder, n = n
+        scratch_holder = scratch_holder, n = n,
+        other_param_seed = other_param_seed
         probe = function (aopt::Float64, budget::Integer)
             v = x_pivot + aopt * step
             _get_scratch!(scratch_holder, n - 1)
@@ -1113,7 +1234,8 @@ function function_cross(
                                 warm_state = warm_state_ref[],
                                 scratch = scratch_holder[],
                                 threaded_gradient = threaded_gradient,
-                                print_level = print_level)
+                                print_level = print_level,
+                                other_param_seed = other_param_seed)
             if inner_min.is_valid
                 warm_state_ref[] = inner_min.state
             end
@@ -1168,6 +1290,19 @@ on the (possibly truncated) step; `aopt * step_ext = ext_error`.
 
 Sets `par_limit = true` when the 1σ step is fully truncated by the
 bound (no extrapolation possible).
+
+# Keyword arguments
+
+- `other_param_seed_ext::Union{Nothing,AbstractVector{<:Real}}=nothing`
+  — optional length-`n_total` (i.e., full-external-vector) starting
+  point for the inner MIGRAD's NON-scanned parameters on probe 1.
+  When provided, used as the cold seed of probe 1 only and then
+  consumed; subsequent probes seed each non-scanned slot from
+  `bfm.ext_values[i]` (the OUTER fit's converged value). Mirrors
+  C++ MnMinos.cxx:143-165 pre-shift, with the additional Int2ext +
+  EXT bound clamp required to keep doubly-bounded "other" parameters
+  inside their valid range. Caller (`_minos_external_via_function_cross`
+  in src/minuit.jl) computes the seed.
 """
 function function_cross_external(
     bfm,                # ::BoundedFunctionMinimum — typed at use site
@@ -1181,6 +1316,7 @@ function function_cross_external(
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
     print_level::Integer = 0,
+    other_param_seed_ext::Union{Nothing,AbstractVector{<:Real}} = nothing,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -1193,6 +1329,9 @@ function function_cross_external(
         throw(ArgumentError("Cannot run MINOS on fixed parameter $par_idx"))
     n_free(params) > 1 ||
         throw(ArgumentError("function_cross_external requires n_free > 1"))
+    other_param_seed_ext === nothing || length(other_param_seed_ext) == n_total ||
+        throw(DimensionMismatch(
+            "other_param_seed_ext length $(length(other_param_seed_ext)) != n_total = $n_total"))
 
     ext_min = bfm.ext_values[par_idx]
     ext_err = bfm.ext_errors[par_idx]
@@ -1266,6 +1405,43 @@ function function_cross_external(
     # valid, `last_ext_state[]` holds the converged ext snapshot.
     last_ext_state = Ref{Union{Nothing,Vector{Float64}}}(nothing)
 
+    # Consume-once pre-shift Ref. Mirrors function_cross's
+    # `pre_seed_ref` pattern (codex consume-once finding). C++ MnMinos
+    # sets the pre-shifted other-param values into `upar` ONCE before
+    # constructing MnFunctionCross; subsequent SetValue calls only
+    # touch the scanned param, so the OTHER params start at whatever
+    # MnMigrad left them on the previous probe.
+    #
+    # JuMinuit closes this in two stages:
+    #
+    # (a) Probe 1: consume the caller-supplied `other_param_seed_ext`
+    #     (the MnMinos pre-shift). Held in `pre_seed_ext_ref`, cleared
+    #     after probe 1.
+    #
+    # (b) Probes 2..N: seed each non-scanned slot from the PREVIOUS
+    #     probe's converged ext values, NOT from `bfm.ext_values[i]`
+    #     (the OUTER fit's converged value, which loses the side-
+    #     basin-avoidance that probe 1's pre-shift just earned us).
+    #     `prev_probe_ext_ref` holds the last successfully converged
+    #     inner ext vector; updated on every `inner_bfm.is_valid` probe
+    #     and consumed by the inner_params builder. Mirrors C++ MnMigrad
+    #     single-instance "OTHER params left where the previous probe
+    #     converged them" semantics. Without this, the side-basin
+    #     pathology re-emerges on probes 2..N even though probe 1 was
+    #     well-seeded.
+    #
+    # Note: this still rebuilds the INTERNAL Hessian estimate from
+    # scratch on each probe (DFP starts from diagonal `errs`). Full
+    # C++ parity would also thread the previous probe's converged
+    # internal covariance forward as `prior_cov` for the next
+    # bounded-migrad call — that requires extending the bounded
+    # `migrad` API to accept a warm internal state, tracked as a
+    # follow-up (see GAP_AUDIT).
+    pre_seed_ext_ref = Ref{Union{Nothing,Vector{Float64}}}(
+        other_param_seed_ext === nothing ? nothing :
+            Float64[Float64(other_param_seed_ext[i]) for i in 1:n_total])
+    prev_probe_ext_ref = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+
     # Build probe closure. At each alpha, set par to `ext_min + aopt *
     # step_ext` (clamped against the bound if aopt > aulim), copy ALL
     # other free params from the CONVERGED minimum (NOT the user seed
@@ -1278,7 +1454,9 @@ function function_cross_external(
         aulim = aulim, limset = limset,
         last_ext_state = last_ext_state,
         ext_values = bfm.ext_values,
-        inner_strategy = inner_strategy
+        inner_strategy = inner_strategy,
+        pre_seed_ext_ref = pre_seed_ext_ref,
+        prev_probe_ext_ref = prev_probe_ext_ref
         probe = function (aopt::Float64, budget::Integer)
             # aulim check: if alpha overshoots the bound, clamp and
             # mark limset. Round-3 BLOCKING fix.
@@ -1296,14 +1474,33 @@ function function_cross_external(
             if has_lower_limit(par)
                 ext_val = max(ext_val, par.lower)
             end
+            # Three-tier seed priority (C++ MnMigrad single-instance
+            # parity, see comment block above `pre_seed_ext_ref`):
+            #
+            #   1. Previous probe's converged ext (probes 2+): the
+            #      C++-faithful "OTHER params left where MnMigrad left
+            #      them" — preserves probe 1's basin choice forward.
+            #
+            #   2. `pre_seed_ext_ref` (probe 1): the MnMinos pre-shift
+            #      caller-supplied seed. Consumed after first use.
+            #
+            #   3. `bfm.ext_values[i]` (probe 1, no caller seed): the
+            #      OUTER fit's converged value. Historical behavior.
+            prev_ext = prev_probe_ext_ref[]
+            pre_shift = pre_seed_ext_ref[]
+            pre_seed_ext_ref[] = nothing
             inner_pars = MinuitParameter[]
             sizehint!(inner_pars, length(params.pars))
             for (i, p) in enumerate(params.pars)
-                # Start each non-scanned param from the CONVERGED ext
-                # value (bfm.ext_values[i]), not the user's original
-                # seed (p.value). Without this, the inner MIGRAD
-                # restarts from the user's initial guess every probe.
-                converged_v = ext_values[i]
+                converged_v = if i == par_idx
+                    ext_values[i]   # scanned slot — overridden below
+                elseif prev_ext !== nothing
+                    prev_ext[i]     # priority 1
+                elseif pre_shift !== nothing
+                    pre_shift[i]    # priority 2
+                else
+                    ext_values[i]   # priority 3
+                end
                 lo = isnan(p.lower) ? NaN : p.lower
                 hi = isnan(p.upper) ? NaN : p.upper
                 if i == par_idx
@@ -1324,6 +1521,12 @@ function function_cross_external(
                                 strategy = inner_strategy, prec = prec,
                                 threaded_gradient = threaded_gradient,
                                 print_level = print_level)
+            # Capture this probe's converged ext for the NEXT probe's
+            # seed (priority-1 above). Only update on valid probes —
+            # an invalid converged x would propagate the bad state.
+            if inner_bfm.internal.is_valid
+                prev_probe_ext_ref[] = copy(inner_bfm.ext_values)
+            end
             # M4: snapshot the converged ext values so the caller can
             # publish them on `MinosError.{upper,lower}_state`. Only
             # update when the inner MIGRAD reached a valid minimum —

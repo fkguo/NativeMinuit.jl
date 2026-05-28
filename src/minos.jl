@@ -152,6 +152,40 @@ Compute asymmetric ±σ errors for parameter `par_idx`. Mirrors
   `_TemporaryUp`). The returned `upper` / `lower` then correspond
   to the k-σ contour on the parameter.
 
+# C++ MnMinos algorithm reproduction (X(3872) follow-up)
+
+This function reproduces C++ `MnMinos::FindCrossValue`
+(`MnMinos.cxx:136-165`) including:
+
+1. **Linear-correlation pre-shift** of OTHER free parameters along the
+   inverse-Hessian direction before the first inner MIGRAD probe
+   (avoids gradient-descent into side basins on non-convex profiles).
+2. **Outer V → inner `prior_cov`**: the (n-1)×(n-1) minor of
+   `state.error.inv_hessian` (par_idx row/col removed) is passed to
+   the inner MIGRAD so the DFP starts with the OUTER's correlation
+   structure (mirrors C++ MnMigrad's single-instance covariance reuse).
+3. **Cold-fallback from `warm_state.x`** on subsequent probes when
+   `warm_restart_state` fails (negative g2 / edm regression) — the
+   inner DFP rebuilds g2 from scratch but keeps the converged position.
+4. **±σ_HESSE placeholder** on invalid sides (matches C++
+   `MinosError::Upper()` / `Lower()` at `MinosError.h:54`).
+
+# Known limitations
+
+- **Numerical-gradient inner MIGRAD on pathological profiles**: with
+  finite-difference gradients (`grad=` not supplied to `Minuit`),
+  some strongly-correlated non-convex fits (e.g. X(3872) `par[2]` /
+  `par[3]` lower) can converge the inner MIGRAD to the wrong (side)
+  basin even WITH pre-shift + `prior_cov`, returning the ±σ_HESSE
+  placeholder. iminuit's numerical-gradient inner MIGRAD finds the
+  same crossings via subtle line-search / step-size differences not
+  yet replicated here. Supplying analytical gradient (`grad=` AD)
+  closes this gap — see `BenchmarkExamples/X3872_dip/bench_full.jl`
+  for a worked example where jm_ad matches iminuit and jm_num does
+  not. Tracked as a follow-up: needs deeper investigation of
+  Numerical2P step heuristics or Simplex retry within the inner
+  cross-search.
+
 # Returns
 
 A [`MinosError`](@ref). Use `is_valid(e)` to check overall success.
@@ -170,6 +204,7 @@ function minos(
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
     print_level::Integer = 0,
+    pars::Union{Nothing,Parameters} = nothing,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -184,6 +219,102 @@ function minos(
     # (fMinParValue). Parallel-review #4 B2.
     min_par_value = state.parameters.x[par_idx]
     par_idx_i = Int(par_idx)
+
+    # 1-sigma external step (same as inside function_cross). NOTE: for
+    # sigma=k, aopt at convergence ≈ k so `aopt · sigma_i` is the k-σ
+    # error (P5).
+    sigma_i = sqrt(max(2.0 * cf.up * state.error.inv_hessian[par_idx, par_idx],
+                        prec.eps2))
+
+    # ── MnMinos linear-correlation pre-shift (C++ MnMinos.cxx:136-165) ──
+    # When scanning par_idx by 1σ in direction `dir`, the linearized
+    # χ² predicts that the OTHER free parameters shift by
+    #     Δx_k = dir · σ_par_idx · V[par_idx, k] / V[par_idx, par_idx]
+    # where V = state.error.inv_hessian. Verified algebraically:
+    # `C++ xunit · m[ind,k] = sqrt(up/(2·V[ii,ii])) · 2·V[ik]
+    #                       = sigma_i · V[ik]/V[ii]` since
+    # `m = MinimumError::Matrix() = 2·V` (BasicMinimumError.h:104). The
+    # 2·up and 2× factors cancel in the ratio, so the JuMinuit formula
+    # in V (internal inv_hessian) is identical to the C++ one in m.
+    #
+    # When `pars !== nothing` and some "other" param has external
+    # bounds, we additionally do Int2ext → EXT clamp → Ext2int on the
+    # pre-shifted internal value. This mirrors C++ MnMinos.cxx:152-160
+    # (`Int2ext` + `min/max` against parameter limit + `SetValue`
+    # which round-trips back through Ext2int). Without this clamp a
+    # doubly-bounded "other" param with large cross-correlation can
+    # be pre-shifted past ±π/2 in internal coords and the next FCN
+    # evaluation aliases through `sin()`.
+    x_min = state.parameters.x
+    V = state.error.inv_hessian
+    Vii = V[par_idx, par_idx]
+    seed_upper = Vector{Float64}(undef, n - 1)
+    seed_lower = Vector{Float64}(undef, n - 1)
+    if isfinite(Vii) && Vii > 0
+        # Sin-transform saturation limits for doubly-bounded params
+        # (review v2 IMPORTANT B — aliasing pre-clamp). Mirrors
+        # `sin_ext2int` (src/transform.jl:62-64): the valid internal
+        # range for BothBounds is `[-π/2 + 8√eps2, π/2 - 8√eps2]`;
+        # outside this range `sin()` aliases and an `int2ext +
+        # EXT-clamp + ext2int` round-trip lands on the wrong asin
+        # branch (silently, when the aliased EXT happens to stay
+        # inside the user's bounds). Pre-clamping INT to this range
+        # BEFORE the EXT round-trip eliminates the aliasing pathology
+        # while preserving the saturation semantics of the
+        # full-precision `sin_ext2int` path.
+        piby2 = 2.0 * atan(1.0)
+        distnn_int = 8.0 * sqrt(prec.eps2)
+        vlimhi_int = piby2 - distnn_int
+        vlimlo_int = -piby2 + distnn_int
+        @inbounds for k in 1:n
+            k == par_idx && continue
+            shift = sigma_i * (V[par_idx, k] / Vii)
+            j = k < par_idx ? k : k - 1
+            su = x_min[k] + shift     # dir = +1, raw INT shift
+            sl = x_min[k] - shift     # dir = -1, raw INT shift
+            if pars !== nothing
+                # Mixed case (caller from src/minuit.jl::minos!): the
+                # internal index k corresponds to ext_of_int[k]. Map
+                # to ext, clamp, map back to int.
+                ext_idx = pars.ext_of_int[k]
+                p_ext = pars.pars[ext_idx]
+                if has_limits(p_ext)
+                    kind = bound_kind(p_ext)
+                    # For BothBounds (sin transform), saturate INT to
+                    # the valid range BEFORE Int2ext to avoid sin()
+                    # aliasing on large pre-shifts.
+                    if kind == BothBounds
+                        su = clamp(su, vlimlo_int, vlimhi_int)
+                        sl = clamp(sl, vlimlo_int, vlimhi_int)
+                    end
+                    su_ext = int2ext(kind, su, p_ext.lower, p_ext.upper)
+                    sl_ext = int2ext(kind, sl, p_ext.lower, p_ext.upper)
+                    if has_upper_limit(p_ext)
+                        su_ext = min(su_ext, p_ext.upper)
+                        sl_ext = min(sl_ext, p_ext.upper)
+                    end
+                    if has_lower_limit(p_ext)
+                        su_ext = max(su_ext, p_ext.lower)
+                        sl_ext = max(sl_ext, p_ext.lower)
+                    end
+                    su = ext2int(kind, su_ext, p_ext.lower, p_ext.upper, prec)
+                    sl = ext2int(kind, sl_ext, p_ext.lower, p_ext.upper, prec)
+                end
+            end
+            seed_upper[j] = su
+            seed_lower[j] = sl
+        end
+    else
+        # Degenerate HESSE (Vii ≤ 0 or NaN) — fall back to unshifted
+        # seed; function_cross will likely fail too but the failure
+        # mode matches the pre-fix behavior.
+        @inbounds for k in 1:n
+            k == par_idx && continue
+            j = k < par_idx ? k : k - 1
+            seed_upper[j] = x_min[k]
+            seed_lower[j] = x_min[k]
+        end
+    end
 
     # gap M1: per-direction headers mirror C++ MnMinos.cxx:105
     # "Determination of upper/lower Minos error for parameter ...".
@@ -205,20 +336,18 @@ function minos(
                                 scratch = scratch,
                                 threaded_gradient = threaded_gradient,
                                 sigma = sigma,
-                                print_level = print_level)
-    # 1-sigma external step (same as inside function_cross). NOTE: for
-    # sigma=k, aopt at convergence ≈ k so `aopt · sigma_i` is the k-σ
-    # error (P5).
-    sigma_i = sqrt(max(2.0 * cf.up * state.error.inv_hessian[par_idx, par_idx],
-                        prec.eps2))
-    # Invalid-side encoding: 0.0 (NOT NaN), avoiding NaN propagation
-    # in downstream code that gates on `e.upper > threshold`. The
-    # bounded MINOS path (in src/minuit.jl) publishes the actual
-    # bound_distance when `par_limit=true` and 0.0 only for non-bound
-    # failure modes — unbounded fits have no `par_limit` so they
-    # consistently fall into the 0.0 branch here. Round-3 I-2 (Opus);
-    # bounded behavior refined in round-6.
-    upper = up_cross.valid ? up_cross.aopt * sigma_i : 0.0
+                                print_level = print_level,
+                                other_param_seed = seed_upper)
+    # Invalid-side encoding: ±σ_HESSE placeholder, matching C++
+    # MinosError::Upper/Lower (MinosError.h:54) which return
+    # `±State().Error(Parameter())` when the crossing search did not
+    # converge. iminuit propagates this through `m.merrors[name].upper`
+    # / `.lower`, so JuMinuit's UX is now numerically interchangeable
+    # with iminuit's published values regardless of `_valid` flags.
+    # Consumers MUST gate on `e.upper_valid`/`e.lower_valid` to
+    # distinguish a real crossing from the placeholder — sign and
+    # magnitude alone don't.
+    upper = up_cross.valid ? up_cross.aopt * sigma_i : sigma_i
     # M4: full parameter snapshot at the upper ±σ crossing. The inner
     # state has dimension n-1 (par_idx removed); reinsert par_idx at
     # its slot with value `min_par_value + aopt · sigma_i`.
@@ -242,8 +371,9 @@ function minos(
                                 scratch = scratch,
                                 threaded_gradient = threaded_gradient,
                                 sigma = sigma,
-                                print_level = print_level)
-    lower = lo_cross.valid ? -lo_cross.aopt * sigma_i : 0.0
+                                print_level = print_level,
+                                other_param_seed = seed_lower)
+    lower = lo_cross.valid ? -lo_cross.aopt * sigma_i : -sigma_i
     lower_state = lo_cross.valid ?
         _assemble_crossing_state(lo_cross.state, par_idx_i,
                                   min_par_value - lo_cross.aopt * sigma_i,
