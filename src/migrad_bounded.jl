@@ -307,6 +307,7 @@ function migrad(
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
     verify_threading::Bool = threaded_gradient,
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
     print_level::Integer = 0,
 )
     n_total = n_pars(params)
@@ -322,12 +323,16 @@ function migrad(
     # Wrap the user FCN to accept internal coords
     cf_internal = _wrap_fcn_internal_to_external(cf, params)
 
-    # Run internal MIGRAD
+    # Run internal MIGRAD. `prior_cov` (when supplied) is already in
+    # INTERNAL coordinates — callers (e.g. `migrad!` retry loop) extract
+    # it from a prior `bfm.internal.state.error.inv_hessian`, which the
+    # internal MIGRAD produced. No further coordinate transform needed.
     fmin_int = migrad(cf_internal, int_vals, int_errs;
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
                        prec = prec,
                        threaded_gradient = threaded_gradient,
                        verify_threading = verify_threading,
+                       prior_cov = prior_cov,
                        print_level = print_level)
 
     # ── Convert internal results back to external ────────────────
@@ -367,6 +372,7 @@ function migrad(
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
     print_level::Integer = 0,
 )
     n_total = n_pars(params)
@@ -381,12 +387,14 @@ function migrad(
 
     # Internal MIGRAD dispatches to the CFwG path → uses analytical gradient.
     # threaded_gradient + verify_threading are no-ops for AD path but
-    # accepted for API symmetry.
+    # accepted for API symmetry. `prior_cov` is in INTERNAL coordinates
+    # (see plain-CF overload comment above).
     fmin_int = migrad(cf_internal_grad, int_vals, int_errs;
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
                        prec = prec,
                        threaded_gradient = threaded_gradient,
                        verify_threading = verify_threading,
+                       prior_cov = prior_cov,
                        print_level = print_level)
 
     ext_values, ext_errors_vec, ext_cov_mat =
