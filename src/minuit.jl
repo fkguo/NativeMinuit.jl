@@ -327,61 +327,180 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    migrad!(m::Minuit; strategy=m.strategy, tol=m.tol, maxfcn=nothing) -> Minuit
+    migrad!(m::Minuit; strategy=m.strategy, tol=m.tol, maxfcn=nothing,
+                       iterate=5, use_simplex=true,
+                       threaded_gradient=m.threaded_gradient,
+                       verify_threading=m.verify_threading,
+                       print_level=m.print_level) -> Minuit
 
-Run MIGRAD on `m`. Updates `m.fmin`. Returns `m` for chaining.
-If the constructor was given `grad=...`, dispatches into the
-analytical-gradient path. `strategy` and `tol` default to whatever
-the user stored on `m` (settable via `m.strategy = ...`, `m.tol = ...`
-or the constructor's `strategy`/`tol` kwargs).
+Run MIGRAD on `m` with iminuit-style robust retry. If pass 1 fails to
+validate (no-improvement / above-max-EDM exit, see C++
+`VariableMetricBuilder.cxx:278`) and the call limit hasn't been
+reached, retry up to `iterate-1` more passes. Each retry:
 
-If a prior `m.fmin` exists, the next MIGRAD starts from the previous
-converged point (iminuit-compatible implicit resume). Use
-[`reset`](@ref) (or `migrad(m; resume=false)`) to drop the prior fit
-and restart from the constructor's initial values. `m.params` itself
-is NEVER mutated — the carry-forward builds a fresh `Parameters` only
-for the duration of the inner MIGRAD call.
+- Upgrades to `Strategy(2)` regardless of the user request (iminuit
+  heuristic in `_robust_low_level_fit`).
+- Optionally runs a Nelder-Mead Simplex step from the failed point
+  before the next MIGRAD (`use_simplex=true`, the default).
+- Carries the failed fit's inverse Hessian as `prior_cov` to the next
+  MIGRAD seed (uses the M5 mechanism from PR #4, see
+  `reference/Minuit2_cpp/src/MnSeedGenerator.cxx:63-67` HasCovariance
+  branch).
+
+This helps in two distinct scenarios:
+
+1. The seed-time MnHesse pathology PR #6 fixes — retry now redundant
+   for these cases but harmless.
+2. Genuine multiple local minima in the user FCN (the common case in
+   multi-parameter HEP amplitude / phase-shift / LEC fits).
+
+`iterate=1` disables the retry loop and reproduces single-shot
+C++-faithful behavior.
+
+Updates `m.fmin`. Returns `m` for chaining. If the constructor was
+given `grad=...`, dispatches into the analytical-gradient path on
+every pass. `strategy` / `tol` / `print_level` / threading flags
+default to whatever the user stored on `m` (settable via
+`m.strategy = ...`, `m.tol = ...` or the constructor kwargs).
+
+If a prior `m.fmin` exists, pass 1 starts from the previous converged
+point (iminuit-compatible implicit resume). Use [`reset`](@ref) (or
+`migrad(m; resume=false)`) to drop the prior fit and restart from the
+constructor's initial values. `m.params` itself is NEVER mutated —
+the carry-forward builds a fresh `Parameters` only for the duration
+of the inner MIGRAD call.
 """
 function migrad!(m::Minuit;
                   strategy::Strategy = m.strategy,
                   tol::Real = m.tol,
                   maxfcn::Union{Integer,Nothing} = nothing,
+                  iterate::Integer = 5,
+                  use_simplex::Bool = true,
                   threaded_gradient::Bool = m.threaded_gradient,
                   verify_threading::Bool = m.verify_threading,
                   print_level::Integer = m.print_level)
-    # iminuit-style implicit resume: if we already converged once,
-    # build a temporary Parameters carrying those values forward. The
-    # user's m.params stays untouched so that `reset(m)` + migrad
-    # returns to the constructor's initial values (review BLOCKING #2).
+    # iminuit's `_robust_low_level_fit` requires iterate ≥ 1. iterate=1
+    # disables retry (only pass 1 runs) and reproduces single-shot
+    # C++-faithful behavior; iterate ≤ 0 would silently skip MIGRAD
+    # entirely, so reject it to surface the user mistake.
+    iterate >= 1 ||
+        throw(ArgumentError("iterate must be ≥ 1, got $iterate"))
+
+    # Pass 1: user's stored Strategy, no prior_cov. iminuit-style
+    # implicit resume: if we already converged once, carry the prior
+    # ext_values forward as the new starting point. m.params untouched
+    # (review BLOCKING #2 from the original `migrad!` review).
     params_to_use = m.fmin === nothing ? m.params : _build_resume_params(m)
-    if m.cfwg !== nothing
-        m.fmin = migrad(m.cfwg, params_to_use;
+    bfm = _migrad_into!(m, params_to_use;
                          strategy = strategy, tol = tol, maxfcn = maxfcn,
-                         prec = m.prec,
                          threaded_gradient = threaded_gradient,
                          verify_threading = verify_threading,
                          print_level = print_level)
-    else
-        m.fmin = migrad(m.fcn, params_to_use;
-                         strategy = strategy, tol = tol, maxfcn = maxfcn,
-                         prec = m.prec,
-                         threaded_gradient = threaded_gradient,
-                         verify_threading = verify_threading,
-                         print_level = print_level)
+
+    # Retry loop — iminuit `_robust_low_level_fit` parity. Each pass
+    # past the first:
+    #   1. Bumps Strategy to (2) regardless of the user's choice.
+    #   2. Optionally runs a Nelder-Mead Simplex step from the failed
+    #      point before MIGRAD (`use_simplex=true`, the default).
+    #   3. Carries the failed fit's inverse Hessian as `prior_cov` to
+    #      the next MIGRAD seed — but only when no intervening Simplex
+    #      step has invalidated it (Simplex leaves available=false,
+    #      so `_retry_prior_cov` returns `nothing` after one).
+    # Loop exits when the fit validates OR the call limit is exhausted
+    # (retrying with no budget left would just waste the budget on
+    # another forced abort).
+    for _pass in 2:Int(iterate)
+        (is_valid(bfm.internal) || bfm.internal.reached_call_limit) && break
+
+        params_next = _build_resume_params(m, bfm)
+        prior_cov = nothing
+        if use_simplex
+            # Simplex from the failed point. The result may have shifted
+            # into a different basin; we carry its ext_values forward as
+            # the next MIGRAD seed. We do NOT extract a prior_cov here —
+            # simplex never built an inverse Hessian (its MinimumError
+            # is the I placeholder with available=false), and
+            # `_retry_prior_cov(sx)` would return nothing in any case.
+            sx = simplex(m.fcn, params_next;
+                          maxfcn = maxfcn, prec = m.prec)
+            params_next = _build_resume_params(m, sx)
+        else
+            prior_cov = _retry_prior_cov(bfm)
+        end
+
+        bfm = _migrad_into!(m, params_next;
+                             strategy = Strategy(2), tol = tol,
+                             maxfcn = maxfcn,
+                             threaded_gradient = threaded_gradient,
+                             verify_threading = verify_threading,
+                             print_level = print_level,
+                             prior_cov = prior_cov)
     end
+
+    m.fmin = bfm
     return m
 end
 
-# Build a fresh `Parameters` with values carried forward from the last
-# converged fit. The user-original m.params is NOT mutated. Errors are
-# taken as `max(bfm.ext_errors[i], p_old.error)` — the post-MIGRAD
-# ext_error is usually a tighter estimate, but near a sin/sqrt bound
-# the C++ Int2extError formula can collapse to a value far smaller
-# than the natural scale, which would seed the next MIGRAD with steps
-# below the numerical-gradient threshold. The `max` floor with the
-# original step protects against this regression (review BLOCKING #1).
-function _build_resume_params(m::Minuit)
-    bfm = m.fmin
+# Dispatch the underlying `migrad(cf|cfwg, params; ...)` call. Used by
+# `migrad!` for both pass 1 and every retry pass, sharing the cfwg-vs-cf
+# branch in one place. Returns a fresh BoundedFunctionMinimum; the
+# caller (migrad! retry loop) decides whether the result is final or
+# just one intermediate pass. The bang reflects that the call mutates
+# m's shared cf.nfcn counter via the inner MIGRAD's FCN evaluations.
+function _migrad_into!(m::Minuit, params::Parameters;
+                        strategy::Strategy, tol::Real,
+                        maxfcn::Union{Integer,Nothing},
+                        threaded_gradient::Bool,
+                        verify_threading::Bool,
+                        print_level::Integer,
+                        prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing)
+    if m.cfwg !== nothing
+        return migrad(m.cfwg, params;
+                       strategy = strategy, tol = tol, maxfcn = maxfcn,
+                       prec = m.prec,
+                       threaded_gradient = threaded_gradient,
+                       verify_threading = verify_threading,
+                       prior_cov = prior_cov,
+                       print_level = print_level)
+    else
+        return migrad(m.fcn, params;
+                       strategy = strategy, tol = tol, maxfcn = maxfcn,
+                       prec = m.prec,
+                       threaded_gradient = threaded_gradient,
+                       verify_threading = verify_threading,
+                       prior_cov = prior_cov,
+                       print_level = print_level)
+    end
+end
+
+# Extract the inv_hessian from a failed BoundedFunctionMinimum for use
+# as `prior_cov` in the next MIGRAD pass — but ONLY when the prior fit
+# actually produced a usable covariance. Simplex leaves the placeholder
+# `MinimumError(I, ..., available=false)`; without this guard that
+# placeholder would silently leak in as a fake prior, killing the
+# retry's information transfer. The returned matrix is in INTERNAL
+# coordinates (which is what the bounded `migrad(cf, params;
+# prior_cov=...)` path expects — it feeds straight into
+# `seed_state(cf_internal, int_vals, int_errs; prior_cov=...)`).
+function _retry_prior_cov(bfm::BoundedFunctionMinimum)
+    err = bfm.internal.state.error
+    is_available(err) || return nothing
+    return err.inv_hessian
+end
+
+# Build a fresh `Parameters` with values carried forward from a given
+# `BoundedFunctionMinimum`. The user-original m.params is NOT mutated.
+# Errors are taken as `max(bfm.ext_errors[i], p_old.error)` — the
+# post-MIGRAD ext_error is usually a tighter estimate, but near a
+# sin/sqrt bound the C++ Int2extError formula can collapse to a value
+# far smaller than the natural scale, which would seed the next MIGRAD
+# with steps below the numerical-gradient threshold. The `max` floor
+# with the original step protects against this regression (review
+# BLOCKING #1). The two-arg form is used by the migrad! retry loop to
+# build the seed for each successive pass without first stowing the
+# intermediate BFM in `m.fmin`. The one-arg form is the implicit-resume
+# entrypoint used at the top of `migrad!`.
+function _build_resume_params(m::Minuit, bfm::BoundedFunctionMinimum)
     new_pars = Vector{MinuitParameter}(undef, n_pars(m.params))
     @inbounds for i in 1:n_pars(m.params)
         p_old = m.params.pars[i]
@@ -395,6 +514,8 @@ function _build_resume_params(m::Minuit)
     end
     return Parameters(new_pars, m.prec)
 end
+
+_build_resume_params(m::Minuit) = _build_resume_params(m, m.fmin)
 
 """
     minos!(m::Minuit, par; kwargs...) -> Minuit
@@ -1041,7 +1162,8 @@ end
 
 """
     migrad(m::Minuit; ncall=nothing, resume=true, precision=nothing,
-                       strategy=m.strategy, tol=m.tol) -> Minuit
+                       strategy=m.strategy, tol=m.tol,
+                       iterate=5, use_simplex=true) -> Minuit
 
 IMinuit.jl-compatible alias for [`migrad!`](@ref). Mutates `m.fmin`
 and returns `m`. The `ncall` / `resume` / `precision` kwargs are
@@ -1059,13 +1181,19 @@ accepted for IMinuit.jl interface parity:
 is `Strategy(0)` — faster than iminuit's `Strategy(1)`; if you want
 the iminuit-matching accuracy/cost trade pass `strategy=Strategy(1)`
 or set `m.strategy = Strategy(1)` once before the first migrad.
+
+`iterate` and `use_simplex` are threaded through to [`migrad!`](@ref)
+unchanged — see its docstring for the iminuit
+`_robust_low_level_fit`-parity retry loop they control.
 """
 function migrad(m::Minuit;
                  ncall::Union{Integer,Nothing} = nothing,
                  resume::Bool = true,
                  precision::Union{Real,Nothing} = nothing,
                  strategy::Strategy = m.strategy,
-                 tol::Real = m.tol)
+                 tol::Real = m.tol,
+                 iterate::Integer = 5,
+                 use_simplex::Bool = true)
     if !resume
         # Equivalent to IMinuit.jl `reset(m)`: drop any prior fmin/minos.
         m.fmin = nothing
@@ -1074,7 +1202,8 @@ function migrad(m::Minuit;
     if precision !== nothing
         m.prec = MachinePrecision(Float64(precision))
     end
-    return migrad!(m; strategy = strategy, tol = tol, maxfcn = ncall)
+    return migrad!(m; strategy = strategy, tol = tol, maxfcn = ncall,
+                       iterate = iterate, use_simplex = use_simplex)
 end
 
 """

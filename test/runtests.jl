@@ -33,6 +33,7 @@ using Test
     include("test_migrad_bounded.jl")
     include("test_minuit.jl")
     include("test_minuit_mutators.jl")
+    include("test_minuit_retry.jl")
     include("test_ad_gradient.jl")
     include("test_serialize.jl")
     include("test_contour_exact.jl")
