@@ -787,12 +787,35 @@ function minos!(m::Minuit, par::Integer;
                 threaded_gradient::Bool = m.threaded_gradient,
                 print_level::Integer = m.print_level,
                 kwargs...)
+    1 <= par <= n_pars(m.params) ||
+        throw(ArgumentError("par index $par out of bounds"))
+    # Fixed parameters carry no MINOS error — skip silently and return `m`
+    # so `minos!(m)` (all-params) and method chaining keep working.
+    is_fixed(m.params.pars[Int(par)]) && return m
+    m.minos_errors[Int(par)] = _minos_error(m, Int(par);
+                                              threaded_gradient = threaded_gradient,
+                                              print_level = print_level, kwargs...)
+    return m
+end
+
+# Internal: compute the asymmetric MinosError for ONE parameter WITHOUT
+# storing it on `m`. Shared choke point for `minos!` (which stores the
+# result), `minos_lower`, and `minos_upper`. Validates, translates the
+# iminuit / C++ MnMinos control-name kwargs to the internal
+# `function_cross` names, and dispatches to the bounded / unbounded path.
+function _minos_error(m::Minuit, par::Int;
+                       threaded_gradient::Bool = m.threaded_gradient,
+                       print_level::Integer = m.print_level,
+                       maxcall::Integer = 0,
+                       tol::Union{Real,Nothing} = nothing,
+                       toler::Union{Real,Nothing} = nothing,
+                       kwargs...)
     m.fmin === nothing &&
-        throw(ArgumentError("Call `migrad!(m)` before `minos!(m)`"))
-    # MINOS derives sigma_i = sqrt(2·up·V[i,i]) from the inverse
-    # Hessian, so it requires an actual covariance — not the
-    # identity placeholder that simplex / scan leave behind. Force
-    # the user to call hesse(m) first (review IMPORTANT #2 round-2).
+        throw(ArgumentError("Call `migrad!(m)` before MINOS"))
+    # MINOS derives sigma_i = sqrt(2·up·V[i,i]) from the inverse Hessian, so
+    # it requires an actual covariance — not the identity placeholder that
+    # simplex / scan leave behind. Force the user to call hesse(m) first
+    # (review IMPORTANT #2 round-2).
     JuMinuit.is_available(m.fmin.internal.state.error) ||
         throw(ArgumentError(
             "MINOS requires a covariance matrix. The last fit produced " *
@@ -801,8 +824,26 @@ function minos!(m::Minuit, par::Integer;
     1 <= par <= n_pars(m.params) ||
         throw(ArgumentError("par index $par out of bounds"))
     is_fixed(m.params.pars[par]) &&
-        return m  # skip fixed
-    p = m.params.pars[Int(par)]
+        throw(ArgumentError("MINOS is undefined for fixed parameter $par"))
+
+    # iminuit / C++ MnMinos control-name translation. `maxcall` (iminuit,
+    # singular) → internal `maxcalls`; `toler` (C++ MnMinos positional) and
+    # `tol` (iminuit kwarg) both → internal `tlr`. `maxcall=0` keeps the
+    # internal default budget (`maxcalls=1000`). Explicit internal-name
+    # kwargs (`maxcalls` / `tlr`) passed by power users win over the
+    # translation via the final merge.
+    fwd = NamedTuple()
+    if maxcall > 0
+        fwd = merge(fwd, (; maxcalls = Int(maxcall)))
+    end
+    if toler !== nothing
+        fwd = merge(fwd, (; tlr = Float64(toler)))
+    elseif tol !== nothing
+        fwd = merge(fwd, (; tlr = Float64(tol)))
+    end
+    fwd = merge(fwd, (; kwargs...))
+
+    p = m.params.pars[par]
     has_any_bound = has_limits(p) || has_lower_limit(p) || has_upper_limit(p)
     if has_any_bound
         # Bound-aware EXT-coord MINOS (mirrors C++ MnMinos.cxx:119-131
@@ -820,10 +861,10 @@ function minos!(m::Minuit, par::Integer;
         # this path historically used `m.fcn` unconditionally, silently
         # dropping the AD gradient for bounded MINOS.)
         ext_cf = m.cfwg === nothing ? m.fcn : m.cfwg
-        m.minos_errors[Int(par)] = _minos_external_via_function_cross(
-            m.fmin, ext_cf, Int(par);
+        return _minos_external_via_function_cross(
+            m.fmin, ext_cf, par;
             threaded_gradient = threaded_gradient,
-            print_level = print_level, kwargs...)
+            print_level = print_level, fwd...)
     else
         # Unbounded scanned parameter — search in the INTERNAL frame
         # (m.fmin.internal_cf takes internal coords; m.params.int_of_ext[par]
@@ -836,14 +877,12 @@ function minos!(m::Minuit, par::Integer;
         # the pre-shifted internal value stays inside the valid
         # transform range (±π/2 for doubly-bounded). Pass `pars=m.params`
         # so `minos()` has the bound information to do that clamp.
-        err = minos(m.fmin.internal, m.fmin.internal_cf,
-                    m.params.int_of_ext[par];
-                    pars = m.params,
-                    threaded_gradient = threaded_gradient,
-                    print_level = print_level, kwargs...)
-        m.minos_errors[Int(par)] = err
+        return minos(m.fmin.internal, m.fmin.internal_cf,
+                     m.params.int_of_ext[par];
+                     pars = m.params,
+                     threaded_gradient = threaded_gradient,
+                     print_level = print_level, fwd...)
     end
-    return m
 end
 
 # Helper: run upper + lower function_cross_external and assemble a
@@ -1053,6 +1092,44 @@ function minos!(m::Minuit; kwargs...)
     end
     return m
 end
+
+"""
+    minos_upper(m::Minuit, par; kwargs...) -> Float64
+    minos_lower(m::Minuit, par; kwargs...) -> Float64
+
+Return ONLY the upper (`minos_upper`, ≥ 0) or lower (`minos_lower`, ≤ 0)
+asymmetric MINOS error for parameter `par` (Integer index or String name).
+Mirror of C++ `MnMinos::Upper` / `MnMinos::Lower`
+(`reference/Minuit2_cpp/inc/Minuit2/MnMinos.h:50-58`).
+
+The sign convention matches [`MinosError`](@ref)`.upper` / `.lower`:
+`minos_upper` is one σ to the right (positive), `minos_lower` one σ to the
+left (negative). The returned value is identical to the corresponding side
+of a full [`minos!`](@ref)`(m, par)` (same `function_cross` machinery).
+
+Unlike `minos!`, these are **pure queries**: they do NOT mutate `m`
+(no `m.minos_errors` update), matching the C++ const accessors. The full
+asymmetric error is computed internally and the requested side returned —
+if you need both sides, prefer a single `minos!(m, par)`.
+
+Accepts the same control kwargs as `minos!`: `maxcall`, `tol` / `toler`,
+`sigma`, `strategy`, `print_level`.
+"""
+function minos_upper(m::Minuit, par::Integer; kwargs...)
+    return _minos_error(m, Int(par); kwargs...).upper
+end
+minos_upper(m::Minuit, par::AbstractString; kwargs...) =
+    minos_upper(m, ext_index(m.params, String(par)); kwargs...)
+minos_upper(m::Minuit, par::Symbol; kwargs...) =
+    minos_upper(m, String(par); kwargs...)
+
+function minos_lower(m::Minuit, par::Integer; kwargs...)
+    return _minos_error(m, Int(par); kwargs...).lower
+end
+minos_lower(m::Minuit, par::AbstractString; kwargs...) =
+    minos_lower(m, ext_index(m.params, String(par)); kwargs...)
+minos_lower(m::Minuit, par::Symbol; kwargs...) =
+    minos_lower(m, String(par); kwargs...)
 
 """
     contour(m::Minuit, par_x, par_y; npoints=20, bins=nothing, kwargs...) -> ContoursError
@@ -1799,11 +1876,12 @@ The `sigma` kwarg (confidence level in σ-units) is threaded through
 the MnFunctionCross `up · sigma²` scaling (P5 — see
 [`function_cross`](@ref) for details). At sigma=1 the behavior is
 C++-MnMinos-identical; at sigma=k the upper/lower errors correspond
-to the k-σ contour. `maxcall` is accepted for IMinuit.jl parity but
-currently unused.
+to the k-σ contour. `maxcall` (iminuit, singular) caps the FCN calls
+of each cross-search and `tol` / `toler` set the cross-search tolerance;
+both are forwarded to `function_cross` via `minos!`.
 """
 function minos(m::Minuit, var = nothing;
-                sigma::Real = 1, maxcall::Integer = 0, kwargs...)
+                sigma::Real = 1, kwargs...)
     sigma > 0 ||
         throw(ArgumentError("MINOS sigma must be positive, got $sigma"))
     if var === nothing
@@ -1814,7 +1892,7 @@ function minos(m::Minuit, var = nothing;
         return minos!(m, String(var); sigma = sigma, kwargs...)
     elseif var isa AbstractVector
         for v in var
-            minos(m, v; sigma = sigma, maxcall = maxcall, kwargs...)
+            minos(m, v; sigma = sigma, kwargs...)
         end
         return m
     else

@@ -466,3 +466,165 @@ function _hesse_diagonal_failure(state::MinimumState, g2::Vector{Float64},
     return MinimumState(state.parameters, err, state.gradient,
                         state.edm, nfcn)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Standalone HESSE from vectors — the FCN+params+errors C++ overload.
+#
+# Mirrors C++ `MnHesse::operator()(const FCNBase&, const std::vector<double>&
+# par, const std::vector<double>& err, unsigned int maxcalls)`
+# (reference/Minuit2_cpp/inc/Minuit2/MnHesse.h:57-74): compute a
+# Hessian/covariance at a *user-supplied point* WITHOUT a prior MIGRAD.
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    HesseResult
+
+Result of a standalone [`hesse`](@ref)`(f, x0, errors)` call. Exposes the
+covariance and errors computed at the supplied point.
+
+# Fields
+
+- `x::Vector{Float64}` — the point the Hessian was evaluated at.
+- `covariance::Matrix{Float64}` — the parameter covariance `2·up·V` where
+  `V = inv(H)` is the inverse Hessian (matches
+  [`covariance`](@ref)`(::FunctionMinimum)`; for χ² fits with `up=1` it is
+  `2·V`).
+- `errors::Vector{Float64}` — 1σ errors `sqrt(diag(covariance))`.
+- `edm::Float64` — expected distance to minimum at the point.
+- `nfcn::Int` — FCN calls consumed (seed gradient + Hessian passes).
+- `status::CovStatus` — covariance status (see [`CovStatus`](@ref)).
+- `valid::Bool` — `true` if the covariance is usable (`MnHesseValid` /
+  `MnMadePosDef`).
+- `state::MinimumState` — the full internal state, for advanced consumers
+  (raw `inv_hessian`, gradient, …).
+"""
+struct HesseResult
+    x::Vector{Float64}
+    covariance::Matrix{Float64}
+    errors::Vector{Float64}
+    edm::Float64
+    nfcn::Int
+    status::CovStatus
+    valid::Bool
+    state::MinimumState
+end
+
+function HesseResult(state::MinimumState, up::Real)
+    V = state.error.inv_hessian          # Symmetric{:U} inverse Hessian
+    n = size(V, 1)
+    factor = 2.0 * Float64(up)
+    cov = Matrix{Float64}(undef, n, n)
+    # Read symmetrically through the Symmetric view (not `parent`) so the
+    # lower triangle is mirrored, then scale by 2·up — same convention as
+    # `covariance(::FunctionMinimum)` (result.jl) and the int→ext path
+    # (`_internal_to_external_results`, migrad_bounded.jl:222).
+    @inbounds for j in 1:n, i in 1:n
+        cov[i, j] = factor * V[i, j]
+    end
+    errs = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        errs[i] = sqrt(max(cov[i, i], 0.0))
+    end
+    return HesseResult(copy(state.parameters.x), cov, errs, state.edm,
+                       state.nfcn, state.error.status, is_valid(state.error),
+                       state)
+end
+
+function Base.show(io::IO, r::HesseResult)
+    status_str = r.status == MnHesseValid ? "valid" :
+                 r.status == MnMadePosDef ? "made-pos-def" :
+                 r.status == MnHesseFailed ? "hesse-failed" :
+                 r.status == MnInvertFailed ? "invert-failed" : "not-pos-def"
+    print(io, "HesseResult(n=", length(r.x), ", errors=", r.errors,
+              ", status=", status_str, ", nfcn=", r.nfcn, ")")
+end
+
+"""
+    hesse(f, x0, errors; up=1.0, strategy=Strategy(1),
+          prec=MachinePrecision(), maxcalls=0, print_level=0) -> HesseResult
+
+Compute a full numerical Hessian (and the derived covariance + errors) for
+the FCN `f` at the point `x0`, using `errors` as the initial per-parameter
+step sizes. **No MIGRAD is run** — this is the standalone `MnHesse`, the
+C++ `MnHesse::operator()(FCNBase, par, err, maxcalls)` overload
+(`reference/Minuit2_cpp/inc/Minuit2/MnHesse.h:57-74`).
+
+The errors are computed at the **given point**, which need not be a
+minimum — that is the caller's responsibility. At a non-stationary point
+the Hessian is still well defined; `MnPosDef` enforcement may flip the
+status to `MnMadePosDef` if the curvature is not positive-definite there
+(e.g. a saddle).
+
+# Arguments
+
+- `f` — the user FCN; takes an `AbstractVector{Float64}`, returns a real.
+- `x0::AbstractVector{<:Real}` — the point to evaluate at.
+- `errors::AbstractVector{<:Real}` — initial step sizes (one per parameter),
+  the natural scale of each parameter; used to seed the central-difference
+  Hessian and refined internally.
+
+# Keyword arguments
+
+- `up::Real=1.0` — error definition (`1.0` for χ², `0.5` for NLL).
+- `strategy::Strategy=Strategy(1)` — HESSE refinement level.
+- `prec::MachinePrecision`, `maxcalls::Integer`, `print_level::Integer` —
+  forwarded to the internal Hessian pass (`maxcalls=0` ⇒ default budget).
+
+# Returns
+
+A [`HesseResult`](@ref) exposing `.covariance`, `.errors`, `.edm`,
+`.status`, and `.valid`.
+
+# Example
+
+```julia
+julia> r = hesse(x -> (x[1]-1)^2 + 4(x[2]-2)^2, [0.0, 0.0], [1.0, 1.0]);
+
+julia> r.covariance        # ≈ [1.0 0.0; 0.0 0.25]  (2·up·inv(H), H=diag(2,8))
+```
+"""
+function hesse(
+    f::F,
+    x0::AbstractVector{<:Real},
+    errors::AbstractVector{<:Real};
+    up::Real = 1.0,
+    strategy::Strategy = Strategy(1),
+    prec::MachinePrecision = MachinePrecision(),
+    maxcalls::Integer = 0,
+    print_level::Integer = 0,
+) where {F}
+    n = length(x0)
+    length(errors) == n ||
+        throw(DimensionMismatch("hesse: errors length $(length(errors)) != x0 length $n"))
+    cf = CostFunction(f, up)
+
+    # Build a seed MinimumState AT x0. Unlike `seed_state`, we deliberately
+    # do NOT run `negative_g2_line_search` (which would move the point) or
+    # the Strategy(2) seed-time Hesse bootstrap — the contract is "errors at
+    # the given point". Mirrors C++ MnHesse's user-state overload, which
+    # only computes the gradient before handing off to the core Hessian pass.
+    x = collect(Float64, x0)
+    dirin = collect(Float64, errors)
+    fval = cf(x)
+    par = MinimumParameters(x, dirin, fval)
+    grad = FunctionGradient(zeros(Float64, n), zeros(Float64, n),
+                             zeros(Float64, n))
+    initial_gradient!(grad, par, dirin, cf.up, prec)
+    x_work = Vector{Float64}(undef, n)
+    numerical_gradient!(grad, x_work, par, grad, cf, strategy, prec)
+
+    # Diagonal seed inverse-Hessian (C++ MnSeedGenerator.cxx:69-70). The
+    # internal hesse re-derives g2 from scratch via central differences, so
+    # this only seeds the starting step; a non-positive g2 here is harmless.
+    mat = zeros(Float64, n, n)
+    @inbounds for i in 1:n
+        mat[i, i] = abs(grad.g2[i]) > prec.eps2 ? 1.0 / grad.g2[i] : 1.0
+    end
+    err0 = MinimumError(Symmetric(mat, :U), 1.0)
+    edm0 = estimate_edm!(x_work, grad, err0)
+    seed = MinimumState(par, err0, grad, edm0, ncalls(cf))
+
+    final = hesse(cf, seed, strategy; prec = prec, maxcalls = maxcalls,
+                  print_level = print_level)
+    return HesseResult(final, cf.up)
+end

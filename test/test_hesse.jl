@@ -138,4 +138,61 @@
         # The x[1] residual is small (FCN at minimum should be ≈ 0 along x[1])
         @test fmin.state.parameters.fval < 1.0
     end
+
+    # ─────────────────────────────────────────────────────────────────
+    # Standalone HESSE from vectors — the FCN+params+errors C++ overload
+    # (MnHesse.h:57-74). Computes a covariance at a user-supplied point
+    # WITHOUT any prior MIGRAD.
+    # ─────────────────────────────────────────────────────────────────
+    @testset "Standalone hesse(f, x0, errors) — no prior MIGRAD" begin
+        # Diagonal χ²: f(x) = Σ aᵢ (xᵢ - cᵢ)². Hessian Hᵢᵢ = 2aᵢ,
+        # inverse Vᵢᵢ = 1/(2aᵢ), user covariance = 2·up·V = up/aᵢ (up=1).
+        a = [1.0, 4.0, 0.25]
+        c = [1.0, -2.0, 3.0]
+        f = x -> sum(a[i] * (x[i] - c[i])^2 for i in eachindex(x))
+        # Evaluate at a point that is NOT the minimum — errors at a given point.
+        x0 = [0.0, 0.0, 0.0]
+        r = hesse(f, x0, [0.5, 0.5, 0.5])
+        @test r isa HesseResult
+        @test r.valid
+        @test r.status == MnHesseValid
+        # Covariance ≈ diag(1/aᵢ); off-diagonal ≈ 0 (separable FCN).
+        for i in 1:3, j in 1:3
+            expected = i == j ? 1.0 / a[i] : 0.0
+            @test r.covariance[i, j] ≈ expected atol = 1e-5
+        end
+        @test r.errors ≈ sqrt.(1.0 ./ a) atol = 1e-5
+        # The point is unchanged (no minimization / no line search moved it).
+        @test r.x == x0
+        @test r.nfcn > 0
+    end
+
+    @testset "Standalone hesse — off-diagonal covariance" begin
+        # f(x) = xᵀ A x with A = [1 0.5; 0.5 1]. Hessian = 2A,
+        # user covariance = 2·up·inv(2A) = up·inv(A). For this A,
+        # inv(A) = [4/3 -2/3; -2/3 4/3] (det A = 0.75).
+        f = x -> x[1]^2 + x[1] * x[2] + x[2]^2
+        r = hesse(f, [0.3, -0.4], [0.2, 0.2]; up = 1.0)
+        @test r.valid
+        cov_expected = [4/3 -2/3; -2/3 4/3]   # up·inv(A), up = 1
+        for i in 1:2, j in 1:2
+            @test r.covariance[i, j] ≈ cov_expected[i, j] atol = 1e-4
+        end
+        # `errors` is the sqrt of the covariance diagonal.
+        @test r.errors[1] ≈ sqrt(cov_expected[1, 1]) atol = 1e-4
+    end
+
+    @testset "Standalone hesse — up scales covariance linearly" begin
+        # f(x) = (x - 1)². H = 2, V = 0.5, covariance = 2·up·0.5 = up.
+        f = x -> (x[1] - 1.0)^2
+        r1  = hesse(f, [0.0], [0.3]; up = 1.0)
+        r05 = hesse(f, [0.0], [0.3]; up = 0.5)
+        @test r1.covariance[1, 1] ≈ 1.0 atol = 1e-5
+        @test r05.covariance[1, 1] ≈ 0.5 atol = 1e-5
+    end
+
+    @testset "Standalone hesse — dimension mismatch throws" begin
+        @test_throws DimensionMismatch hesse(x -> sum(abs2, x), [0.0, 0.0],
+                                              [0.1])
+    end
 end

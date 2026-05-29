@@ -441,4 +441,78 @@
         # at least the upper side).
         @test e.upper_valid || e.lower_valid
     end
+
+    # ─────────────────────────────────────────────────────────────────
+    # Single-side MINOS (C++ MnMinos::Upper / ::Lower, MnMinos.h:50-58)
+    # ─────────────────────────────────────────────────────────────────
+    @testset "minos_upper / minos_lower match the full minos! sides" begin
+        f = x -> (x[1] - 1.0)^2 + (x[2] + 2.0)^2
+        m = Minuit(f, [0.0, 0.0]; error = [0.1, 0.1], name = ["a", "b"])
+        migrad!(m)
+        hesse(m)
+        minos!(m, 1)
+        e = m.minos_errors[1]
+        # Single-side queries use the same function_cross machinery, so the
+        # values are identical (m is unchanged between calls → deterministic).
+        @test minos_upper(m, 1) ≈ e.upper atol = 1e-8
+        @test minos_lower(m, 1) ≈ e.lower atol = 1e-8
+        # Sign convention.
+        @test minos_upper(m, 1) >= 0
+        @test minos_lower(m, 1) <= 0
+        # Name-based access.
+        @test minos_upper(m, "a") ≈ e.upper atol = 1e-8
+        @test minos_lower(m, "a") ≈ e.lower atol = 1e-8
+        # Pure query: does NOT populate m.minos_errors for a NEW parameter.
+        @test !haskey(m.minos_errors, 2)
+        minos_upper(m, 2)
+        @test !haskey(m.minos_errors, 2)
+    end
+
+    @testset "minos! maxcall caps FCN calls (was accepted-but-ignored)" begin
+        f = x -> (x[1] - 1.0)^2 + (x[2] + 2.0)^2
+        mk() = begin
+            m = Minuit(f, [0.0, 0.0]; error = [0.1, 0.1])
+            migrad!(m)
+            hesse(m)
+            m
+        end
+        m_capped = mk()
+        minos!(m_capped, 1; maxcall = 3)
+        e_capped = m_capped.minos_errors[1]
+        m_full = mk()
+        minos!(m_full, 1)
+        e_full = m_full.minos_errors[1]
+        # Pre-fix the `maxcall` kwarg was accepted but never forwarded, so a
+        # `maxcall=3` request used the default 1000-call budget and converged
+        # without ever hitting the budget. With the cap wired, the tiny
+        # budget bounds the search → fcn_limit flagged; the full-budget run
+        # on the same FCN converges cleanly WITHOUT hitting the limit. The
+        # contrast (capped hits limit, full does not) is the proof the cap
+        # is applied rather than ignored.
+        @test e_capped.upper_fcn_limit || e_capped.lower_fcn_limit
+        @test !(e_full.upper_fcn_limit || e_full.lower_fcn_limit)
+        @test e_capped.nfcn <= 30          # bounded — not a 1000-call search
+        @test is_valid(e_full)
+    end
+
+    @testset "minos! accepts tol / toler; minos(m,var) forwards maxcall" begin
+        f = x -> (x[1] - 1.0)^2 + (x[2] + 2.0)^2
+        m = Minuit(f, [0.0, 0.0]; error = [0.1, 0.1])
+        migrad!(m)
+        hesse(m)
+        # `toler` (C++ MnMinos name) and `tol` (iminuit name) are accepted
+        # and produce a valid result.
+        minos!(m, 1; toler = 0.05)
+        @test is_valid(m.minos_errors[1])
+        minos!(m, 1; tol = 0.2)
+        @test is_valid(m.minos_errors[1])
+        # The iminuit-style `minos(m, var; maxcall=...)` alias now forwards
+        # `maxcall` (previously swallowed by an unused explicit kwarg).
+        m2 = Minuit(f, [0.0, 0.0]; error = [0.1, 0.1])
+        migrad!(m2)
+        hesse(m2)
+        minos(m2, 1; maxcall = 3)
+        e2 = m2.minos_errors[1]
+        @test e2.upper_fcn_limit || e2.lower_fcn_limit
+    end
 end

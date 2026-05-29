@@ -89,9 +89,9 @@ export n_pars, n_free, ext_index
 export int_to_ext_value, ext_to_int_value, dint2ext_value
 export int_to_ext_vector, ext_to_int_vector
 export initial_int_values, initial_int_errors
-export hesse
+export hesse, HesseResult
 export squeeze_symmetric, squeeze_error
-export MnCross, MinosError, minos
+export MnCross, MinosError, minos, minos_lower, minos_upper
 export ContoursError, contour, contour_exact
 export function_cross_multi
 export BoundedFunctionMinimum, ext_errors, ext_covariance, free_covariance

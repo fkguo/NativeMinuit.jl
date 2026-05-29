@@ -392,15 +392,67 @@ first followed by `maxsteps` equally-spaced probes.
 If `low == high == 0`, defaults to ±2σ around the current parameter
 value (or the parameter limits if both are set). The scan does NOT
 minimize over other parameters — for that use [`mnprofile`](@ref).
+
+**Best-value retention (iminuit / C++ MnParameterScan semantics):** the scan
+runs around the CURRENT values (after a fit, the held parameters sit at
+`m.fmin`'s values, NOT the un-mutated constructor `m.params`), and as a side
+effect `m` is left at the lowest-fval grid point found (the central point is
+included in the comparison). So `m.values` / `m.fval` reflect the best grid
+point — with the other parameters' current values preserved — and a follow-up
+`migrad!`/`hesse` resumes from there. The covariance is NOT updated (scan
+computes no Hessian; `m.matrix` → `nothing`). The returned point-list is
+unchanged. To scan WITHOUT moving `m`, use [`profile`](@ref).
 """
 function scan(m::Minuit, par::Integer;
                 maxsteps::Integer = 41,
                 low::Real = 0.0, high::Real = 0.0)
-    return scan(m.fcn, m.params, Int(par);
-                 maxsteps = maxsteps, low = low, high = high)
+    base = _scan_base_params(m)
+    points = scan(m.fcn, base, Int(par);
+                  maxsteps = maxsteps, low = low, high = high)
+    _scan_retain_best!(m, base, Int(par), points)
+    return points
 end
 function scan(m::Minuit, par::AbstractString; kwargs...)
     return scan(m, ext_index(m.params, String(par)); kwargs...)
+end
+
+# The base Parameters a Minuit-level scan / profile operates on: the current
+# best-fit values when a fit exists (`m.fmin`), else the constructor
+# `m.params`. `m.params` is NOT mutated — this mirrors how migrad / simplex
+# leave the user's initial params intact and report current values via
+# `m.fmin`. Without this, a post-fit `scan` would scan around (and reset the
+# held params to) the stale constructor values, discarding the fit.
+_scan_base_params(m::Minuit) =
+    m.fmin === nothing ? m.params : _build_resume_params(m, m.fmin)
+
+# Leave `m` at the lowest-FINITE-fval grid point found by a scan, holding the
+# other parameters at their `base` (current) values. The central point (index
+# 1 of `points`) is included, so a flat / already-optimal scan stays at the
+# central value. A covariance-less best-point fmin is installed (scan computes
+# no Hessian) so `m.values` / `m.fval` / `m.valid` read correctly and a
+# follow-up `migrad!` / `hesse` resumes from the best grid point. `m.params`
+# is left untouched. Mirrors C++ MnParameterScan best-value retention
+# (MnParameterScan.h:42-43) + iminuit `m.scan()`. If NO grid point has a
+# finite fval the Minuit is left untouched — we never publish a NaN-valued
+# "valid" state.
+function _scan_retain_best!(m::Minuit, base::Parameters, par::Int,
+                             points::Vector{Tuple{Float64,Float64}})
+    best_x = 0.0
+    best_f = Inf
+    found = false
+    @inbounds for (xk, fk) in points
+        if isfinite(fk) && fk < best_f
+            best_x = xk
+            best_f = fk
+            found = true
+        end
+    end
+    found || return m
+    new_pars = collect(base.pars)
+    new_pars[par] = _build_value_par(new_pars[par], best_x)
+    retained = Parameters(new_pars, m.prec)
+    m.fmin = _point_function_minimum(m.fcn, retained, best_f)
+    return m
 end
 
 """
@@ -458,13 +510,21 @@ iminuit's default `bins=100` (vs `maxsteps=41` for `scan`). NO inner
 minimization. Returns `(par_value, fval)` pairs.
 
 `size` is the iminuit-compatible alias for `bins` (review IMPORTANT #3).
+
+Unlike [`scan`](@ref), `profile` is a **pure diagnostic** — it does NOT move
+`m` to the best grid point (no best-value retention, no state change).
 """
 function profile(m::Minuit, par;
                   bins::Integer = 100,
                   size::Union{Integer,Nothing} = nothing,
                   low::Real = 0.0, high::Real = 0.0)
     nb = size === nothing ? bins : Int(size)
-    return scan(m, par; maxsteps = nb, low = low, high = high)
+    # Pure diagnostic: scan around the CURRENT values (like `scan`, via
+    # `_scan_base_params`) but call the low-level scan directly so it does NOT
+    # trigger `scan(m, par)`'s best-value retention — `m` is never mutated.
+    idx = par isa Integer ? Int(par) : ext_index(m.params, String(par))
+    return scan(m.fcn, _scan_base_params(m), idx;
+                 maxsteps = nb, low = low, high = high)
 end
 
 """

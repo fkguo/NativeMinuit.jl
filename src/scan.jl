@@ -153,3 +153,55 @@ function scan(
     return scan(cf, x0, errs, par_idx;
                  maxsteps = maxsteps, low = low_f, high = high_f)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Best-value retention support — build a covariance-less FunctionMinimum at a
+# given point so a Minuit-level scan can leave the fit at the best grid point
+# (C++ MnParameterScan retains the best parameter set,
+# reference/Minuit2_cpp/inc/Minuit2/MnParameterScan.h:42-43; iminuit
+# `m.scan()` has the same coarse-pre-minimizer semantics). Used by
+# `scan(m::Minuit, ...)` in iminuit_compat.jl.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Build a covariance-less `BoundedFunctionMinimum` at `params`' current point
+# with function value `fval`. No minimization or Hessian pass is run — this is
+# the scan analogue of the bound-aware `simplex` tail (simplex.jl:428-463): the
+# error matrix is flagged `available = false`, so `m.matrix` / `eigenvalues` /
+# `global_cc` correctly return `nothing` (a scan produces no inverse Hessian).
+function _point_function_minimum(cf::CostFunction, params::Parameters,
+                                  fval::Real)
+    n = n_free(params)
+    int_vals = initial_int_values(params)
+    int_errs = initial_int_errors(params)
+    cf_internal = _wrap_fcn_internal_to_external(cf, params)
+
+    par_state = MinimumParameters(int_vals, int_errs, Float64(fval))
+    err_state = MinimumError(Symmetric(Matrix{Float64}(I, n, n), :U),
+                              1.0, MnHesseFailed, false)
+    grad_state = FunctionGradient(zeros(n), zeros(n), zeros(n))
+    state = MinimumState(par_state, err_state, grad_state, 0.0, ncalls(cf))
+    # `is_valid = true`: a scan always "succeeds" (it just evaluates the
+    # grid), matching iminuit `m.scan()` which leaves `m.valid == true`. The
+    # `available = false` flag on `state.error` is the authoritative
+    # "no covariance" indicator.
+    fmin_int = FunctionMinimum(state, state, cf.up; is_valid = true)
+
+    n_total = n_pars(params)
+    ext_values     = Vector{Float64}(undef, n_total)
+    ext_errors_vec = zeros(Float64, n_total)
+    @inbounds for ext_idx in 1:n_total
+        par = params.pars[ext_idx]
+        int_idx = params.int_of_ext[ext_idx]
+        if int_idx == 0
+            ext_values[ext_idx] = par.value
+        else
+            ext_values[ext_idx] = int_to_ext_value(params, int_idx,
+                                                    int_vals[int_idx])
+            # Scan computes no curvature — surface the user's initial step as
+            # the nominal error (same fallback a covariance-less state uses).
+            ext_errors_vec[ext_idx] = par.error
+        end
+    end
+    return BoundedFunctionMinimum(fmin_int, params, ext_values,
+                                   ext_errors_vec, nothing, cf_internal)
+end
