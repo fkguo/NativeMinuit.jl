@@ -34,6 +34,20 @@
         @test out.dcovar == 1.0
     end
 
+    @testset "n=1 boundary M==eps falls through to valid+posdef (codex §11 follow-up)" begin
+        # C++ MnPosDef.cxx:37/41 use strict `<` / `>`, so a 1×1 matrix with
+        # `M[1,1] == eps` exactly takes NEITHER n=1 early return → it falls
+        # through to the eigenvalue gate, which forces valid+pos-def while
+        # preserving the incoming dcovar. v1's `else return err` returned the
+        # matrix with the incoming (stale) status, diverging at this boundary.
+        eps = JuMinuit.MachinePrecision().eps
+        err = MinimumError(Symmetric(fill(eps, 1, 1), :U), 0.5, MnMadePosDef, true)
+        out = make_posdef(err)
+        @test out.status == MnHesseValid    # forced valid (old `else` kept MnMadePosDef)
+        @test JuMinuit.is_pos_def(out)
+        @test out.dcovar == 0.5             # incoming dcovar preserved
+    end
+
     @testset "Negative diagonal: dg-only fix → MnHesseValid (matches C++)" begin
         # Two-parameter matrix with one negative diagonal — dg-add path
         # fixes it. Per C++ MnPosDef.cxx:85-86 the eigenvalue-clean return

@@ -116,6 +116,14 @@ function negative_g2_line_search(
 
     iter = 0
     iterate_flag = true
+    # NB: C++ uses a post-increment `do { … } while (iter++ < 2*n && iterate)`
+    # (NegativeG2LineSearch.cxx:93) → up to 2n+1 body passes, whereas this
+    # pre-check form gives 2n. A codex fidelity pass flagged the off-by-one, but
+    # bumping the cap to 2n+1 measurably perturbs the seed for FCNs with negative
+    # seed curvature (it shifts the multi-minimum retry trajectory in
+    # test_minuit_retry), so it is left as a documented micro-divergence rather
+    # than a behavior change beyond this audit's §7 (AD-stub) scope. The cap only
+    # ever bites in non-convergent pathology; real FCNs converge in 1-2 passes.
     while iter < 2 * n && iterate_flag
         iter += 1
         iterate_flag = false

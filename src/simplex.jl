@@ -139,7 +139,9 @@ function simplex(
     # ×0.002 in VariableMetricBuilder.cxx:66 is MIGRAD-only — Simplex does NOT
     # apply it. ⇒ minedm = 0.1·up (audit §5). v1's 1e-5·up was ~10⁴× too tight,
     # making Simplex over-iterate and report `above_max_edm` far too readily.
-    minedm_eff = minedm === nothing ? 0.1 * cf.up : Float64(minedm)
+    # C++ also floors effective_toler to eps2 (ModularFunctionMinimizer.cxx:178-179);
+    # unreachable for any sane Up() (0.1·up ≫ eps2) but kept here for exactness.
+    minedm_eff = minedm === nothing ? max(0.1 * cf.up, prec.eps2) : Float64(minedm)
 
     # Nelder-Mead coefficients — exact match to C++ defaults
     α = 1.0

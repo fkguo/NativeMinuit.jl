@@ -72,9 +72,13 @@ function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecisio
             # C++ MnPosDef.cxx:39 `MinimumError(err, MnMadePosDef())` — tag ctor
             # forces dcovar = 1.0 (BasicMinimumError.h), not the incoming dcovar.
             return MinimumError(Symmetric(new_M, :U), 1.0, MnMadePosDef, true)
-        else
-            return err  # already valid
+        elseif M_in[1, 1] > eps
+            return err  # already valid (C++ MnPosDef.cxx:41)
         end
+        # M_in[1,1] == eps exactly: C++ takes NEITHER n==1 early return
+        # (MnPosDef.cxx:37/41 use strict `<` / `>`), so it falls through to the
+        # eigenvalue gate, which forces valid+pos-def. Fall through here too
+        # (the general path below handles n=1 and returns MnHesseValid).
     end
 
     # Work on a fresh copy — C++ takes a copy of err matrix at line 36
