@@ -305,6 +305,27 @@ the trapped first pass exhausts no budget that Simplex can hop over;
 the algorithm is already at a fixed point. Use the two-stage workflow
 above. See `docs/DAVIDON_CXX_AUDIT.md` for the audit trail.
 
+### Known caveat — AD vs numerical minima on weakly-constrained fits
+
+On a fit with a flat, degenerate χ² valley (e.g. the X(3872) dip fit,
+`BenchmarkExamples/X3872_dip/`), the AD and numerical MIGRAD paths can
+converge to slightly different — but equally valid — points on the valley
+floor. The numerical and analytical seeds use different diagonal 2nd-derivative
+(`g2`) estimates: the numerical seed refines `g2` by finite differences, while
+the analytical/AD seed uses the cheap `2·up/dirin²` estimate from the initial
+step sizes. This asymmetry is **C++ Minuit2-faithful**
+(`MnSeedGenerator.cxx:60` vs `:119-122`), so the two seed inverse-Hessians
+differ and steer the first DFP step differently. On a well-constrained fit both
+paths re-converge to the same minimum; on a degenerate valley they stop wherever
+`edm < goal` first holds.
+
+For the X(3872) fit the resulting offset is `Δx ≈ 0.0149`, which is only
+**0.5–0.7 % of the 1σ parabolic error** — statistically negligible (MINOS
+cannot even close most 1σ contours there). The AD gradient itself is exact
+(chunk-size-invariant, agrees with finite differences to ~1e-8); only the seed
+*curvature* differs. This is expected, not a bug. Full analysis with traces:
+`docs/AD_OFFSET_X3872.md`.
+
 ### Reliability
 
 - **888/888 tests pass** (Aqua + JET clean).

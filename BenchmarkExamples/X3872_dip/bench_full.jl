@@ -210,6 +210,26 @@ println("└─")
 
 # ─────────────────────────────────────────────────────────────────────
 # Cross-check: minima agree
+#
+# EXPECTED on this fit: `jm_ad` (and `jm_th_ad`) land ~Δx=0.0149 from
+# `jm_num` at a marginally deeper fval, so the 1e-3 threshold below
+# prints "⚠ MISMATCH" for the AD path. This is NOT a regression — it is
+# inherent to this weakly-constrained fit and is documented in full in
+# `docs/AD_OFFSET_X3872.md`. In short:
+#   • The numerical and AD MIGRAD seeds use different diagonal 2nd-deriv
+#     estimates (g2): numerical refines g2 by finite differences; the AD
+#     path uses the rough 2·up/dirin² estimate. This is C++ Minuit2-
+#     faithful (MnSeedGenerator.cxx:60 vs :119-122) — iminuit matches
+#     jm_num here only because iminuit is also numerical.
+#   • The X(3872) χ² minimum is a flat, degenerate valley (MINOS cannot
+#     close most 1σ contours), so MIGRAD's edm<goal stop is satisfied at
+#     trajectory-dependent points. The two seeds → two valid valley-floor
+#     minima.
+#   • The offset is only 0.5–0.7% of the 1σ parabolic error — physically
+#     negligible. The AD gradient itself is exact (chunk-invariant, agrees
+#     with finite-difference to ~1e-8).
+# A "⚠ MISMATCH" here is therefore informational. On a well-constrained
+# fit, a mismatch WOULD signal a real bug — the check is kept as-is.
 # ─────────────────────────────────────────────────────────────────────
 println("\n=== Cross-check: minima ===")
 ref_x   = fits["jm_num"].fmin.internal.state.parameters.x
@@ -230,6 +250,8 @@ for (lab, m) in fits
     println("  $lab: Δx=", round(Δx; sigdigits=3),
             " Δfval=", round(Δf; sigdigits=3), " → ", verdict)
 end
+println("  (note: jm_ad ⚠ MISMATCH is EXPECTED & negligible here — flat",
+        " degenerate valley + C++-faithful AD seed g2; see docs/AD_OFFSET_X3872.md)")
 
 # ─────────────────────────────────────────────────────────────────────
 # Stage 2: MINOS — all parameters, all schemes (reuses pre-fit Minuit
