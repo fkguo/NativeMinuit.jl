@@ -30,6 +30,12 @@ See [Summary across all 14 algorithms](#summary-across-all-14-algorithms) for th
 severity-sorted findings (the one MAJOR — §14 precision `eps` — is now
 **resolved** in `feat/precision-eps-x4`; see §14).
 
+**Update (2026-05-30):** the three actionable contained fixes are now landed
+on `feat/cpp-fidelity-3fixes` — MnHesse bounded step clamp (`153f41d`), MIGRAD
+2nd-pass-invalid bail (`e256506`), MnMinos n-scaled budget (`88bceea`). Each
+finding below is marked **RESOLVED** with its commit. The MnContours `sca`
+direction-switch retry remains the one open contained fix.
+
 ---
 
 ## 1. MnHesse
@@ -46,9 +52,9 @@ code, ignored.
 | init `g2/gst/grd/dirin=gst/yy` (112–116) | 108–112 | ✓ |
 | analytical-gradient g2/step recompute (120–126) | 166–180 | ✓ (2 documented nuances) |
 | diagonal `dmin=8·eps2·(\|xtf\|+eps2)`, `d=\|gst\|` (136–139) | 192–194 | ✓ |
-| 5× multiplier loop, `sag≠0→break` (147–169) | 205–221 | ✓ except limits branch |
+| 5× multiplier loop, `sag≠0→break` (147–169) | 205–221 | ✓ (limits branch implemented — 153f41d) |
 | L26 sag-zero → diagonal fallback `MnHesseFailed` (171–183) | 223–226 | ✓ |
-| L30 `g2=2·sag/d²`, `grd`, `d=√(2·aimsag/\|g2\|)` (185–197) | 228–238 | ✓ except `d=min(0.5,d)` limits clamp |
+| L30 `g2=2·sag/d²`, `grd`, `d=√(2·aimsag/\|g2\|)` (185–197) | 228–238 | ✓ (limits clamp implemented — 153f41d) |
 | convergence `Tolerstp`/`TolerG2`, `d∈[0.1,10]·dlast` (203–208) | 241–256 | ✓ (defensive `g2≠0` guard, same result) |
 | `vhmat(i,i)=g2(i)` (210) | 259 | ✓ |
 | maxcalls-exhausted → diagonal fallback (211–223) | 269–275 | ✓ |
@@ -63,18 +69,23 @@ code, ignored.
 
 ### Findings
 
-- **MISSING (documented, narrow): bounded-parameter step clamping.**
-  `has_limits = false` is hardcoded (hesse.jl:187), so two C++ branches never
-  fire: the multiplier-loop `if HasLimits && d>0.5 → d=0.51`/fail (160–167) and
-  the L30 `if HasLimits → d=min(0.5,d)` (194–195). HESSE runs in internal
-  (arcsin) coordinates, where C++ clamps the probe step `d≤0.5` for
-  externally-bounded params (near a bound the transform is steep; an unclamped
-  `d` → wild external excursion → wrong 2nd-derivative). **Severity NICE-TO-HAVE**:
-  only binds for poorly-determined / near-bound params or flat directions that
-  trip the ×10 multiplier; well-determined bounded params away from bounds keep
-  `d` small so it never fires. Documented as a Phase-1 first-cut deferral
-  (hesse.jl:184–187; `DEFERRED.md` "bounds integration is the follow-up").
-  Unbounded fits are fully faithful.
+- **RESOLVED (153f41d): bounded-parameter step clamping.**
+  Previously `has_limits = false` was hardcoded (hesse.jl), so two C++
+  branches never fired: the multiplier-loop `if HasLimits && d>0.5 → d=0.51`/
+  fail (160–167) and the L30 `if HasLimits → d=min(0.5,d)` (194–195). HESSE
+  runs in internal (arcsin) coordinates, where C++ clamps the probe step
+  `d≤0.5` for externally-bounded params (near a bound the transform is steep;
+  an unclamped `d` → wild external excursion → wrong 2nd-derivative). Now
+  `hesse(cf, state; has_limits=…)` takes per-internal-parameter bound flags
+  (`_has_limits_internal`, the analogue of C++ `trafo.Parameter(i).HasLimits()`)
+  and gates both clamp sites on the per-parameter `lim_i`, applied in the
+  internal frame. The flags are threaded through `migrad(cf, params)` (the
+  Strategy≥1 inner-HESSE refinement, numerical + AD) and the standalone
+  `hesse(m::Minuit)` path. `has_limits === nothing` (every unbounded caller,
+  incl. standalone `hesse(f,x0,err)`) leaves `lim_i` always false, so unbounded
+  HESSE is byte-identical to before. Verified: bounded probe step capped at
+  0.51 vs 1.0 unbounded on a flat-plateau FCN; near-bound `hesse(m)` yields a
+  valid covariance.
 
 - **Documented faithful-but-different (not gaps):**
   - *Analytical-gradient gate* (hesse.jl:150–165): gated on `cf isa
@@ -91,8 +102,9 @@ code, ignored.
     lines 400–410 of the commented block).
 
 **Verdict: faithful port.** Every branch, exit path, formula, tolerance, and
-the load-bearing double-clamp are correct. The only real omission is the
-bounded-parameter step clamp — documented, narrow, unbounded-fits-unaffected.
+the load-bearing double-clamp are correct. The one prior omission — the
+bounded-parameter step clamp — is now implemented (153f41d); unbounded fits
+remain byte-identical.
 
 ---
 
@@ -153,13 +165,19 @@ control flow.
      gradient set, error available) vs C++'s effectively-no-op `seed.IsValid()`.
      More correct — accepts a bailed-but-usable `_hesse_diagonal_failure` seed.
 
-- **MINOR (efficiency, not correctness): missing the C++ "2nd-pass invalid →
-  bail" guard** (C++ 127–132: `if (ipass>0 && !min.IsValid()) return`). JuMinuit
-  re-iterates under the same edm condition but lacks this early-out, so a
-  non-converging fit **at Strategy ≥ 1** can run extra HESSE+DFP passes (bounded
-  by the 1.3× call limit) before giving up, where C++ stops at pass 2. Same
-  final verdict (invalid); JuMinuit spends more FCN calls. Narrow (S≥1
-  non-converging only); ~3-line guard would restore exact parity.
+- **RESOLVED (e256506): C++ "2nd-pass invalid → bail" guard** (C++ 127–132:
+  `if (ipass>0 && !min.IsValid()) return`). Added as the predicate
+  `_migrad_second_pass_invalid(ipass, s0, edm_corrected, edmval)` =
+  `ipass>0 && (!is_valid(s0) || edm_corrected > 10·edmval)`, placed after the
+  inner DFP loop's call-limit break and before the Strategy≥1 HESSE block.
+  The `HasReachedCallLimit` disjunct is handled by the preceding `ncalls ≥
+  maxfcn_eff` break; the above-max-edm disjunct reuses the same expression as
+  the final-verdict `above_max`, so the bail fires exactly when the result
+  would be flagged invalid-by-above-max. Purely additive — the deliberate
+  status-gated entry shortcut (a *keep*) is untouched. Efficiency-only: same
+  final verdict, fewer wasted passes on non-converging S≥1 fits. (A downstream
+  retry test's bit-exact fixed-point assertion was relaxed to `≈` accordingly,
+  since the bail now returns the C++-faithful earlier-pass point.)
 
 - **Negligible:** at the no-improvement exit JuMinuit keeps `s0`'s old fval;
   C++ (size>1) records `pp.Y()` — differ by ≤ `eps·|fval|` (that branch's own
@@ -177,8 +195,9 @@ control flow.
 **Verdict: faithful port.** Every branch and exit path of both methods maps
 correctly. Substantiates the `IAM_CONVERGENCE_GAP.md` § Fidelity claim
 ("core MIGRAD is faithful") with line-by-line evidence, consistent with the
-Rosenbrock/Quad exact-match. Only non-cosmetic items: the deliberate
-status-gated shortcut and the minor missing 2nd-pass-invalid bail.
+Rosenbrock/Quad exact-match. The one remaining non-cosmetic item is the
+deliberate status-gated shortcut (a *keep*); the 2nd-pass-invalid bail is now
+implemented (e256506).
 
 ---
 
@@ -201,7 +220,7 @@ contours, multi-fixed-parameter scans, the AD path, and warm-restart reuse.
 | `upar.Fix(par); SetValue(par,val)` (167–168) | par_idx is the fixed scan param in `function_cross` | ✓ |
 | `MnFunctionCross(...)` (172–173) | `function_cross(fmin, cf, par_idx, ±1; …)` (333, 367) | ✓ |
 | AtMaxFcn / NewMinimum / AtLimit / !IsValid warnings (178–192) | MnCross flags + invalid-side ±σ placeholder (341–350) | ✓ (matches `MinosError::Upper/Lower`) |
-| `maxcalls==0 → 2·(nvar+1)·(200+100n+5n²)` (111–114) | high-level default `maxcalls=1000` (minuit.jl:846) | **✗ divergence (below)** |
+| `maxcalls==0 → 2·(nvar+1)·(200+100n+5n²)` (111–114) | `_minos_default_maxcalls(n_free)` forwarded by `_minos_error` | ✓ (resolved — 88bceea) |
 
 ### 3b. MnFunctionCross (C++ MnFunctionCross.cxx ↔ function_cross.jl `_cross_core` + helpers)
 
@@ -220,13 +239,18 @@ contours, multi-fixed-parameter scans, the AD path, and warm-restart reuse.
 
 ### Findings
 
-- **✗ Divergence (MODERATE, drop-in-compat): default MINOS call budget.** C++
-  (and iminuit) default `maxcalls=0` → `2·(nvar+1)·(200+100·nvar+5·nvar²)`
-  (≈30 100 for n=9); JuMinuit's high-level `minos!`/`minos` default is a fixed
-  `maxcalls=1000` (minuit.jl:846, minos.jl:200). On larger fits JuMinuit MINOS
-  can hit `fcn_limit` where C++/iminuit would keep going. User-overridable via
-  `maxcall=`. **Recommended fix**: when `maxcall==0`, compute the C++ n-scaled
-  default instead of falling back to 1000 (~3 lines; restores drop-in parity).
+- **RESOLVED (88bceea): default MINOS call budget.** C++ (and iminuit) default
+  `maxcalls=0` → `2·(nvar+1)·(200+100·nvar+5·nvar²)` (≈30 100 for n=9);
+  JuMinuit's high-level `minos!`/`minos` previously let the downstream fall back
+  to a fixed `maxcalls=1000` (minuit.jl, minos.jl:200), so on larger fits MINOS
+  could hit `fcn_limit` where C++/iminuit keep going. Now, when the user passes
+  no explicit `maxcall` (the `maxcall==0` sentinel), `_minos_error` forwards
+  `_minos_default_maxcalls(n_free(params))` (the exact C++ formula; `nvar =
+  n_free` excludes fixed params, matching `VariableParameters()`) to BOTH the
+  bounded and unbounded cross-search sub-paths. An explicit `maxcall>0` (and the
+  power-user `maxcalls` kwarg) still win. The low-level `minos(fmin, cf, par)` /
+  `_minos_external_via_function_cross` keep their own 1000 default for direct
+  callers; the high-level path now always passes an explicit budget.
 
 - **Structural-but-equivalent: `par_limit`/`aulim` detection.** C++ computes
   `aulim` inside MnFunctionCross with inline per-probe `limset && Fval<aim →
@@ -249,9 +273,9 @@ meticulous, C++-line-cited reproduction of MnFunctionCross — every branch
 (L300/L460/L500, the noless dispatch, parabola fit, window/bad-point management)
 and every exit (new-min / call-limit / par-limit / invalid / converged) maps,
 with the inner-MIGRAD `Strategy−1` reduction and the covariance cross-correlation
-pre-shift algebraically verified. The only substantive divergence is the
-**smaller default call budget** (1000 vs n-scaled) — a drop-in-compat concern on
-larger fits, easily fixed.
+pre-shift algebraically verified. The one prior substantive divergence — the
+**smaller default call budget** (1000 vs n-scaled) — is now resolved (88bceea):
+the high-level path forwards the C++ n-scaled budget.
 
 ---
 
@@ -557,9 +581,9 @@ specific, located, mostly-small item. Sorted by severity:
 | **MODERATE** | §5 MnSimplex | `minedm` 1e-5·up vs C++ 0.1·up (10⁴× tighter) + initial edge 10× large; wrong in-code citation | ~5 LOC |
 | **MODERATE** | §7 NegativeG2 (AD) | AD-path recovery is a `@warn` stub vs C++ Numerical2P-driven; live AD seed path | ~30-45 LOC |
 | **MODERATE** | §4 MnContours | missing `sca` direction-switch retry → fewer points on irregular contours | ~10 LOC |
-| minor | §1 MnHesse | bounded-param step clamp unported (`has_limits=false`; unbounded unaffected) | ~15 LOC |
-| minor | §2 MIGRAD | missing 2nd-pass-invalid early-bail (efficiency, S≥1 non-converging) | ~3 LOC |
-| minor | §3 MnMinos | default budget 1000 vs n-scaled | ~3 LOC |
+| **resolved** | §1 MnHesse | bounded-param step clamp **RESOLVED** (was `has_limits=false`; unbounded byte-identical) | `153f41d` |
+| **resolved** | §2 MIGRAD | 2nd-pass-invalid early-bail **RESOLVED** (efficiency, S≥1 non-converging) | `e256506` |
+| **resolved** | §3 MnMinos | default budget **RESOLVED**: n-scaled `2·(nvar+1)·(200+100n+5n²)` | `88bceea` |
 | minor | §11 MnPosDef | `MnMadePosDef` dcovar/status metadata (perturbs edm-correction/iters) | ~3 LOC |
 | minor (latent) | §12 CovSqueeze | fallback status-enum (Valid vs MnInvertFailed); `MnUserCovariance` overload unported | — |
 | minor (deferred) | §8/§9 AD seed/grad | `CheckGradient` + AD negative-G2 Phase-2.1 stubs | ~25 LOC |
@@ -574,3 +598,9 @@ small, located, and contained; the core minimization/error spine (MIGRAD,
 Davidon, EDM, line search, HESSE, MINOS, seed, gradients, transforms, strategy)
 is a faithful port. The deliberate keeps (MIGRAD status-gated shortcut) and the
 documented Phase-1/2.1 deferrals are called out as such.
+
+**Landed (2026-05-30, branch `feat/cpp-fidelity-3fixes`):** the three §1/§2/§3
+minor fixes — MnHesse bounded step clamp (`153f41d`), MIGRAD 2nd-pass-invalid
+bail (`e256506`), MnMinos n-scaled budget (`88bceea`). The remaining contained
+fixes (§14 precision ×4, §5 Simplex `minedm`, §7 AD negative-G2, §4 MnContours
+`sca` retry) are out of scope here.
