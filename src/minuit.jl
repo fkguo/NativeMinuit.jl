@@ -595,13 +595,20 @@ function minos!(m::Minuit, par::Integer;
             threaded_gradient = threaded_gradient,
             print_level = print_level, kwargs...)
     else
-        # Unbounded — search in the user FCN's frame directly.
-        # m.fmin.internal_cf == m.fcn here; m.params.int_of_ext[par]
-        # == par when no params are bounded. Use the wrapped path so
-        # that mixed (some bounded, some not) configurations route
-        # consistently.
+        # Unbounded scanned parameter — search in the INTERNAL frame
+        # (m.fmin.internal_cf takes internal coords; m.params.int_of_ext[par]
+        # is the internal index of `par`).
+        #
+        # Mixed case (scanned param unbounded, some OTHER free params
+        # bounded): the MnMinos linear-correlation pre-shift inside
+        # `minos()` operates in internal coords. For bounded "other"
+        # params it must additionally Int2ext + EXT clamp + Ext2int so
+        # the pre-shifted internal value stays inside the valid
+        # transform range (±π/2 for doubly-bounded). Pass `pars=m.params`
+        # so `minos()` has the bound information to do that clamp.
         err = minos(m.fmin.internal, m.fmin.internal_cf,
                     m.params.int_of_ext[par];
+                    pars = m.params,
                     threaded_gradient = threaded_gradient,
                     print_level = print_level, kwargs...)
         m.minos_errors[Int(par)] = err
@@ -649,6 +656,71 @@ function _minos_external_via_function_cross(
     end
     step_lo = max(step_lo, 0.0)
 
+    # ── MnMinos linear-correlation pre-shift in EXT coords (C++
+    # MnMinos.cxx:136-165). The bounded path operates in external
+    # coords, so we compute the shift in INTERNAL (using the internal
+    # inv_hessian), then Int2ext + EXT clamp per "other" free param,
+    # producing a full length-n_total seed vector to hand to
+    # `function_cross_external`. Mirrors C++ exactly:
+    #     internal: xdev = xunit · m[ind,i]; xnew = xt[i] + dir · xdev
+    #     ext:      unew = Int2ext(i, xnew); clamp; SetValue
+    # Fixed parameters keep their converged ext value (the inner MIGRAD
+    # never touches them).
+    int_state = bfm.internal.state
+    V_int = int_state.error.inv_hessian
+    n_total = n_pars(bfm.params)
+    n_free_int = n_free(bfm.params)
+    ind_int = bfm.params.int_of_ext[par_idx]      # internal index of scanned
+    seed_up_ext = nothing
+    seed_lo_ext = nothing
+    if 1 <= ind_int <= n_free_int && isfinite(V_int[ind_int, ind_int]) &&
+            V_int[ind_int, ind_int] > 0
+        sigma_int_ind = sqrt(max(2.0 * cf.up * V_int[ind_int, ind_int],
+                                  prec.eps2))
+        seed_up_ext = Vector{Float64}(undef, n_total)
+        seed_lo_ext = Vector{Float64}(undef, n_total)
+        # Sin-transform saturation limits for BothBounds pre-clamp
+        # (review v2 IMPORTANT B). See src/minos.jl for the rationale —
+        # same aliasing pathology applies to the bounded path.
+        piby2 = 2.0 * atan(1.0)
+        distnn_int = 8.0 * sqrt(prec.eps2)
+        vlimhi_int = piby2 - distnn_int
+        vlimlo_int = -piby2 + distnn_int
+        @inbounds for ext_i in 1:n_total
+            p_i = bfm.params.pars[ext_i]
+            if is_fixed(p_i) || ext_i == par_idx
+                seed_up_ext[ext_i] = bfm.ext_values[ext_i]
+                seed_lo_ext[ext_i] = bfm.ext_values[ext_i]
+                continue
+            end
+            i_int = bfm.params.int_of_ext[ext_i]
+            shift_int = sigma_int_ind * (V_int[ind_int, i_int] /
+                                          V_int[ind_int, ind_int])
+            kind = bound_kind(p_i)
+            xt_i_int = int_state.parameters.x[i_int]
+            xnew_up_int = xt_i_int + shift_int        # dir = +1
+            xnew_lo_int = xt_i_int - shift_int        # dir = -1
+            # Pre-clamp INT for BothBounds before Int2ext to avoid
+            # sin() aliasing on large linear pre-shifts.
+            if kind == BothBounds
+                xnew_up_int = clamp(xnew_up_int, vlimlo_int, vlimhi_int)
+                xnew_lo_int = clamp(xnew_lo_int, vlimlo_int, vlimhi_int)
+            end
+            unew_up = int2ext(kind, xnew_up_int, p_i.lower, p_i.upper)
+            unew_lo = int2ext(kind, xnew_lo_int, p_i.lower, p_i.upper)
+            if has_upper_limit(p_i)
+                unew_up = min(unew_up, p_i.upper)
+                unew_lo = min(unew_lo, p_i.upper)
+            end
+            if has_lower_limit(p_i)
+                unew_up = max(unew_up, p_i.lower)
+                unew_lo = max(unew_lo, p_i.lower)
+            end
+            seed_up_ext[ext_i] = unew_up
+            seed_lo_ext[ext_i] = unew_lo
+        end
+    end
+
     # gap M1: outer-guarded to avoid the @sprintf String alloc at level 0
     # (this helper is called per bounded-MINOS parameter request).
     if print_level >= 1
@@ -661,7 +733,8 @@ function _minos_external_via_function_cross(
                                      strategy = strategy, prec = prec,
                                      threaded_gradient = threaded_gradient,
                                      sigma = sigma,
-                                     print_level = print_level)
+                                     print_level = print_level,
+                                     other_param_seed_ext = seed_up_ext)
     if print_level >= 1
         _trace_info(print_level, "MnMinos",
                     @sprintf("Determination of lower error for par=%d (value=%.10g)",
@@ -672,31 +745,37 @@ function _minos_external_via_function_cross(
                                      strategy = strategy, prec = prec,
                                      threaded_gradient = threaded_gradient,
                                      sigma = sigma,
-                                     print_level = print_level)
+                                     print_level = print_level,
+                                     other_param_seed_ext = seed_lo_ext)
 
-    # External errors = aopt · (truncated ext step). Three cases per
-    # side:
+    # External errors. Cases per side:
     #   - search succeeded (valid)    → aopt · step (the asymmetric error)
     #   - search hit a bound (par_limit) → publish `bound − ext_min` (the
     #       physical distance from minimum to the constraining bound).
     #       Matches C++ MinosError::Upper() and iminuit's `m.merrors[].upper`
     #       semantics: "the parameter can move at most this much in this
     #       direction before hitting the bound."
-    #   - other failure (fcn_limit, etc.) → 0.0 (no information).
+    #   - other failure (fcn_limit, algorithmic invalid, etc.) → ±ext_err
+    #       (the HESSE 1σ symmetric placeholder), mirroring C++
+    #       MinosError::Upper/Lower (MinosError.h:54) which return
+    #       `±State().Error(Parameter())` when invalid. Consistent with
+    #       the unbounded MINOS path (src/minos.jl). Consumers MUST gate
+    #       on `e.upper_valid`/`e.lower_valid` to distinguish real
+    #       crossings from placeholders.
     # Sign convention: upper_err ≥ 0 by construction; lower_err ≤ 0.
     upper_err = if cr_up.valid
         cr_up.aopt * step_up
     elseif cr_up.par_limit
         par.upper - ext_min            # bound_distance (positive)
     else
-        0.0
+        ext_err                        # ±σ_HESSE placeholder
     end
     lower_err = if cr_lo.valid
         -cr_lo.aopt * step_lo
     elseif cr_lo.par_limit
         par.lower - ext_min            # bound_distance (negative)
     else
-        0.0
+        -ext_err                       # ±σ_HESSE placeholder
     end
 
     # M4: full ext-coord snapshot at the ±σ crossing. The bounded path
