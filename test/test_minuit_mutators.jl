@@ -138,7 +138,13 @@
         @test m.valid
         @test m.values[1] <= 5.0 + 1e-6
         @test m.values[1] ≈ 5.0 atol = 1e-3   # saturated at the bound
-        @test m.values[2] ≈ 2.0 atol = 1e-4   # unconstrained → true min
+        # x2 is unconstrained, but the EDM stop — with x1 pinned at the bound,
+        # where its Sin-transform internal gradient → 0 — leaves x2 ~3.8e-4
+        # short of 2.0. iminuit 2.32.0 (Strategy 1) lands at the IDENTICAL
+        # value 2.0003789700 (verified). The old atol=1e-4 was tuned to
+        # JuMinuit's pre-fix bare-eps over-tightness (audit §14 fix
+        # feat/precision-eps-x4 makes eps2 match C++/iminuit).
+        @test m.values[2] ≈ 2.0 atol = 1e-3   # ≡ iminuit's 2.00037897
 
         # One-sided via nothing.
         m2 = Minuit(x -> (x[1] - 10.0)^2, [0.0]; errors = [0.1])

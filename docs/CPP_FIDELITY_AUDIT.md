@@ -27,7 +27,8 @@ Audited (14 algorithms — the full minimization / error-analysis spine):
 14. Parameter transforms + MnStrategy + MnMachinePrecision ↔ `src/transform.jl` / `strategy.jl` / `precision.jl`
 
 See [Summary across all 14 algorithms](#summary-across-all-14-algorithms) for the
-severity-sorted findings (one MAJOR: §14 precision `eps`).
+severity-sorted findings (the one MAJOR — §14 precision `eps` — is now
+**resolved** in `feat/precision-eps-x4`; see §14).
 
 ---
 
@@ -512,7 +513,7 @@ Findings:
   two-sided `dx>1` clamp.
 - ✓ **MnStrategy faithful** — all **21** preset constants (7 knobs × L0/L1/L2)
   match exactly; default level 1.
-- **✗ MAJOR — `MnMachinePrecision.eps` is missing the factor of 4.** C++
+- **✅ RESOLVED (was MAJOR) — `MnMachinePrecision.eps` was missing the factor of 4.** C++
   `fEpsMac = 4·numeric_limits<double>::epsilon() = 8.88e-16`
   (`MnMachinePrecision.cxx:26`); JuMinuit `MachinePrecision() = MachinePrecision(eps(Float64))`
   = `2.22e-16` (precision.jl). Consequently `eps2 = 2·√eps` is **2× too small**
@@ -526,8 +527,22 @@ Findings:
   `MachinePrecision() = MachinePrecision(4.0 * eps(Float64))` (+ update the
   `p.eps == eps(Float64)` doctest). **Re-verified by hand against the C++ source.**
 
-Verdict: transforms + all strategy constants exact, but the default machine
-precision is 4× off (`eps2` 2× off) — a pervasive, ~1-LOC, **MAJOR** divergence.
+  **✅ Resolved** in `feat/precision-eps-x4` (PR #19, `src/precision.jl`): the default is
+  now `MachinePrecision(4 * eps(Float64))`, citing `MnMachinePrecision.cxx:26`, so
+  `eps` = 8.88e-16 and the derived `eps2` = 5.96e-8 — exactly the C++/iminuit
+  values (the ×4 on `eps` propagates to the intended ×2 on `eps2`). The
+  user-supplied `MachinePrecision(x)` path is unchanged. **Proof:** against the
+  C++-Minuit2 JSON oracle (`test_cpp_oracle.jl`) agreement *improved* broadly —
+  rosenbrock_2d |Δfval|/|Δparam|/|Δcov| each dropped ~500–800× (3.99e-7→7.4e-10,
+  3.33e-5→4.1e-8, 7.0e-3→1.3e-5); bounded_sin_2d ~10⁴× (param 8.2e-9→2.8e-13);
+  bounded nfcn drift 4→0; quad_4d unchanged (already at the FP floor). No case
+  regressed except rosenbrock_10d's param *position* in its near-flat valley —
+  where |Δfval|/|Δedm|/|Δcov|/Δnfcn all improved, i.e. BLAS-order/EDM-stop
+  variance, not the fix. Focused parity assertions added to `test_precision.jl`.
+
+Verdict: transforms + all strategy constants exact; the default machine-precision
+factor-of-4 (`eps2` 2× off) is now **fixed** — `eps`/`eps2` match C++ Minuit2 /
+iminuit. §14 fully faithful.
 
 ---
 
@@ -538,7 +553,7 @@ specific, located, mostly-small item. Sorted by severity:
 
 | Severity | Algorithm | Finding | Fix |
 |---|---|---|---|
-| **MAJOR** | §14 Precision | default `eps` missing ×4 ⇒ `eps2` 2× too small vs C++/iminuit; pervasive tolerance shift | ~1 LOC |
+| ~~MAJOR~~ **✅ FIXED** | §14 Precision | default `eps` was missing ×4 ⇒ `eps2` 2× too small vs C++/iminuit; **resolved** in `feat/precision-eps-x4` (now matches C++/iminuit; oracle agreement improved 2–4 orders) | ~1 LOC |
 | **MODERATE** | §5 MnSimplex | `minedm` 1e-5·up vs C++ 0.1·up (10⁴× tighter) + initial edge 10× large; wrong in-code citation | ~5 LOC |
 | **MODERATE** | §7 NegativeG2 (AD) | AD-path recovery is a `@warn` stub vs C++ Numerical2P-driven; live AD seed path | ~30-45 LOC |
 | **MODERATE** | §4 MnContours | missing `sca` direction-switch retry → fewer points on irregular contours | ~10 LOC |
@@ -551,8 +566,10 @@ specific, located, mostly-small item. Sorted by severity:
 | **none** | §6 LineSearch, §10 Davidon/EDM, §14 transforms+strategy | fully faithful (parabola ≡ to 4e-11; DFP/EDM term-by-term; 21 strategy constants exact) | — |
 
 **Headline:** the comprehensive pass found **one MAJOR** item — the machine-precision
-`eps` factor-of-4 (§14), a 1-LOC fix with engine-wide reach — plus three MODERATE
-items (Simplex stopping rule, AD negative-G2 stub, contour `sca` retry). All are
+`eps` factor-of-4 (§14), a 1-LOC fix with engine-wide reach (**now resolved** in
+`feat/precision-eps-x4`; oracle agreement improved 2–4 orders of magnitude) — plus
+three MODERATE items (Simplex stopping rule, AD negative-G2 stub, contour `sca`
+retry). All are
 small, located, and contained; the core minimization/error spine (MIGRAD,
 Davidon, EDM, line search, HESSE, MINOS, seed, gradients, transforms, strategy)
 is a faithful port. The deliberate keeps (MIGRAD status-gated shortcut) and the

@@ -108,15 +108,21 @@
         @test m.values[2] == 5.0  # fixed
     end
 
-    @testset "Retry triggers (default); opt-in Simplex multistart escapes" begin
-        # An FCN + start where pass 1 exits `is_valid=false` (no improvement /
-        # above_max_edm) WITHOUT hitting the call limit, so the retry loop
-        # enters. A multi-minimum landscape (quadratic bowl + cos/sin overlay)
-        # seeded far away (-5, 5); pass 1 stalls at a saddle-like point
-        # (fval ≈ 20.8). Escaping to the deep minimum (fval ≈ -0.86) is a
-        # genuine BASIN JUMP — the job of the opt-in Simplex multistart, NOT
-        # the faithful plain-re-seed default (which can only refresh curvature
-        # within a basin).
+    @testset "Smooth multimodal FCN: pass-1 reaches deep min (iminuit parity)" begin
+        # AUDIT §14 (feat/precision-eps-x4): this testset PREVIOUSLY asserted
+        # that pass 1 STALLS here (is_valid=false at fval≈20.8) so the retry
+        # loop / opt-in Simplex multistart was needed to reach the deep
+        # minimum. That "stall" was a bare-eps ARTIFACT — with the corrected
+        # machine precision (eps = 4·eps(Float64), matching C++/iminuit) the
+        # numerical-gradient steps are no longer too small, and JuMinuit now
+        # converges on pass 1, exactly as iminuit does. Cross-checked against
+        # iminuit 2.32.0 (Strategy(0), plain migrad, use_simplex=false):
+        #   valid=true, fval=-0.862799, a=b=3.21598, nfcn=70.
+        # JuMinuit reaches the IDENTICAL minimum (fval/a/b) in nfcn=82; the
+        # call-count differs across implementations by construction (not asserted).
+        # So this is now a CONVERGENCE-PARITY test. The genuine "pass-1 stalls →
+        # retry enters" coverage lives in the "noisy stall" and "fixed-point"
+        # testsets below, whose FCNs stall regardless of step size.
         fcn = x -> begin
             a, b = x[1], x[2]
             return (a - 3)^2 + (b - 3)^2 +
@@ -124,44 +130,46 @@
                    0.5 * sin(a * b)
         end
 
-        # Pin Strategy(0) for a reliable pass-1 stall (is_valid=false, not
-        # call-limited). The high-level default is now Strategy(1) (iminuit
-        # parity, see docs/IAM_CONVERGENCE_GAP.md), under which pass 1 descends
-        # further; S=0 keeps the stall that exercises the retry branches.
+        # Pin Strategy(0) (quick mode) so the comparison to iminuit's S0 plain
+        # migrad is apples-to-apples. (The high-level default is now Strategy(1)
+        # for iminuit parity, see docs/IAM_CONVERGENCE_GAP.md.)
         m1 = Minuit(fcn, [-5.0, 5.0];
                      names = ["a", "b"], errors = [0.5, 0.5],
                      strategy = Strategy(0))
         migrad!(m1; iterate = 1, tol = 1e-6, maxfcn = 2000)
-        @test !m1.valid                                 # pass 1 failed
+        @test m1.valid                                  # converges (≡ iminuit)
         @test !m1.fmin.internal.reached_call_limit      # not via budget
+        @test m1.fval < 0.0                             # reaches the deep well
+        @test m1.fval ≈ -0.862799 atol = 1e-4           # iminuit: -0.862799
+        @test m1.values[1] ≈ 3.21598 atol = 1e-3        # iminuit: a = 3.21598
+        @test m1.values[2] ≈ 3.21598 atol = 1e-3        # iminuit: b = 3.21598
         nfcn1 = m1.nfcn
         fval1 = m1.fval
 
-        # DEFAULT retry (use_simplex=false — iminuit's plain re-seed): the
-        # loop enters (nfcn > nfcn1) and the safety invariant holds. We do NOT
-        # assert a basin jump here: re-seeding refreshes curvature but stays in
-        # the seed's basin, so on a genuine multi-minimum FCN the plain re-seed
-        # may not reach the far -0.86 well — and that's correct (faithful)
-        # behavior, matching what iminuit's retry does.
+        # DEFAULT retry (use_simplex=false): pass 1 is already valid, so the
+        # retry loop is a faithful NO-OP — it must not spend extra calls or
+        # worsen the converged fit (idempotence + safety invariant). This
+        # matches iminuit: migrad(iterate=5) on a fit that validated on the
+        # first pass returns the same state without further iterations.
         m5 = Minuit(fcn, [-5.0, 5.0];
                      names = ["a", "b"], errors = [0.5, 0.5],
                      strategy = Strategy(0))
         migrad!(m5; iterate = 5, tol = 1e-6, maxfcn = 2000)
-        @test m5.nfcn > nfcn1     # retry loop entered (proves coverage)
-        @test m5.fval ≤ fval1 + 1e-10   # safety invariant
+        @test m5.valid
+        @test m5.nfcn == nfcn1             # valid pass 1 ⇒ retry loop no-op
+        @test m5.fval ≈ fval1 atol = 1e-10    # idempotent
+        @test m5.fval ≤ fval1 + 1e-10         # safety invariant
 
         # OPT-IN Simplex multistart (use_simplex=true — JuMinuit extension
-        # beyond C++/iminuit): the growing-perturbation hop jumps basins and
-        # rescues to the deep minimum (fval ≈ -0.86 vs +20.8) — the
-        # X(3872)-shaped "dip vs peak" outcome.
+        # beyond C++/iminuit): on an already-converged fit it must stay valid
+        # at the deep minimum and never worsen the result (safety invariant).
         m5s = Minuit(fcn, [-5.0, 5.0];
                       names = ["a", "b"], errors = [0.5, 0.5],
                       strategy = Strategy(0))
         migrad!(m5s; iterate = 5, use_simplex = true, tol = 1e-6, maxfcn = 2000)
-        @test m5s.nfcn > nfcn1
-        @test m5s.fval ≤ fval1 + 1e-10
         @test m5s.valid
-        @test m5s.fval < 0.0
+        @test m5s.fval ≤ fval1 + 1e-10
+        @test m5s.fval < 0.0              # reaches the deep (negative) well
     end
 
     @testset "Multi-minimum safety invariant" begin
