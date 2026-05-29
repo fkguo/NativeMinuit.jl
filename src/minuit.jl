@@ -23,6 +23,35 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
+    AbstractFit
+
+Supertype of every JuMinuit fit-frontend object. Currently the only
+concrete subtype is [`Minuit`](@ref); the abstraction exists so that
+generic user/ecosystem code can dispatch on `f::AbstractFit` (the same
+way IMinuit.jl / iminuit code does — `migrad(f::AbstractFit)`,
+`minos(f::AbstractFit, …)`), and so that any future alternative fit
+frontend can slot in without breaking such code.
+
+# IMinuit.jl drop-in note
+
+IMinuit.jl exposes two concrete subtypes — `Fit` (keyword/scalar-arg
+`fcn(a, b)` construction) and `ArrayFit` (vector `fcn(par)`
+construction). That split is a PyCall wrapping artifact: the two need
+different `PyObject` construction. JuMinuit is native Julia and always
+calls the FCN as `f(::AbstractVector)` internally (the keyword
+constructor wraps `fcn(a,b)` into `x -> fcn(x...)`), so the two forms
+have **no behavioural difference** after construction. We therefore
+provide [`Fit`](@ref) and [`ArrayFit`](@ref) as *aliases* of `Minuit`
+rather than distinct types — a type that doesn't differ in behaviour
+shouldn't be a distinct type in idiomatic Julia. Code annotating
+`f::Fit` / `f::ArrayFit` / `f::AbstractFit` or testing `f isa Fit`
+keeps working; only code that dispatches `Fit` and `ArrayFit` to
+*different* methods (rare — the split was never semantic) would need a
+touch-up.
+"""
+abstract type AbstractFit end
+
+"""
     Minuit(fcn, x0; names, errors, limits, fixed, up=1.0, prec=...)
 
 iminuit-style wrapper. Constructs the underlying `CostFunction` and
@@ -66,7 +95,7 @@ methods plus iminuit-style property access.
 - `m.fmin` — the underlying `BoundedFunctionMinimum` (`nothing`
   before `migrad!`).
 """
-mutable struct Minuit
+mutable struct Minuit <: AbstractFit
     # Phase F: was concretely `::CostFunction`. Now `::AbstractCostFunction`
     # so users can construct `Minuit(fcn, x0; grad=g, ...)` and have the
     # AD gradient survive the bounded MIGRAD → MINOS / contour chain.
@@ -117,6 +146,14 @@ mutable struct Minuit
     # from `Data.ndata`, and settable directly via `m.ndata = N`.
     ndata::Union{Int,Nothing}
 end
+
+# IMinuit.jl drop-in aliases. In IMinuit.jl `Fit` (keyword/scalar-arg
+# construction) and `ArrayFit` (vector construction) are distinct PyCall
+# wrapper subtypes; in native JuMinuit both reduce to the same `Minuit`
+# (the keyword constructor wraps `fcn(a,b)` into `x -> fcn(x...)`), so
+# they are aliases here, not separate types. See `AbstractFit` docs.
+const Fit = Minuit
+const ArrayFit = Minuit
 
 function Minuit(
     fcn,

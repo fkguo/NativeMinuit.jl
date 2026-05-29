@@ -97,6 +97,9 @@ export ContoursError, contour, contour_exact
 export function_cross_multi
 export BoundedFunctionMinimum, ext_errors, ext_covariance, free_covariance
 export Minuit, migrad!, minos!
+# IMinuit.jl drop-in fit-type names (AbstractFit supertype; Fit/ArrayFit
+# are aliases of Minuit — see AbstractFit docstring for why not distinct types)
+export AbstractFit, Fit, ArrayFit
 # Jupyter-first rich output (display.jl)
 export to_latex
 # Per-parameter mutators (mirror C++ MnUserParameters; gap M3)

@@ -17,6 +17,28 @@
         @test m.covariance === nothing
     end
 
+    @testset "AbstractFit / Fit / ArrayFit (IMinuit.jl drop-in types)" begin
+        m = Minuit(x -> sum(abs2, x), [1.0, 2.0])
+        # Minuit is a concrete subtype of the AbstractFit supertype.
+        @test Minuit <: AbstractFit
+        @test m isa AbstractFit
+        # Fit / ArrayFit are aliases of Minuit (same type, not distinct).
+        @test Fit === Minuit
+        @test ArrayFit === Minuit
+        @test m isa Fit
+        @test m isa ArrayFit
+        # Type annotations that IMinuit.jl user code uses must dispatch.
+        f_take(::AbstractFit) = :abstract
+        f_take_arr(::ArrayFit) = :array
+        @test f_take(m) === :abstract
+        @test f_take_arr(m) === :array
+        # Keyword/scalar-arg construction (IMinuit.jl `Fit` form) yields
+        # the same type as the array form.
+        mk = Minuit(x -> sum(abs2, x); a = 1.0, b = 2.0)
+        @test mk isa AbstractFit
+        @test typeof(mk) === typeof(m)
+    end
+
     @testset "migrad! workflow" begin
         m = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
                     names = ["x", "y"], errors = [0.1, 0.1])
