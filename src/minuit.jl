@@ -443,13 +443,13 @@ function migrad!(m::Minuit;
     #   (1) Fixed-point (cycle) detection. We keep a history of every
     #       converged (x, fval). If a later pass re-converges to an
     #       already-visited minimum (within a parameter-error-relative
-    #       tolerance), the retry map has cycled — re-running the
-    #       deterministic minimizer from a catalogued basin only
-    #       reproduces it — so we stop. This is a return to an
-    #       *already-explored* state, not a prediction about the future
-    #       (the same dedup-on-revisit rule scipy `basinhopping` and
-    #       practical multistart use). It recovers the wasted IAM retries,
-    #       where all 4 re-converge to fval=613.485.
+    #       tolerance), the perturbed restart fell back into a basin we
+    #       have already catalogued — the retry map has cycled — so we
+    #       stop. This is the dedup-on-revisit rule scipy `basinhopping`
+    #       (`niter_success`) and practical multistart use; it is a
+    #       heuristic, NOT a proof that an even larger perturbation could
+    #       not escape (that is undecidable). It recovers the wasted IAM
+    #       retries, where every pass re-converges to the same fval.
     #
     #   (2) Geometrically-growing Simplex perturbation. When `use_simplex`,
     #       successive passes enlarge the simplex seed step ×2 each pass
