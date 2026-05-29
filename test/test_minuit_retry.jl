@@ -275,4 +275,176 @@
         end
     end
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Fixed-point detection + multi-scale Simplex escape
+    # (PR feat/retry-fixed-point-multiscale)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @testset "n_passes diagnostic + iterate=1 is single-shot" begin
+        # n_passes reports how many MIGRAD passes ran. iterate=1 → exactly
+        # one (single-shot); a convex FCN that validates on pass 1 → one
+        # even at iterate=5 (the loop never enters).
+        m1 = Minuit(fcn_convex, [0.0, 0.0]; names = ["x", "y"], errors = [0.1, 0.1])
+        migrad!(m1; iterate = 1)
+        @test m1.n_passes == 1
+        m5 = Minuit(fcn_convex, [0.0, 0.0]; names = ["x", "y"], errors = [0.1, 0.1])
+        migrad!(m5; iterate = 5)
+        @test m5.n_passes == 1     # convex: retry never entered
+        @test m5.nfcn == m1.nfcn   # and no extra FCN calls (regression)
+    end
+
+    # A shared landscape: a shallow quadratic bowl around the origin, a tiny
+    # |sin(1e3·x)| ripple (whose O(1) gradient keeps the EDM above threshold,
+    # so any converged point is flagged INVALID without reaching the call
+    # limit), and a deep narrow Gaussian well offset at (0.8, 0.8). Seeded at
+    # the origin it exercises the multi-scale escape; seeded at the well it
+    # exercises fixed-point detection (the well is a clean, strong — but
+    # invalid — attractor that every retry re-converges to).
+    fcn_rugged = x -> (
+        0.3 * (x[1]^2 + x[2]^2)
+        + 1.0e-3 * (abs(sin(1.0e3 * x[1])) + abs(sin(1.0e3 * x[2])))
+        - 8.0 * exp(-((x[1] - 0.8)^2 + (x[2] - 0.8)^2) / 0.3)
+    )
+
+    @testset "Fixed-point detection stops a deterministically cycling retry" begin
+        # Seeded AT the well: pass 1 converges to the well but exits INVALID
+        # (the ripple keeps EDM above threshold) without hitting the budget.
+        # The well is the only attractor in reach, so every retry pass
+        # re-converges to the SAME point — the retry map has cycled.
+        # Fixed-point detection must catch the re-visit and stop early,
+        # recovering the wasted IAM-style retries (where all 4 passes
+        # re-converge to one fval).
+        m1 = Minuit(fcn_rugged, [0.8, 0.8]; names = ["x", "y"], errors = [0.05, 0.05])
+        migrad!(m1; iterate = 1, tol = 1e-6, maxfcn = 4000)
+        @test !m1.valid                              # pass 1 fails to validate
+        @test !m1.fmin.internal.reached_call_limit   # but NOT via the budget
+        @test m1.n_passes == 1
+
+        m5 = Minuit(fcn_rugged, [0.8, 0.8]; names = ["x", "y"], errors = [0.05, 0.05])
+        migrad!(m5; iterate = 5, tol = 1e-6, maxfcn = 4000)
+        # Loop entered (≥2 passes) but stopped BEFORE exhausting iterate=5:
+        # the cycle was detected. This is the core "stops early ONLY when
+        # provably redundant" claim.
+        @test 2 <= m5.n_passes < 5
+        # The published result is exactly the single-shot result — the
+        # retries cycled and added nothing, so the best-of-passes selector
+        # keeps pass 1 (no worse than iterate=1: the safety invariant).
+        @test m5.fval == m1.fval
+    end
+
+    @testset "Multi-scale retry escapes a noisy stall to a deeper basin" begin
+        # Seeded at the ORIGIN: single-shot (iterate=1) is trapped in the
+        # shallow noisy bowl and never reaches the deep well; the retry
+        # layer's growing Simplex hop escapes to it — the X(3872)-shaped
+        # "the deeper solution is only reached by perturbing out of the
+        # stall" outcome the spec calls for.
+        m1 = Minuit(fcn_rugged, [0.0, 0.0]; names = ["x", "y"], errors = [0.02, 0.02])
+        migrad!(m1; iterate = 1, tol = 1e-6, maxfcn = 4000)
+        @test !m1.valid          # pass 1 stuck in the shallow noisy bowl
+        @test m1.fval > -1.0     # has NOT reached the deep well (≈ −7.6)
+        @test m1.n_passes == 1
+
+        m5 = Minuit(fcn_rugged, [0.0, 0.0]; names = ["x", "y"], errors = [0.02, 0.02])
+        migrad!(m5; iterate = 5, tol = 1e-6, maxfcn = 4000)
+        @test m5.n_passes >= 2          # retry layer ran
+        @test m5.n_passes < 5           # and stopped early (re-converged on the well)
+        @test m5.fval < -5.0            # reached the deep well
+        @test m5.fval < m1.fval - 1.0   # strictly, substantially deeper
+        # Safety invariant holds across the escape too.
+        @test m5.fval <= m1.fval + 1e-10
+    end
+
+    @testset "retry policy helpers (unit)" begin
+        # ── Geometric growth schedule ────────────────────────────────────
+        # Pass 2 reproduces the fixed-scale hop (×1); each later pass ×2.
+        @test JuMinuit._retry_perturb_factor(2) == 1.0
+        @test JuMinuit._retry_perturb_factor(3) == 2.0
+        @test JuMinuit._retry_perturb_factor(4) == 4.0
+        @test JuMinuit._retry_perturb_factor(5) == 8.0
+
+        # ── Physical range used to cap growth ────────────────────────────
+        p_bounded = JuMinuit.MinuitParameter("a", 0.0, 0.1; lower = -2.0, upper = 3.0)
+        @test JuMinuit._retry_param_range(p_bounded, 0.1) == 5.0   # span
+        p_unbounded = JuMinuit.MinuitParameter("b", 0.0, 0.1)
+        @test JuMinuit._retry_param_range(p_unbounded, 0.1) ==
+              JuMinuit._RETRY_UNBOUNDED_RANGE_MULT * 0.1
+        p_onesided = JuMinuit.MinuitParameter("c", 0.0, 0.1; lower = -1.0)
+        @test JuMinuit._retry_param_range(p_onesided, 0.1) ==
+              JuMinuit._RETRY_UNBOUNDED_RANGE_MULT * 0.1   # not two-sided → step scale
+
+        # ── Scaled-params construction ───────────────────────────────────
+        #   a: unbounded → grows ×factor (range huge, never capped)
+        #   b: FIXED     → untouched
+        #   c: bounds (−1,1), step 0.1 → factor 4 wants 0.4 but the simplex
+        #      edge (10·step) must stay ≤ span 2 ⇒ step capped at 2/10 = 0.2
+        #   d: bounds (−0.3,0.3), step 0.1 → cap 0.6/10 = 0.06 is BELOW the
+        #      base step, so the floor keeps it at the base step (0.1)
+        m = Minuit(x -> sum(abs2, x), [0.0, 0.0, 0.0, 0.0];
+                    names = ["a", "b", "c", "d"], errors = [0.1, 0.2, 0.1, 0.1],
+                    limits = [nothing, nothing, (-1.0, 1.0), (-0.3, 0.3)],
+                    fixed = [false, true, false, false])
+        base_errs = [p.error for p in m.params.pars]
+        # factor ≤ 1 → returned object is the input unchanged (pass-2 identity).
+        @test JuMinuit._retry_scaled_params(m, m.params, 1.0, base_errs) === m.params
+        sp = JuMinuit._retry_scaled_params(m, m.params, 4.0, base_errs)
+        @test sp.pars[1].error ≈ 0.1 * 4.0   # unbounded: grown ×4 = 0.4
+        @test sp.pars[2].error == 0.2        # fixed: unchanged
+        @test sp.pars[3].error == 0.2        # capped at span/10 (< grown 0.4)
+        @test sp.pars[3].error < 0.1 * 4.0   # capping is observable
+        @test sp.pars[4].error == 0.1        # floored back to base step
+
+        # ── Saturation predicate ─────────────────────────────────────────
+        # A single tightly-bounded parameter: small factor not saturated,
+        # large factor saturated (10·factor·step ≥ span).
+        ms = Minuit(x -> x[1]^2, [0.0]; names = ["a"], errors = [0.1],
+                     limits = [(-1.0, 1.0)])
+        be_s = [p.error for p in ms.params.pars]
+        @test !JuMinuit._retry_perturb_saturated(ms, 1.0, be_s)   # 10·1·0.1=1 < 2
+        @test JuMinuit._retry_perturb_saturated(ms, 2.0, be_s)    # 10·2·0.1=2 ≥ 2
+    end
+
+    @testset "best-of-passes selector enforces the safety invariant" begin
+        # Build real BoundedFunctionMinima at known fvals via single-shot fits.
+        mlo = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
+                      names = ["x", "y"], errors = [0.1, 0.1])
+        migrad!(mlo; iterate = 1)
+        mhi = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2 + 10.0, [0.0, 0.0];
+                      names = ["x", "y"], errors = [0.1, 0.1])
+        migrad!(mhi; iterate = 1)
+        lo = mlo.fmin
+        hi = mhi.fmin
+        @test JuMinuit.fval(lo) < JuMinuit.fval(hi)
+        # Lower fval wins regardless of argument order.
+        @test JuMinuit._retry_select_better(lo, hi) === lo
+        @test JuMinuit._retry_select_better(hi, lo) === lo
+        # A candidate equal to the incumbent does not displace it (identity).
+        @test JuMinuit._retry_select_better(lo, lo) === lo
+    end
+
+    @testset "fixed-point predicate: detects revisits, never merges distinct minima" begin
+        # Two minima with the SAME fval (≈0) but very different positions.
+        ma = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
+                     names = ["x", "y"], errors = [0.1, 0.1])
+        migrad!(ma; iterate = 1)
+        mb = Minuit(x -> (x[1] - 5.0)^2 + (x[2] - 8.0)^2, [0.0, 0.0];
+                     names = ["x", "y"], errors = [0.1, 0.1])
+        migrad!(mb; iterate = 1)
+        bfm_a = ma.fmin
+        bfm_b = mb.fmin
+        base_errs = [0.1, 0.1]
+        visited_a = Tuple{Vector{Float64},Float64}[
+            (copy(bfm_a.ext_values), JuMinuit.fval(bfm_a))]
+
+        # Re-visiting the SAME converged point → detected.
+        @test JuMinuit._retry_is_fixed_point(bfm_a, visited_a, base_errs)
+        # A DISTINCT minimum with (near-)equal fval → NOT merged: the
+        # position gate disambiguates fval-degenerate minima. This is the
+        # "fixed-point detection can't false-positive on a still-progressing
+        # search" guarantee.
+        @test !JuMinuit._retry_is_fixed_point(bfm_b, visited_a, base_errs)
+        # Empty history → nothing to match.
+        @test !JuMinuit._retry_is_fixed_point(
+            bfm_a, Tuple{Vector{Float64},Float64}[], base_errs)
+    end
+
 end

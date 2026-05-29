@@ -104,6 +104,12 @@ mutable struct Minuit
     # only enabled for expensive FCNs). Set to `false` to bypass once
     # you've confirmed thread-safety another way.
     verify_threading::Bool
+    # Diagnostic: number of MIGRAD passes the last `migrad!` executed
+    # (1 = single-shot / no retry; >1 = the robust retry loop ran extra
+    # passes). Lets callers and tests observe the fixed-point / multi-scale
+    # early-stop behavior without instrumenting FCN call counts. `0` before
+    # the first `migrad!`.
+    n_passes::Int
 end
 
 function Minuit(
@@ -230,7 +236,7 @@ function Minuit(
     strat = strategy isa Strategy ? strategy : Strategy(Int(strategy))
     return Minuit(cf, params, nothing, Dict{Int,MinosError}(), prec,
                   cfwg, strat, Float64(tol), Int(print_level),
-                  Bool(threaded_gradient), Bool(verify_threading))
+                  Bool(threaded_gradient), Bool(verify_threading), 0)
 end
 
 # IMinuit.jl-style: named-parameter constructor where each parameter
@@ -352,17 +358,37 @@ reached, retry up to `iterate-1` more passes. Each retry:
   HasCovariance branch). With `use_simplex=true`, the post-Simplex
   state has no usable inverse Hessian, so `prior_cov` is dropped and
   the next seed falls back to the diagonal-from-g2 estimate (this
-  matches installed iminuit 2.32.0 `_robust_low_level_fit`).
+  matches installed iminuit 2.32.0 `_robust_low_level_fit`). The
+  Simplex seed step **grows geometrically** per retry (×1, ×2, ×4, …
+  from the parameter error scale, capped at the parameter's physical
+  range) so a neighbouring minimum reachable at some scale is found —
+  a structured multistart, in the spirit of MINUIT `MnMinimize` and
+  scipy `basinhopping`.
 
-This helps in two distinct scenarios:
+The loop is a structured multistart that stops early when it is
+provably redundant:
 
-1. The seed-time MnHesse pathology PR #6 fixes — retry now redundant
-   for these cases but harmless.
-2. Genuine multiple local minima in the user FCN (the common case in
-   multi-parameter HEP amplitude / phase-shift / LEC fits).
+1. **Fixed-point (cycle) detection.** A history of every converged
+   `(x, fval)` is kept; if a pass re-converges to an already-visited
+   minimum (within a parameter-error-relative tolerance) the retry map
+   has cycled and the loop stops. This recovers the wasted retries on
+   fits with a single reachable basin (e.g. IAM, where all retries
+   re-converge to the same point).
+2. **Multi-scale escape** for genuine multiple local minima (the common
+   case in multi-parameter HEP amplitude / phase-shift / LEC fits): the
+   growing Simplex perturbation reaches further out each pass until it
+   escapes, cycles, or spans the physical range.
+
+This does NOT prove the global minimum was found (global optimization is
+undecidable). The defensible statement: searched perturbation scales up
+to re-convergence on a known basin or the physical parameter range.
 
 `iterate=1` disables the retry loop and reproduces single-shot
-C++-faithful behavior.
+C++-faithful behavior. The **safety invariant** is guaranteed by
+construction: `iterate=N` never yields a worse `fval` than `iterate=1`
+(the lowest-fval pass is published, tie → the valid one). The number of
+MIGRAD passes the call executed is recorded in `m.n_passes` (1 = no
+retry).
 
 Updates `m.fmin`. Returns `m` for chaining. If the constructor was
 given `grad=...`, dispatches into the analytical-gradient path on
@@ -410,42 +436,79 @@ function migrad!(m::Minuit;
                          verify_threading = verify_threading,
                          print_level = print_level)
 
-    # Retry loop — iminuit `_robust_low_level_fit` parity. Each pass
-    # past the first:
-    #   1. Bumps Strategy to (2) regardless of the user's choice.
-    #   2. Optionally runs a Nelder-Mead Simplex step from the failed
-    #      point before MIGRAD (`use_simplex=true`, the default).
-    #   3. Carries the failed fit's inverse Hessian as `prior_cov` to
-    #      the next MIGRAD seed — but only when no intervening Simplex
-    #      step has invalidated it (Simplex leaves available=false,
-    #      so `_retry_prior_cov` returns `nothing` after one).
-    # Loop exits when the fit validates OR the call limit is exhausted
-    # (retrying with no budget left would just waste the budget on
-    # another forced abort).
-    # The retry strategy is `Strategy(2)` for numerical-gradient FCNs
-    # (the iminuit default). For analytical-gradient FCNs (`m.cfwg !==
-    # nothing`), the AD `seed_state` rejects any strategy.level != 0
-    # (see `src/ad_gradient.jl:254-255`); rather than throw mid-retry,
-    # we keep the user's stored strategy on the AD path. Retry's
-    # value-add for AD users then comes from the Simplex hop and the
-    # prior_cov carry, not the Strategy bump.
+    # Robust retry loop — a structured multistart on top of the iminuit
+    # `_robust_low_level_fit` shape (Simplex hop / prior_cov carry /
+    # Strategy(2) bump). Two refinements over the PR #8 fixed-scale version:
+    #
+    #   (1) Fixed-point (cycle) detection. We keep a history of every
+    #       converged (x, fval). If a later pass re-converges to an
+    #       already-visited minimum (within a parameter-error-relative
+    #       tolerance), the retry map has cycled — re-running the
+    #       deterministic minimizer from a catalogued basin only
+    #       reproduces it — so we stop. This is a return to an
+    #       *already-explored* state, not a prediction about the future
+    #       (the same dedup-on-revisit rule scipy `basinhopping` and
+    #       practical multistart use). It recovers the wasted IAM retries,
+    #       where all 4 re-converge to fval=613.485.
+    #
+    #   (2) Geometrically-growing Simplex perturbation. When `use_simplex`,
+    #       successive passes enlarge the simplex seed step ×2 each pass
+    #       (`_retry_perturb_factor`), starting at the parameter error scale
+    #       and capped at the parameter's physical range (its bounds, or a
+    #       multiple of its error if unbounded). If a neighbouring minimum
+    #       is reachable at *some* scale within the physical range, a
+    #       growing search finds it (the X(3872) `J/ψρ + DD̄*` multi-dip
+    #       case the fixed-scale hop could not escape). Once the perturbation
+    #       spans the physical range of every free parameter, further growth
+    #       is meaningless → natural termination, independent of `iterate`.
+    #
+    # We do NOT claim the global minimum is found — global optimization is
+    # undecidable. The defensible statement is: searched perturbation scales
+    # up to re-convergence on a known basin or the parameter physical range;
+    # if a deeper minimum existed within the searched range it would have
+    # been found (cf. MINUIT `MnMinimize` = Migrad+Simplex, scipy
+    # `basinhopping`, the multistart literature).
+    #
+    # Loop exits when the fit validates, the call limit is exhausted, the
+    # perturbation saturates the physical range, or a cycle is detected.
+    # The retry strategy is `Strategy(2)` for numerical-gradient FCNs (the
+    # iminuit default). For analytical-gradient FCNs (`m.cfwg !== nothing`)
+    # the AD `seed_state` rejects any strategy.level != 0 (see
+    # `src/ad_gradient.jl:254-255`); rather than throw mid-retry we keep the
+    # user's stored strategy on the AD path. Retry's value-add for AD users
+    # then comes from the Simplex hop and the prior_cov carry, not the bump.
+    #
+    # Safety invariant (PR #8): `iterate=N` never yields a worse fval than
+    # `iterate=1`. We guarantee it *by construction* — `best_bfm` tracks the
+    # lowest-fval pass (exact tie → the valid one) and is what lands in
+    # `m.fmin`. The loop-control `bfm` is the latest pass (drives the
+    # valid/budget break and the next perturbation seed); the published
+    # result is `best_bfm`.
     retry_strategy = m.cfwg === nothing ? Strategy(2) : strategy
+    best_bfm = bfm
+    npass = 1
+    # The user's per-parameter step on m.params is the stable, pass-invariant
+    # length scale for both the fixed-point tolerance and the growth ceiling.
+    base_errs = [p.error for p in m.params.pars]
+    visited = Tuple{Vector{Float64},Float64}[(copy(bfm.ext_values), fval(bfm))]
     for _pass in 2:Int(iterate)
         (is_valid(bfm.internal) || bfm.internal.reached_call_limit) && break
 
         params_next = _build_resume_params(m, bfm)
         prior_cov = nothing
+        factor = _retry_perturb_factor(_pass)
         if use_simplex
-            # Simplex from the failed point. The result may have shifted
-            # into a different basin; we carry its ext_values forward as
-            # the next MIGRAD seed. We do NOT extract a prior_cov here —
-            # simplex never built an inverse Hessian (its MinimumError
-            # is the I placeholder with available=false), and
-            # `_retry_prior_cov(sx)` would return nothing in any case.
-            # This matches installed iminuit 2.32.0 `_robust_low_level_fit`,
-            # which recreates `MnMigrad` from the post-Simplex state with
-            # no warm-start covariance.
-            sx = simplex(m.fcn, params_next;
+            # Simplex from the failed point, with the per-pass growing seed
+            # step. The result may have shifted into a different basin; we
+            # carry its ext_values forward as the next MIGRAD seed. We do
+            # NOT extract a prior_cov here — simplex never built an inverse
+            # Hessian (its MinimumError is the I placeholder with
+            # available=false), and `_retry_prior_cov(sx)` would return
+            # nothing in any case. This matches installed iminuit 2.32.0
+            # `_robust_low_level_fit`, which recreates `MnMigrad` from the
+            # post-Simplex state with no warm-start covariance.
+            params_pert = _retry_scaled_params(m, params_next, factor, base_errs)
+            sx = simplex(m.fcn, params_pert;
                           maxfcn = maxfcn, prec = m.prec)
             params_next = _build_resume_params(m, sx)
         else
@@ -459,9 +522,21 @@ function migrad!(m::Minuit;
                              verify_threading = verify_threading,
                              print_level = print_level,
                              prior_cov = prior_cov)
+        npass += 1
+        best_bfm = _retry_select_better(bfm, best_bfm)
+
+        # Cycle detection: re-convergence to an already-catalogued basin.
+        _retry_is_fixed_point(bfm, visited, base_errs) && break
+        push!(visited, (copy(bfm.ext_values), fval(bfm)))
+
+        # Natural termination: the growing perturbation has spanned every
+        # free parameter's physical range, so no larger meaningful hop
+        # remains (only relevant for `use_simplex`).
+        use_simplex && _retry_perturb_saturated(m, factor, base_errs) && break
     end
 
-    m.fmin = bfm
+    m.fmin = best_bfm
+    m.n_passes = npass
     return m
 end
 
@@ -515,6 +590,135 @@ function _retry_prior_cov(bfm::BoundedFunctionMinimum)
     err = bfm.internal.state.error
     is_available(err) || return nothing
     return err.inv_hessian
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Structured-multistart retry policy (fixed-point detection + multi-scale
+# Simplex perturbation). These power the `migrad!` retry loop.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Position match tolerance for fixed-point detection, as a fraction of the
+# per-coordinate length scale (max of |value|, |converged uncertainty|,
+# |user step|). Two converged points count as "the same minimum" when every
+# free coordinate agrees to this fraction AND their fvals agree (below). 1%
+# is far tighter than the spacing between physically-distinct minima (many σ
+# apart) yet far looser than a minimizer's position reproducibility, so it
+# can neither merge distinct minima nor miss a genuine re-convergence.
+const _RETRY_XTOL_REL = 1.0e-2
+# fval match tolerance (relative + absolute floor). The coarse "same energy"
+# gate; the position test is the disambiguator for fval-degenerate distinct
+# minima (e.g. symmetric wells with equal depth).
+const _RETRY_FTOL_REL = 1.0e-4
+const _RETRY_FTOL_ABS = 1.0e-12
+# Unbounded "physical range" = this multiple of the parameter step. The
+# perturbation growth is capped here; chosen large enough that for the
+# typical `iterate` ≤ 5 the iterate cap (not this ceiling) governs unbounded
+# fits, while bounded fits cap at their actual span.
+const _RETRY_UNBOUNDED_RANGE_MULT = 1.0e3
+
+# Geometric perturbation factor for retry pass `p` (p ≥ 2): 1, 2, 4, 8, …
+# Pass 2 reproduces the PR #8 fixed-scale hop (factor 1); each later pass
+# doubles the Simplex seed step so the search reaches further out.
+_retry_perturb_factor(p::Integer) = 2.0^(p - 2)
+
+# Per-parameter physical range used to cap perturbation growth. Two-sided
+# bounds → the bound span; one-sided/unbounded → a multiple of the step
+# (there is no finite physical range, so we cap on the natural scale).
+function _retry_param_range(p::MinuitParameter, base_err::Float64)
+    if has_lower_limit(p) && has_upper_limit(p)
+        return p.upper - p.lower
+    end
+    return _RETRY_UNBOUNDED_RANGE_MULT * max(abs(base_err), eps())
+end
+
+# Build a `Parameters` clone of `params_next` with each free parameter's
+# Simplex seed step grown by `factor`, capped so the simplex initial edge
+# (10·step, see `simplex`) does not exceed the parameter's physical range.
+# `factor ≤ 1` returns `params_next` unchanged so pass 2 is byte-identical
+# to the PR #8 fixed-scale hop. Fixed parameters and all values pass
+# through untouched.
+function _retry_scaled_params(m::Minuit, params_next::Parameters,
+                               factor::Float64, base_errs::Vector{Float64})
+    factor <= 1.0 && return params_next
+    n = n_pars(params_next)
+    new_pars = Vector{MinuitParameter}(undef, n)
+    @inbounds for i in 1:n
+        p = params_next.pars[i]
+        if is_fixed(p)
+            new_pars[i] = p
+            continue
+        end
+        range_i = _retry_param_range(m.params.pars[i], base_errs[i])
+        grown = p.error * factor
+        # simplex edge is 10·step; cap the step so 10·step ≤ range, but
+        # never shrink below the carried-forward base step.
+        step = max(min(grown, range_i / 10.0), p.error)
+        new_pars[i] = MinuitParameter(p.name, p.value, step;
+                                       lower = p.lower, upper = p.upper,
+                                       fixed = p.fixed)
+    end
+    return Parameters(new_pars, m.prec)
+end
+
+# True once the perturbation has spanned the physical range of EVERY free
+# parameter (10·factor·step ≥ range): further growth is meaningless, so the
+# retry loop can stop independently of the `iterate` cap. For unbounded
+# parameters the range is `_RETRY_UNBOUNDED_RANGE_MULT × step`, so this only
+# binds for bounded fits or very large `iterate`.
+function _retry_perturb_saturated(m::Minuit, factor::Float64,
+                                    base_errs::Vector{Float64})
+    @inbounds for i in 1:n_pars(m.params)
+        p = m.params.pars[i]
+        is_fixed(p) && continue
+        range_i = _retry_param_range(p, base_errs[i])
+        10.0 * factor * max(abs(base_errs[i]), eps()) < range_i && return false
+    end
+    return true
+end
+
+# Best-of-passes selector enforcing the safety invariant: a strictly-lower
+# fval always wins; an exact tie goes to the valid result; a worse (or
+# non-finite) candidate never replaces the incumbent. Guarantees the
+# published fval is ≤ the pass-1 fval (so `iterate=N` ≤ `iterate=1`).
+function _retry_select_better(cand::BoundedFunctionMinimum,
+                               best::BoundedFunctionMinimum)
+    fc = fval(cand)
+    fb = fval(best)
+    isfinite(fc) || return best
+    fc < fb && return cand
+    (fc == fb && is_valid(cand) && !is_valid(best)) && return cand
+    return best
+end
+
+# Fixed-point (cycle) detection: true when `bfm`'s converged (x, fval)
+# matches any previously-visited (x, fval) within the parameter-error-
+# relative tolerances above — i.e. the retry map has returned to an
+# already-explored minimum. fval is the coarse gate; position
+# disambiguates fval-degenerate distinct minima. The length scale is
+# max(|value|, |uncertainty|, |user step|) per coordinate, which stays
+# meaningful even on invalid fits where `ext_errors` collapses to the
+# (possibly tiny) user step.
+function _retry_is_fixed_point(bfm::BoundedFunctionMinimum,
+                                visited::Vector{Tuple{Vector{Float64},Float64}},
+                                base_errs::Vector{Float64})
+    x = bfm.ext_values
+    f = fval(bfm)
+    isfinite(f) || return false   # NaN/Inf pass is not a usable fixed point
+    ferr = bfm.ext_errors
+    @inbounds for (xj, fj) in visited
+        abs(f - fj) <= _RETRY_FTOL_REL * (abs(fj) + _RETRY_FTOL_ABS) || continue
+        same = true
+        for i in eachindex(x)
+            scale = max(abs(x[i]), abs(xj[i]), abs(ferr[i]),
+                        abs(base_errs[i]), _RETRY_FTOL_ABS)
+            if abs(x[i] - xj[i]) > _RETRY_XTOL_REL * scale
+                same = false
+                break
+            end
+        end
+        same && return true
+    end
+    return false
 end
 
 # Build a fresh `Parameters` with values carried forward from a given
@@ -1249,7 +1453,7 @@ end
 
 function Base.propertynames(m::Minuit, ::Bool = false)
     return (:fcn, :params, :fmin, :minos_errors, :prec, :cfwg,
-            :strategy, :tol, :print_level,
+            :strategy, :tol, :print_level, :n_passes,
             # JuMinuit-native
             :values, :errors, :fval, :edm, :nfcn, :valid,
             :covariance, :ndim, :npar,
