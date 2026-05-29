@@ -88,8 +88,13 @@
         #   g2 = [2e9, 0]
         # The diagonal pass succeeds on x[1] (g2=2e9 huge), fails on
         # x[2] (sag=0 forever → bail to `_hesse_diagonal_failure`).
-        # Pre-fix:  V.diag = [1.0, 1.0]   (the bug)
-        # Post-fix: V.diag = [5e-10, 1.0] (1/g2 preserved for x[1])
+        # The C++ MnHesse-fail fallback (mirrored here after the
+        # `feat/davidon-cxx-audit` option-1 revert) applies a SECOND
+        # CLAMP `tmp < eps2 ? 1 : tmp`: for x[1] with `1/g2 = 5e-10`
+        # which is below `eps2 = 2.98e-8`, V[1,1] gets clamped to 1.0.
+        # See docs/DAVIDON_CXX_AUDIT.md for the audit that motivated
+        # restoring this clamp — it's what lets IAM x_jm warm-start
+        # walk to χ²=322.59 via the V≈I-induced large Newton step.
         cf = CostFunction(x -> 1e9 * x[1]^2 + 0.0 * x[2], 1.0)
         seed = JuMinuit.seed_state(cf, [0.5, 0.5], [0.1, 0.1],
                                     Strategy(2), JuMinuit.MachinePrecision())
@@ -98,10 +103,9 @@
         # status for this pathological FCN.
         @test seed.error.status == MnHesseFailed
         V = parent(seed.error.inv_hessian)
-        # The bug being regressed: V[1,1] must NOT be 1.0 (the clamp
-        # value). After the fix, V[1,1] = 1/g2[1] ≈ 5e-10.
-        @test V[1, 1] < 1e-5  # asserting "not clamped to 1"
-        @test V[1, 1] > 0.0   # asserting "not degenerate either"
+        # C++ MnHesse.cxx:177-180 second clamp: 1/g2[1] = 5e-10 < eps2 →
+        # V[1,1] = 1.0 (the clamp value).
+        @test V[1, 1] == 1.0
         # For the truly-degenerate param 2 (g2=0 < eps2), the fallback
         # to 1.0 is correct — `1/0` is not meaningful.
         @test V[2, 2] == 1.0

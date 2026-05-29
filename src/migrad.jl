@@ -691,7 +691,35 @@ function _migrad_loop(
         iterate = false
 
         # ── Inner DFP variable-metric loop ────────────────────────────
-        while edm_corrected > edmval && ncalls(cf) < maxfcn_eff
+        # Mirrors C++ `VariableMetricBuilder.cxx:237/341` `do {...} while`
+        # — runs the body at least once even when the seed edm is below
+        # tolerance, so a placeholder-V seed (MnHesse-fail at S=2 → V≈I
+        # via the second clamp restored in `_hesse_diagonal_failure`) can
+        # take its iter-1 trial step. That's the basin-walk path that
+        # lets the IAM x_jm warm start reach χ²=322.59 like iminuit does.
+        #
+        # **Status-gated entry shortcut** (JuMinuit-only optimization, see
+        # `docs/DAVIDON_CXX_AUDIT.md` option B): when (a) edm is already
+        # below tolerance AND (b) the current V has status `MnHesseValid`
+        # (i.e., came from a real Hesse / DFP-update, NOT a placeholder),
+        # skip the body. Preserves the historical "warm-restart at
+        # converged seed = no-op" contract that `function_cross_multi` /
+        # MINOS / contour_exact rely on heavily (~80 probes per MINOS
+        # direction, ~200 per contour point; each redundant iter would
+        # cost ~30–90 FCN). Documented C++ divergence: C++ never short-
+        # circuits the do-while; it always pays the iter-1 cost.
+        #
+        # The placeholder-V case (status `MnHesseFailed` post MnHesse-fail,
+        # `MnMadePosDef` post MnPosDef, `MnInvertFailed` post inversion
+        # failure) is exactly the path where do-while semantics matter
+        # for correctness — the iter-1 step under V≈I is what walks the
+        # IAM x_jm warm start to χ²=322.59. Dcovar alone is NOT a clean
+        # discriminator: a freshly-DFP'd converged state can carry
+        # dcovar 0.1–0.5 yet be perfectly trustworthy.
+        while true
+            if edm_corrected <= edmval && s0.error.status == MnHesseValid
+                break
+            end
             # ── Step 1: step = -V·g
             sym_mul!(step, s0.error.inv_hessian, s0.gradient.grad, -1.0, 0.0)
 
@@ -844,6 +872,10 @@ function _migrad_loop(
             end
 
             use_a = !use_a   # flip so next iter writes to the OTHER set
+
+            # ── Do-while termination check (C++ VariableMetricBuilder
+            #    .cxx:341):  while (edm > edmval && fcn.NumOfCalls() < maxfcn)
+            (edm_corrected > edmval && ncalls(cf) < maxfcn_eff) || break
         end
 
         # ── Strategy ≥ 1 inner-Hesse refinement (C++ lines 138-173) ─────

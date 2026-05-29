@@ -397,52 +397,70 @@ double tmp = g2(j) < prec.Eps2() ? 1. : 1. / g2(j);
 vhmat(j, j) = tmp < prec.Eps2() ? 1. : tmp;
 ```
 
-The first check guards against `1/0` when `g2 < eps2` (good). The
-second check fires when `1/g2 < eps2`, i.e. `g2 > 1/eps2 ≈ 6.7e7`,
-and replaces the meaningful `1/g2` with `1.0`. That second clamp is
-actively harmful: `1/g2 = 1e-10` means the parameter is **very well
-determined** (FCN is steep along that direction), and replacing it
-with `1.0` tells MIGRAD the parameter is **poorly** determined — the
-opposite of the truth.
+The first check guards against `1/0` when `g2 < eps2`. The second
+check fires when `1/g2 < eps2`, i.e. `g2 > 1/eps2 ≈ 6.7e7`, and
+replaces the meaningful `1/g2` with `1.0`. The intuition "1/g2 = 1e-10
+means the parameter is well determined" suggests the second clamp is
+counterproductive — and PR #6 (commit a1fa015) acted on that
+intuition, removing it. But the empirical IAM x_jm warm-start audit
+(docs/DAVIDON_CXX_AUDIT.md) revealed the opposite: that clamp is
+**load-bearing** for cross-basin convergence. The story:
 
-The downstream consequence we hit on `BenchmarkExamples/IAM_2Pformfactor`:
-when MnHesse bails at the last parameter (FCN-flat → sag=0) AND all
-preceding params have huge g2 (steep FCN), the C++ formula produces
-`V = I` everywhere. The Newton step `−V·g ≈ −g` (with `|g| ~ 1e6`)
-is then so large that line-search backtracks to `slam ~ 1e-3` while
-the FCN keeps rising, and MIGRAD bails "No improvement". The same
-trap fires in iminuit at Strategy(2) on the same x_failed point —
-**this is a C++ bug, not a JuMinuit transcription error**.
+- At the IAM x_jm warm start, all 8 active LECs have `g2 ≈ 1e10` and
+  the 9th coord has `g2 = 0` (zero-curvature). The clamp produces
+  `V ≈ I` (1 on every diagonal). Newton step `−V·g ≈ −g` with
+  `|g| ≈ 500` is large enough to cross the local-minimum boundary;
+  iminuit walks to χ²=322.59 over 8 inner-DFP iters.
+- PR #6's `V = diag(1/g2)` produces step `−V·g ≈ 1e-10·g ≈ 1e-8`
+  per coord — sub-precision, no walk, MIGRAD bails at χ²=325.80.
+- The OTHER regime PR #6 cared about (paras0 cold seed with
+  `|g| ≈ 1e6`): C++ `V ≈ I` does cause line-search blowup, MIGRAD
+  bails. iminuit hits the same trap. The "fix" was JuMinuit-only.
 
-We diverge by using `1/g2` whenever `g2` is well-defined (drop the
-second clamp), which matches the semantics of
-`MnSeedGenerator.cxx:69-70` (`mat(i,i) = abs(g2[i]) > Eps2 ? 1/g2[i] : 1`).
-With the IAM x_failed point, the resulting `V.diag = [1/g2_i, ..., 1]`
-gives a small, well-conditioned Newton step that lets MIGRAD escape
-the basin.
+We restored the C++ clamp here because the IAM x_jm correctness gain
+outweighs the paras0 cold-seed regression (which exists in iminuit
+too — see iminuit S=2 from paras0 = 1268.65 stuck). The standard
+HEP workflow of "S=0/1 from cold seeds, polish at S=2" already
+avoids the paras0+S=2 trap.
 
 # Edge cases
 
-- `g2[j] = Inf` → `1/g2 = 0` (not "tiny" — exactly 0). We treat 0 as
-  degenerate (V cannot be zero — MnPosDef would lift it but the
-  signal is wrong) and fall back to 1.
-- `g2[j] = NaN` → `isfinite` is false → fall back to 1.
-- `g2[j] = -1e10` (negative — should have been caught by
-  `negative_g2_line_search` earlier, but defensively) →
-  `abs(g2) > eps2` is true, `1/g2 = -1e-10` (negative). MnPosDef
-  downstream would flip the sign; here we let it through (matches
-  MnSeedGenerator's behavior — `1/g2[i]` not `1/abs(g2[i])`).
+- `g2[j] = Inf` → `1/g2 = 0`. Both clamps fall back to `V[j,j] = 1`
+  (the first check on `g2 < eps2` is false, then the second check
+  on `tmp < eps2` is true → 1).
+- `g2[j] = NaN` → first check uses `abs(NaN) < eps2 == false` →
+  goes to `1/NaN = NaN`; second check uses `abs(NaN) < eps2 == false`
+  → propagates NaN to `V[j,j]`. Pathological FCN, downstream
+  MnPosDef has to recover.
+- `g2[j] = -1e10` (negative — defensively): both checks operate on
+  `abs(...)`, so first check sees `1e10 ≥ eps2` → uses `1/(-1e10) =
+  -1e-10`; second check on `abs(-1e-10) < eps2` → fires → `V[j,j]
+  = 1`. Matches C++ behavior (which uses raw `g2(j)` without abs in
+  the first check; for `g2 < 0` the first check `g2 < eps2` is true
+  → C++ falls back to 1 immediately).
 
-See `scratch/iam_seed_at_failed.jl` for the live reproduction.
+See `scratch/iam_seed_at_failed.jl` and `docs/DAVIDON_CXX_AUDIT.md`
+for the live reproduction and audit trail.
 """
 function _hesse_diagonal_failure(state::MinimumState, g2::Vector{Float64},
                                   prec::MachinePrecision, nfcn::Integer,
                                   status::CovStatus)
     n = length(g2)
     M = zeros(Float64, n, n)
+    # Mirrors C++ MnHesse.cxx:177-180 fallback EXACTLY — the two-stage
+    # clamp:
+    #     tmp = (g2[j] < eps2) ? 1 : 1/g2[j]
+    #     vhmat[j,j] = (tmp < eps2) ? 1 : tmp
+    # The SECOND clamp catches the case `1/g2 < eps2` (i.e., g2 too
+    # large, > 1/eps2 ≈ 3e7) and falls back to V[j,j] = 1. PR #6
+    # (commit a1fa015) had removed this clamp on the theory it was a
+    # C++ bug; the empirical IAM x_jm + iminuit cross-check audit
+    # (docs/DAVIDON_CXX_AUDIT.md) showed the clamp is what produces
+    # the iminuit-style V ≈ I that walks the warm start across basins
+    # to χ²=322.59 in 8 DFP iters. Restored here for C++ parity.
     @inbounds for j in 1:n
-        v = abs(g2[j]) > prec.eps2 ? 1.0 / g2[j] : 1.0
-        M[j, j] = (isfinite(v) && v != 0.0) ? v : 1.0
+        tmp = abs(g2[j]) < prec.eps2 ? 1.0 : 1.0 / g2[j]
+        M[j, j] = abs(tmp) < prec.eps2 ? 1.0 : tmp
     end
     err = MinimumError(Symmetric(M, :U), status)
     return MinimumState(state.parameters, err, state.gradient,

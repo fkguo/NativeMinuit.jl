@@ -270,6 +270,41 @@ hidden global state (RNG, file I/O, shared caches). Pre-allocated
 buffers inside the FCN's closure are fine if they're per-call (e.g.,
 `s = 0.0` reduction variables); avoid module-level mutable scratch.
 
+### Known caveat — `Strategy(2)` from a cold seed
+
+When invoking `migrad!(m; strategy = Strategy(2))` directly from a
+user-supplied raw seed where the FCN has a parameter with very small
+or zero 2nd derivative (`g2 ≈ 0`, e.g. an LEC the data is locally
+insensitive to), `MnHesse` at seed time fails on that coordinate and
+falls back to the C++ `_hesse_diagonal_failure` second clamp →
+`V ≈ I`. For large initial gradient (e.g. raw chi² ≈ 10³), the
+Newton step `−V·g` overshoots and line search bails on first iter —
+MIGRAD reports `fval = fval_initial` (no progress).
+
+This is the standard C++ Minuit2 cold-seed pathology, reproduced
+exactly by `iminuit Strategy(2)` on the same input
+(`BenchmarkExamples/IAM_2Pformfactor` from `paras0`: both libraries
+stuck at χ² = 1268.65). **Standard HEP workflow** (and what
+`scratch/iam_cross_basin_test.jl` does by default):
+
+```julia
+# 1. From a cold seed: use Strategy(0) or Strategy(1)
+m = Minuit(chi2, x0; error = errs)
+m.strategy = Strategy(1)
+migrad!(m)                              # finds a basin
+
+# 2. Polish at Strategy(2) ONLY after entering a basin
+m.strategy = Strategy(2)
+migrad!(m)                              # refines covariance + extra DFP iters
+hesse!(m)                               # full numerical Hessian
+```
+
+The `migrad!(m; iterate=5, use_simplex=true)` retry layer (default in
+PR #8) does **not** rescue the `Strategy(2)` cold-seed trap because
+the trapped first pass exhausts no budget that Simplex can hop over;
+the algorithm is already at a fixed point. Use the two-stage workflow
+above. See `docs/DAVIDON_CXX_AUDIT.md` for the audit trail.
+
 ### Reliability
 
 - **888/888 tests pass** (Aqua + JET clean).
