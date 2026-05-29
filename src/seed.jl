@@ -7,12 +7,16 @@
 # numerical-gradient overload). Analytical-gradient overload at C++
 # lines 103-174 is Phase 1+ (when FCNGradAdapter lands).
 #
-# Phase 0:
-# - No user-supplied covariance prior (dcovar = 1.0 always).
+# Behavior:
+# - Optional user-supplied covariance prior (M5): `prior_cov` overrides the
+#   diagonal-from-g2 seed and sets dcovar = 0; otherwise dcovar = 1.0.
 # - NegativeG2LineSearch invoked UNCONDITIONALLY whenever
 #   has_negative_g2(grad) holds (Opus parallel-review blocking #2).
-# - Strategy(0) only — the `if Strategy()==2 && !HasCovariance` branch
-#   that runs MnHesse at C++ line 88-98 is Phase 1.
+# - All strategy levels supported. Strategy(2) runs the seed-time MnHesse
+#   bootstrap (`if Strategy()==2 && !HasCovariance`, C++ line 88-98) at the
+#   bottom of `seed_state`; Strategy ≥ 1's extra accuracy also enters via the
+#   inner-HESSE refinement in `_migrad_loop`. The analytical/AD `seed_state`
+#   (src/ad_gradient.jl) mirrors this contract.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # M5 helper: validate + materialize a user-supplied prior covariance matrix.
@@ -69,7 +73,8 @@ Build the initial `MinimumState` for a MIGRAD fit. Mirrors
 5. Construct `MinimumState`.
 6. **Unconditional** `has_negative_g2` check; if any `g2[i] ≤ 0`,
    refine via `negative_g2_line_search` (C++ lines 79-86).
-7. Phase 0: skip the MnHesse branch (Strategy(0) only).
+7. Strategy(2) (and no `prior_cov`): run the seed-time MnHesse
+   bootstrap (C++ lines 88-98). Levels 0/1 skip it.
 
 # Arguments
 

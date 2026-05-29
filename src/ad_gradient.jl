@@ -251,8 +251,17 @@ function seed_state(
     n = length(x0)
     length(errs) == n ||
         throw(DimensionMismatch("errs length $(length(errs)) != x0 length $n"))
-    strategy.level == 0 ||
-        throw(ArgumentError("Phase 0 supports Strategy(0) only"))
+    # All strategy levels are supported, mirroring the numerical
+    # `seed_state` (seed.jl): the diagonal-from-g2 seed below is
+    # strategy-independent (the AD gradient is exact, so the
+    # gradient-cycle knobs are moot at the seed), and Strategy ≥ 1's
+    # extra accuracy enters via (a) the seed-time MnHesse bootstrap at
+    # level 2 (added at the bottom of this function) and (b) the
+    # dcovar-triggered inner-HESSE refinement in `_migrad_loop`. Both
+    # finite-difference `cf.f` through the `hesse(::AbstractCostFunction)`
+    # path, which accepts `CostFunctionWithGradient`. This lets the
+    # high-level `Minuit(fcn, x0; grad=g)` default to `Strategy(1)` —
+    # iminuit `Minuit`-class parity — instead of falling back to level 0.
 
     x = collect(Float64, x0)
     dirin = collect(Float64, errs)
@@ -286,6 +295,17 @@ function seed_state(
         # numerical_gradient! semantics under the hood)
         state = negative_g2_line_search(state, cf, strategy, prec)
     end
+
+    # Strategy(2): seed-time MnHesse bootstrap. Mirrors the numerical
+    # `seed_state` (seed.jl:165-166) and C++ MnSeedGenerator.cxx:88-98.
+    # `hesse(cf::CostFunctionWithGradient, …)` finite-differences `cf.f`
+    # to build the Hessian (it accepts any `AbstractCostFunction`), so the
+    # bootstrap is well-defined on the AD path too. Skipped when the caller
+    # supplied `prior_cov` (the `!HasCovariance` C++ guard).
+    if strategy.level == 2 && prior_cov === nothing
+        state = hesse(cf, state, strategy; prec = prec)
+    end
+
     return state
 end
 

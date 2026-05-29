@@ -17,6 +17,50 @@
         @test m.covariance === nothing
     end
 
+    @testset "Default strategy = 1 (iminuit Minuit-class parity)" begin
+        # Regression for docs/IAM_CONVERGENCE_GAP.md: the high-level
+        # Minuit(fcn, x0) constructor must default to Strategy(1) — the
+        # iminuit `Minuit` class default and C++ Minuit2 `MnStrategy()`
+        # default — so a bare `migrad!(m)` is drop-in-equivalent to
+        # iminuit's `m.migrad()`. (The low-level migrad(cf, …) keeps its
+        # own Strategy(0) default, pinned to the C++ oracle.)
+        m_num = Minuit(x -> sum(abs2, x), [1.0, 2.0]; error = [0.1, 0.1])
+        @test m_num.strategy == Strategy(1)
+        @test m_num.strategy.level == 1
+
+        # The named-parameter constructor agrees.
+        m_kw = Minuit(x -> sum(abs2, x); a = 1.0, b = 2.0)
+        @test m_kw.strategy == Strategy(1)
+
+        # The AD (`grad=`) default is ALSO Strategy(1) — iminuit applies
+        # strategy 1 regardless of whether a gradient is supplied, and the
+        # AD seed_state now supports all strategy levels (no asymmetry).
+        m_ad = Minuit(x -> sum(abs2, x), [1.0, 2.0];
+                       error = [0.1, 0.1],
+                       grad = x -> 2 .* x)
+        @test m_ad.strategy == Strategy(1)
+        # …and a default AD fit runs end-to-end at S=1 (would throw under
+        # the old "Phase 0 supports Strategy(0) only" AD-seed guard).
+        migrad!(m_ad)
+        @test m_ad.valid
+        @test m_ad.values[1] ≈ 0.0 atol = 1e-4
+        @test m_ad.values[2] ≈ 0.0 atol = 1e-4
+
+        # An explicit strategy is always respected over the default.
+        m_s0 = Minuit(x -> sum(abs2, x), [1.0, 2.0]; strategy = Strategy(0))
+        @test m_s0.strategy == Strategy(0)
+        m_s2 = Minuit(x -> sum(abs2, x), [1.0, 2.0]; strategy = 2)
+        @test m_s2.strategy == Strategy(2)
+
+        # AD at S=2 (seed-time MnHesse bootstrap path) also runs.
+        m_ad2 = Minuit(x -> sum(abs2, x .- 1.0), [0.0, 0.0];
+                        error = [0.1, 0.1], grad = x -> 2 .* (x .- 1.0),
+                        strategy = 2)
+        migrad!(m_ad2; iterate = 1)
+        @test m_ad2.valid
+        @test m_ad2.values[1] ≈ 1.0 atol = 1e-4
+    end
+
     @testset "AbstractFit / Fit / ArrayFit (IMinuit.jl drop-in types)" begin
         m = Minuit(x -> sum(abs2, x), [1.0, 2.0])
         # Minuit is a concrete subtype of the AbstractFit supertype.

@@ -19,15 +19,20 @@ calculations via seven tunable knobs. Three preset levels:
 | `hessian_g2_tolerance`     | `HessianG2Tolerance`      | 0.1  | 0.05 | 0.02 |
 | `hessian_grad_ncycles`     | `HessianGradientNCycles`  | 1    | 2    | 6    |
 
-- `Strategy(0)` — Low: fastest, lowest accuracy. **Phase 0 default and only
-  supported level.**
-- `Strategy(1)` — Medium: matches C++ Minuit2 default (Phase 1+).
-- `Strategy(2)` — High: slowest, highest accuracy (Phase 1+).
+- `Strategy(0)` — Low: fastest, lowest accuracy. The default for the
+  *low-level* `migrad(cf, …)` / `seed` / `function_cross` entry points
+  (pinned to the C++ oracle reference data).
+- `Strategy(1)` — Medium: matches the C++ Minuit2 `MnStrategy()` default and
+  the iminuit `Minuit` class default. **The high-level `Minuit(fcn, x0)`
+  constructor default** (so a bare `migrad!(m)` is drop-in-equivalent to
+  iminuit's `m.migrad()`).
+- `Strategy(2)` — High: slowest, highest accuracy.
 
 The `level` field exposes the integer level (0/1/2) — `VariableMetricBuilder.cxx`
-branches on `Strategy() >= 1` to invoke the inner `MnHesse` path. Phase 0
-locks the entire library to level 0; Strategy ≥ 1 will be enabled when
-`hesse.jl` ships in Phase 1 (see `docs/DESIGN.md` DR-008).
+branches on `Strategy() >= 1` to invoke the inner `MnHesse` refinement path.
+All three levels are supported (`hesse.jl` shipped in Phase 1); the inner-HESSE
+re-seed at Strategy ≥ 1 is what lets the DFP loop reach deeper minima on stiff
+fits — see `docs/IAM_CONVERGENCE_GAP.md` and `docs/DESIGN.md` DR-008.
 
 Like [`MachinePrecision`](@ref), this is an immutable, isbits, type-stable
 struct — zero allocation when passed through the call chain.

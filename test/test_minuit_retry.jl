@@ -94,11 +94,10 @@
     end
 
     @testset "Bounded + retry kwargs (smoke)" begin
-        # Ensure the retry kwargs survive the bounded path too — the
-        # bounded `migrad(cf::CostFunction, params::Parameters; prior_cov)`
-        # entry point gained a `prior_cov` kwarg as part of this PR;
-        # this regression test ensures the retry layer's prior_cov hop
-        # works through bounded fits as well.
+        # Ensure the retry kwargs survive the bounded + fixed-parameter path:
+        # a bounded fit with the default (faithful, use_simplex=false) retry
+        # converges and respects the fix. (Pass 1 validates here, so the loop
+        # is a no-op — this is a plumbing smoke test, not a retry-mechanism one.)
         m = Minuit(x -> (x[1] - 0.5)^2 + (x[2] - 3.0)^2, [0.3, 5.0];
                     names = ["a", "b"], errors = [0.1, 0.1],
                     limits = [(0.0, 1.0), nothing],
@@ -109,18 +108,15 @@
         @test m.values[2] == 5.0  # fixed
     end
 
-    @testset "Retry actually triggers and recovers on a pathological seed" begin
-        # The critical end-to-end test: an FCN + start point where pass 1
-        # exits with `is_valid=false` (no improvement / above_max_edm)
-        # WITHOUT hitting the call limit. From this state the retry loop
-        # MUST enter — otherwise the prior_cov / Simplex hop / Strategy
-        # branches all sit untested.
-        #
-        # Construction: a multi-minimum landscape (quadratic bowl with
-        # cos+sin overlay) seeded from far away (-5, 5). On pass 1 the
-        # DFP descent stalls at a saddle-like point with fval ≈ 20.8 and
-        # `is_valid=false`. The retry loop's Simplex hop + re-seed
-        # escapes that basin.
+    @testset "Retry triggers (default); opt-in Simplex multistart escapes" begin
+        # An FCN + start where pass 1 exits `is_valid=false` (no improvement /
+        # above_max_edm) WITHOUT hitting the call limit, so the retry loop
+        # enters. A multi-minimum landscape (quadratic bowl + cos/sin overlay)
+        # seeded far away (-5, 5); pass 1 stalls at a saddle-like point
+        # (fval ≈ 20.8). Escaping to the deep minimum (fval ≈ -0.86) is a
+        # genuine BASIN JUMP — the job of the opt-in Simplex multistart, NOT
+        # the faithful plain-re-seed default (which can only refresh curvature
+        # within a basin).
         fcn = x -> begin
             a, b = x[1], x[2]
             return (a - 3)^2 + (b - 3)^2 +
@@ -128,38 +124,44 @@
                    0.5 * sin(a * b)
         end
 
-        # Single-shot baseline
+        # Pin Strategy(0) for a reliable pass-1 stall (is_valid=false, not
+        # call-limited). The high-level default is now Strategy(1) (iminuit
+        # parity, see docs/IAM_CONVERGENCE_GAP.md), under which pass 1 descends
+        # further; S=0 keeps the stall that exercises the retry branches.
         m1 = Minuit(fcn, [-5.0, 5.0];
-                     names = ["a", "b"], errors = [0.5, 0.5])
+                     names = ["a", "b"], errors = [0.5, 0.5],
+                     strategy = Strategy(0))
         migrad!(m1; iterate = 1, tol = 1e-6, maxfcn = 2000)
         @test !m1.valid                                 # pass 1 failed
         @test !m1.fmin.internal.reached_call_limit      # not via budget
         nfcn1 = m1.nfcn
         fval1 = m1.fval
 
-        # With retry: must run AT LEAST one extra pass (nfcn > nfcn1) and
-        # NEVER end up at a worse fval than the single-shot baseline.
+        # DEFAULT retry (use_simplex=false — iminuit's plain re-seed): the
+        # loop enters (nfcn > nfcn1) and the safety invariant holds. We do NOT
+        # assert a basin jump here: re-seeding refreshes curvature but stays in
+        # the seed's basin, so on a genuine multi-minimum FCN the plain re-seed
+        # may not reach the far -0.86 well — and that's correct (faithful)
+        # behavior, matching what iminuit's retry does.
         m5 = Minuit(fcn, [-5.0, 5.0];
-                     names = ["a", "b"], errors = [0.5, 0.5])
+                     names = ["a", "b"], errors = [0.5, 0.5],
+                     strategy = Strategy(0))
         migrad!(m5; iterate = 5, tol = 1e-6, maxfcn = 2000)
         @test m5.nfcn > nfcn1     # retry loop entered (proves coverage)
-        @test m5.fval ≤ fval1 + 1e-10
-        # And on this FCN the retry actually rescues to a valid fit at a
-        # much deeper minimum (fval ≈ -0.86 vs +20.8). This is the
-        # X(3872)-shaped "dip vs peak" outcome the spec calls for.
-        @test m5.valid
-        @test m5.fval < 0.0
+        @test m5.fval ≤ fval1 + 1e-10   # safety invariant
 
-        # Same FCN with `use_simplex=false` exercises the `_retry_prior_cov`
-        # branch (which is skipped when use_simplex=true). The prior_cov
-        # path also escapes the bad seed on this FCN.
-        m5_ns = Minuit(fcn, [-5.0, 5.0];
-                        names = ["a", "b"], errors = [0.5, 0.5])
-        migrad!(m5_ns; iterate = 5, use_simplex = false,
-                       tol = 1e-6, maxfcn = 2000)
-        @test m5_ns.nfcn > nfcn1
-        @test m5_ns.fval ≤ fval1 + 1e-10
-        @test m5_ns.valid
+        # OPT-IN Simplex multistart (use_simplex=true — JuMinuit extension
+        # beyond C++/iminuit): the growing-perturbation hop jumps basins and
+        # rescues to the deep minimum (fval ≈ -0.86 vs +20.8) — the
+        # X(3872)-shaped "dip vs peak" outcome.
+        m5s = Minuit(fcn, [-5.0, 5.0];
+                      names = ["a", "b"], errors = [0.5, 0.5],
+                      strategy = Strategy(0))
+        migrad!(m5s; iterate = 5, use_simplex = true, tol = 1e-6, maxfcn = 2000)
+        @test m5s.nfcn > nfcn1
+        @test m5s.fval ≤ fval1 + 1e-10
+        @test m5s.valid
+        @test m5s.fval < 0.0
     end
 
     @testset "Multi-minimum safety invariant" begin
@@ -250,17 +252,17 @@
     end
 
     @testset "AD-gradient FCN survives retry path (codex BLOCKING regression)" begin
-        # The AD `seed_state` rejects strategy.level != 0 (see
-        # src/ad_gradient.jl:254-255). The retry loop must NOT bump to
-        # Strategy(2) when `m.cfwg !== nothing`, or any retry pass would
-        # throw on the AD seed. We exercise both `use_simplex=true` (the
-        # default) and `use_simplex=false` (which engages `_retry_prior_cov`
-        # if retry triggers). Pass 1 validates on this convex FCN, so the
-        # retry loop never enters — but the AD-aware retry-strategy
-        # selection logic (`m.cfwg === nothing ? Strategy(2) : strategy`)
-        # is reached unconditionally before the loop check, so any
-        # regression that re-hardcodes `Strategy(2)` would still throw at
-        # construction time.
+        # The retry loop keeps the user's strategy on the AD path rather
+        # than bumping to Strategy(2) (the numerical-path multistart
+        # heuristic): `retry_strategy = m.cfwg === nothing ? Strategy(2) :
+        # strategy`. The AD `seed_state` now supports all strategy levels,
+        # so this is a deliberate choice, not a constraint. We exercise both
+        # the faithful default (`use_simplex=false` — plain re-seed at the
+        # user strategy) and the opt-in `use_simplex=true` Simplex multistart.
+        # Pass 1 validates on this convex FCN (at the Strategy(1) default), so
+        # the retry loop never enters; the guard here is that the whole AD
+        # retry path — strategy selection + seed + (skipped) loop — runs
+        # without error under both settings.
         f_ad = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
         g_ad = x -> [2.0 * (x[1] - 1.0), 2.0 * (x[2] - 2.0)]
         for us in (true, false)
@@ -334,10 +336,12 @@
 
     @testset "Multi-scale retry escapes a noisy stall to a deeper basin" begin
         # Seeded at the ORIGIN: single-shot (iterate=1) is trapped in the
-        # shallow noisy bowl and never reaches the deep well; the retry
-        # layer's growing Simplex hop escapes to it — the X(3872)-shaped
+        # shallow noisy bowl and never reaches the deep well; the OPT-IN
+        # Simplex multistart's growing hop escapes to it — the X(3872)-shaped
         # "the deeper solution is only reached by perturbing out of the
-        # stall" outcome the spec calls for.
+        # stall" outcome. This basin jump is the job of the multistart
+        # (use_simplex=true, a JuMinuit extension beyond C++/iminuit), not the
+        # faithful plain-re-seed default.
         m1 = Minuit(fcn_rugged, [0.0, 0.0]; names = ["x", "y"], errors = [0.02, 0.02])
         migrad!(m1; iterate = 1, tol = 1e-6, maxfcn = 4000)
         @test !m1.valid          # pass 1 stuck in the shallow noisy bowl
@@ -345,7 +349,7 @@
         @test m1.n_passes == 1
 
         m5 = Minuit(fcn_rugged, [0.0, 0.0]; names = ["x", "y"], errors = [0.02, 0.02])
-        migrad!(m5; iterate = 5, tol = 1e-6, maxfcn = 4000)
+        migrad!(m5; iterate = 5, use_simplex = true, tol = 1e-6, maxfcn = 4000)
         @test m5.n_passes >= 2          # retry layer ran
         @test m5.n_passes < 5           # and stopped early (re-converged on the well)
         @test m5.fval < -5.0            # reached the deep well
