@@ -212,12 +212,18 @@ reused as the new starting point).
 function model_fit(model::Function, data::Data,
                     start_values::AbstractVector; kws...)
     _chisq(par) = chisq(model, data, par)
-    return Minuit(_chisq, Float64.(start_values); kws...)
+    m = Minuit(_chisq, Float64.(start_values); kws...)
+    # χ² cost over `data` → record the data-point count so the rich
+    # display can show χ²/ndf + p-value (this is a χ² fit, errordef == 1).
+    m.ndata = data.ndata
+    return m
 end
 
 function model_fit(model::Function, data::Data, fit::Minuit; kws...)
     _chisq(par) = chisq(model, data, par)
-    return Minuit(_chisq, fit; kws...)
+    m = Minuit(_chisq, fit; kws...)
+    m.ndata = data.ndata
+    return m
 end
 
 """

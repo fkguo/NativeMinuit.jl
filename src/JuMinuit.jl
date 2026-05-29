@@ -54,6 +54,7 @@ include("migrad_bounded.jl")
 include("simplex.jl")
 include("scan.jl")
 include("minuit.jl")
+include("display.jl")
 include("eigen_corr.jl")
 include("iminuit_compat.jl")
 include("serialize.jl")
@@ -96,6 +97,8 @@ export ContoursError, contour, contour_exact
 export function_cross_multi
 export BoundedFunctionMinimum, ext_errors, ext_covariance, free_covariance
 export Minuit, migrad!, minos!
+# Jupyter-first rich output (display.jl)
+export to_latex
 # Per-parameter mutators (mirror C++ MnUserParameters; gap M3)
 export fix!, release!, set_value!, set_error!, set_limits!, remove_limits!
 # One-sided limit setters (mirror C++ MnUserParameters::SetUpper/LowerLimit)

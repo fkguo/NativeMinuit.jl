@@ -102,11 +102,16 @@
         @test occursin("┌", s2)
         @test occursin("┤", s2)
         @test occursin("└", s2)
-        # Column headers
-        for col in ("Name", "Value", "Hesse ±", "Minos −", "Minos +",
-                    "Limit −", "Limit +", "Fixed")
+        # Column headers. Phase: the feat/jupyter-rich-output overhaul
+        # MERGED the old "Hesse ±" / "Minos −" / "Minos +" columns into a
+        # single "Value" column (value ± uncertainty, or asymmetric MINOS
+        # superscript/subscript when present), so those three headers are
+        # gone by design — see test_display.jl for the merged-cell content.
+        for col in ("Name", "Value", "Limit −", "Limit +", "Fixed")
             @test occursin(col, s2)
         end
+        @test !occursin("Hesse ±", s2)
+        @test !occursin("Minos −", s2)
     end
 
     @testset "C1 (a) at-limit warning detection" begin
@@ -421,10 +426,15 @@
         @test occursin("<thead", s)
         @test occursin("<tbody", s)
         @test occursin("</table>", s)
-        # Column headers and a status badge
-        @test occursin("Hesse ±", s)
-        @test occursin("Minos −", s)
+        # Column headers and the validity checklist. The old per-error
+        # columns ("Hesse ±", "Minos −", "Minos +") were merged into a
+        # single "Value" column by the feat/jupyter-rich-output overhaul,
+        # and the single status badge became a per-flag checklist whose
+        # first chip is "Valid minimum" (see test_display.jl).
+        @test occursin("Value", s)
         @test occursin("Valid", s)
+        @test !occursin("Hesse ±", s)
+        @test !occursin("Minos −", s)
 
         # at-limit + HTML: yellow warning div appears
         m_lim = Minuit(x -> (x[1] - 0.5)^2, [1.0];

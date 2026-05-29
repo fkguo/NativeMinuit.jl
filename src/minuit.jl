@@ -110,6 +110,12 @@ mutable struct Minuit
     # early-stop behavior without instrumenting FCN call counts. `0` before
     # the first `migrad!`.
     n_passes::Int
+    # Number of data points behind the cost function, when known. Drives
+    # the χ²/ndf + p-value line in the rich display, and is only physically
+    # meaningful for a χ² fit (`errordef == 1`). `nothing` when the FCN is a
+    # bare closure with no associated dataset; auto-populated by `model_fit`
+    # from `Data.ndata`, and settable directly via `m.ndata = N`.
+    ndata::Union{Int,Nothing}
 end
 
 function Minuit(
@@ -236,7 +242,7 @@ function Minuit(
     strat = strategy isa Strategy ? strategy : Strategy(Int(strategy))
     return Minuit(cf, params, nothing, Dict{Int,MinosError}(), prec,
                   cfwg, strat, Float64(tol), Int(print_level),
-                  Bool(threaded_gradient), Bool(verify_threading), 0)
+                  Bool(threaded_gradient), Bool(verify_threading), 0, nothing)
 end
 
 # IMinuit.jl-style: named-parameter constructor where each parameter
@@ -1344,6 +1350,11 @@ function Base.setproperty!(m::Minuit, name::Symbol, val)
         setfield!(m, :tol, Float64(val))
     elseif name === :print_level
         setfield!(m, :print_level, Int(val))
+    elseif name === :ndata
+        # Number of data points for the χ²/ndf + p-value display line.
+        # Accept an integer count or `nothing` to clear it; coerce Reals
+        # to Int so `m.ndata = length(data)` works regardless of eltype.
+        setfield!(m, :ndata, val === nothing ? nothing : Int(val))
     elseif name === :errordef || name === :up
         # Mutates the underlying CostFunction.up — both `fcn` and (if
         # present) `cfwg` need to be re-wrapped because `up` is stored
@@ -1710,7 +1721,7 @@ end
 
 function Base.propertynames(m::Minuit, ::Bool = false)
     return (:fcn, :params, :fmin, :minos_errors, :prec, :cfwg,
-            :strategy, :tol, :print_level, :n_passes,
+            :strategy, :tol, :print_level, :n_passes, :ndata,
             # JuMinuit-native
             :values, :errors, :fval, :edm, :nfcn, :valid,
             :covariance, :ndim, :npar,
@@ -2046,21 +2057,6 @@ function _param_row_data(m::Minuit, i::Int)
             limit_lo = limit_lo, limit_hi = limit_hi, fixed = fixed)
 end
 
-# Status line: "Valid ✓" or "INVALID ✗", with key diagnostic bits
-# only when relevant (we don't show "Below call limit ✓" because
-# that's the default; same for hesse-ok).
-function _status_summary(m::Minuit)
-    m.fmin === nothing && return "not yet minimized"
-    bits = String[]
-    push!(bits, m.is_valid ? "Valid ✓" : "INVALID ✗")
-    bfm = m.fmin
-    bfm.internal.reached_call_limit && push!(bits, "call-limit ✗")
-    bfm.internal.above_max_edm        && push!(bits, "EDM-above-max ✗")
-    bfm.internal.hesse_failed         && push!(bits, "Hesse failed ✗")
-    bfm.internal.made_pos_def         && push!(bits, "force-PosDef")
-    return join(bits, "  ")
-end
-
 # ─────────────────────────────────────────────────────────────────────────────
 # text/plain — Unicode box-drawn table (Phase 3 C1 (b))
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2087,20 +2083,25 @@ function Base.show(io::IO, ::MIME"text/plain", m::Minuit)
     end
 
     # Header line
-    @printf(io, "JuMinuit.Minuit  fval=%.6g  edm=%.3g  nfcn=%d  %s\n",
-            m.fval, m.edm, m.nfcn, _status_summary(m))
+    @printf(io, "JuMinuit.Minuit  fval=%.6g  edm=%.3g  nfcn=%d\n",
+            m.fval, m.edm, m.nfcn)
+    chi = _chi2_summary(m)
+    if chi !== nothing
+        @printf(io, "χ²/ndf = %.4g/%d = %.3g  (p = %.3g)\n",
+                chi.chi2, chi.ndf, chi.ratio, chi.p)
+    end
+    # Validity checklist (replaces the old single status string).
+    println(io, _checklist_text(m))
 
-    # Build rows + compute column widths
-    headers = ["#", "Name", "Value", "Hesse ±", "Minos −", "Minos +",
-               "Limit −", "Limit +", "Fixed"]
+    # Build rows + compute column widths. The Value column merges the
+    # central value with its uncertainty — asymmetric MINOS when present,
+    # else the symmetric Hesse error — rounded to the uncertainty.
+    headers = ["#", "Name", "Value", "Limit −", "Limit +", "Fixed"]
     rows = [_param_row_data(m, i) for i in 1:n_pars(m.params)]
     cells = [[
         string(r.idx),
         r.name,
-        _fmt_cell(r.value),
-        _fmt_cell(r.hesse),
-        _fmt_cell(r.minos_lo),
-        _fmt_cell(r.minos_hi),
+        _value_cell(r; mode = :text),
         _fmt_cell(r.limit_lo),
         _fmt_cell(r.limit_hi),
         r.fixed ? "yes" : "",
@@ -2148,6 +2149,9 @@ function Base.show(io::IO, ::MIME"text/plain", m::Minuit)
             println(io, side, " limit — Hesse/MINOS error is unreliable.")
         end
     end
+
+    # Strong-correlation (near-degeneracy) warnings.
+    _render_corr_warning_text(io, m)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2179,20 +2183,22 @@ function Base.show(io::IO, ::MIME"text/html", m::Minuit)
         return
     end
 
-    # Header line with status badge
-    status = _status_summary(m)
-    badge_color = m.is_valid ? "#1a7f37" : "#cf222e"   # GitHub green / red
     @printf(io, """<div style="font-family:monospace;font-size:0.95em">""")
     @printf(io,
-        """<strong>JuMinuit.Minuit</strong>  fval=%.6g  edm=%.3g  nfcn=%d  """,
+        """<strong>JuMinuit.Minuit</strong>  fval=%.6g  edm=%.3g  nfcn=%d<br>""",
         m.fval, m.edm, m.nfcn)
-    @printf(io, """<span style="color:%s;font-weight:bold">%s</span><br>""",
-            badge_color, _html_escape(status))
+    chi = _chi2_summary(m)
+    if chi !== nothing
+        @printf(io, """χ²/ndf = %.4g/%d = %.3g&nbsp;&nbsp;(p = %.3g)<br>""",
+                chi.chi2, chi.ndf, chi.ratio, chi.p)
+    end
+    # Validity checklist chips (replaces the old single status badge).
+    _render_checklist_html(io, m)
 
-    # Table
-    headers = ["#", "Name", "Value", "Hesse ±", "Minos −", "Minos +",
-               "Limit −", "Limit +", "Fixed"]
-    print(io, """<table style="border-collapse:collapse;margin-top:0.5em">""")
+    # Parameter table. The Value column merges the central value with its
+    # uncertainty — asymmetric MINOS when present, else symmetric Hesse.
+    headers = ["#", "Name", "Value", "Limit −", "Limit +", "Fixed"]
+    print(io, """<table style="border-collapse:collapse;margin-top:0.3em">""")
     print(io, "<thead><tr>")
     for h in headers
         print(io, """<th style="border:1px solid #d0d7de;padding:2px 8px;background:#f6f8fa">""",
@@ -2201,11 +2207,13 @@ function Base.show(io::IO, ::MIME"text/html", m::Minuit)
     print(io, "</tr></thead><tbody>")
     for i in 1:n_pars(m.params)
         r = _param_row_data(m, i)
-        # Parameter `r.name` is user-controlled; escape it before
-        # interpolating into the HTML cell. Other cells (numbers,
-        # "yes"/"") are safe.
-        cells = [string(r.idx), _html_escape(r.name), _fmt_cell(r.value),
-                 _fmt_cell(r.hesse), _fmt_cell(r.minos_lo), _fmt_cell(r.minos_hi),
+        # Parameter `r.name` is user-controlled → escape it. The Value
+        # cell is a plain number, a "v ± e" string, or the asymmetric
+        # `<sup>/<sub>` markup from `_format_value_minos` — that markup is
+        # intentional and built only from formatted numbers (no
+        # user-controlled text), so it must NOT be escaped. Limit / Fixed
+        # cells are numeric or fixed literals and are safe.
+        cells = [string(r.idx), _html_escape(r.name), _value_cell(r; mode = :html),
                  _fmt_cell(r.limit_lo), _fmt_cell(r.limit_hi),
                  r.fixed ? "yes" : ""]
         print(io, "<tr>")
@@ -2240,6 +2248,10 @@ function Base.show(io::IO, ::MIME"text/html", m::Minuit)
         end
         print(io, "</div>")
     end
+
+    # Correlation-matrix heatmap + strong-correlation warnings.
+    _render_heatmap_html(io, m)
+    _render_corr_warning_html(io, m)
     print(io, "</div>")
 end
 
