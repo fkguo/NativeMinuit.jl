@@ -93,4 +93,15 @@ const errs0 = fill(1e-6, 9)
     fv1 = m1.fmin.internal.state.parameters.fval
     @info "IAM single-shot (iterate=1, default S=1) fval" fval = fv1
     @test fv1 ≤ 410.0
+
+    # Strategy(0) default retry also reaches the deep basin via the faithful
+    # default retry (iminuit's `_robust_low_level_fit` plain re-seed restart at
+    # the same strategy — use_simplex=false). The old retry (Simplex hop +
+    # unconditional S=2 bump) stuck at 613.49 — see docs/IAM_CONVERGENCE_GAP.md
+    # "Closing the S=0 retry gap".
+    m0 = JuMinuit.Minuit(chi2_iam, paras0; error = errs0, strategy = 0)
+    JuMinuit.migrad!(m0)
+    fv0 = m0.fmin.internal.state.parameters.fval
+    @info "IAM S=0 default retry (plain re-seed) fval" fval = fv0 n_passes = m0.n_passes
+    @test fv0 ≤ 410.0
 end

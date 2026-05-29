@@ -1,4 +1,4 @@
-# IAM cold-start convergence gap: JuMinuit vs iminuit (613 → 330)
+# IAM cold-start convergence gap: JuMinuit vs iminuit (default 613 → 325; + S=0 retry gap closed)
 
 **Date**: 2026-05-29
 **Branch**: `feat/iam-convergence-gap`
@@ -62,8 +62,14 @@ methods (`src/minuit.jl`), plus the AD-seed extension in `src/ad_gradient.jl`.
 Result after fix (same bench call, default settings):
 
 ```
-jm_num   migrad!(m): fval=330.753   (was 613.485)   ← now BEATS iminuit's 409.885
+jm_num   migrad!(m): fval=325.816   (was 613.485)   ← now BEATS iminuit's 409.885
 ```
+
+(330.75 with the strategy-default fix alone; 325.82 once the retry is made
+iminuit-faithful (plain re-seed) — see § *Closing the S=0 retry gap*. The same
+faithful retry fixes the S=0 path: 613 → 383. NB this is **not** a claim of a
+better algorithm — on well-conditioned problems JuMinuit and iminuit match
+exactly; see § *Fidelity*.)
 
 ## The data
 
@@ -80,15 +86,23 @@ Both libraries, IAM `paras0` cold start, retry **disabled** on both sides
 
 ### 2. Per-strategy with each library's native retry
 
-iminuit retry = re-run the *same* `MnMigrad` (same strategy) from the last
-point up to 5×. JuMinuit retry = growing Simplex hop + `Strategy(2)` MIGRAD,
-up to 5×, with fixed-point/saturation stops.
+Both libraries' default retry = re-run MIGRAD from the last point at the *same*
+strategy (plain re-seed), up to 5×. (JuMinuit's `use_simplex=true` opt-in adds a
+Simplex multistart — see § *Closing the S=0 retry gap* — but that is NOT the
+default and NOT used in this table.)
 
-| Strategy (pass 1) | JuMinuit retry | iminuit retry |
-|-------------------|---------------:|--------------:|
-| **S=0**           | 613.49         | 400.23        |
-| **S=1**           | **330.75**     | 409.89 (default) |
-| **S=2**           | 1268.65        | 1268.65       |
+| Strategy (pass 1) | JuMinuit retry (default) | iminuit retry |
+|-------------------|-------------------------:|--------------:|
+| **S=0**           | **383.39**               | 400.23        |
+| **S=1**           | **325.82** (default)     | 409.89 (default) |
+| **S=2**           | 1268.65                  | 1268.65       |
+
+(JuMinuit's *old* default retry — growing Simplex + unconditional S=2 bump,
+neither in C++/iminuit — stuck at 613.49 for the S=0 pass-1; making the default
+retry iminuit-faithful closes that. The S=0/S=1 numbers above are *different
+local minima* from iminuit's, not the same basin: JuMinuit's are deeper here,
+but that is a numerically-sensitive basin selection on the ill-conditioned IAM,
+**not** a demonstrated algorithmic edge — see § *Fidelity*.)
 
 **Defaults**: JuMinuit was `S=0 → 613`; iminuit is `S=1 → 409`. After the fix
 JuMinuit is `S=1 → 330`.
@@ -144,7 +158,7 @@ terminating — the path iminuit needs five retry passes to approximate.
 
 | Hypothesis | Verdict | Evidence |
 |------------|---------|----------|
-| **#4 Strategy-default mismatch** | ✅ **ROOT CAUSE** | JuMinuit default `Strategy(0)`, iminuit/C++ default level 1. Bench ran S=0 (→613) vs iminuit S=1 (→409). At matched S=1, JuMinuit (330) beats iminuit (409). |
+| **#4 Strategy-default mismatch** | ✅ **ROOT CAUSE** | JuMinuit default `Strategy(0)`, iminuit/C++ default level 1. Bench ran S=0 (→613) vs iminuit S=1 (→409). At matched S=1, JuMinuit lands at 330 vs iminuit 409 — a *different* local minimum reached via numerically-seeded divergence on the ill-conditioned IAM (§ *Fidelity*), not a general algorithmic edge. |
 | **#3 Seed inverse-Hessian scale** | ❌ ruled out | Seed Edm matches (1026.833019 vs 1026.833283); initial g, g2 identical per parameter; first DFP step lands at the same fval (987.239) on both sides. |
 | **#1 Line-search timidity** | ❌ ruled out | Accepted step lengths are healthy/large (α up to 67.8), and the per-iteration fval matches iminuit step-for-step for the first 10 iters — the line search takes the *same* steps as C++. |
 | **#2 No-improvement early exit** | ❌ ruled out as primary | JuMinuit ran 24 (S=0) / 49 (S=1) iterations before terminating — it did not exit on the no-improvement test (`|Δf| ≤ |f|·eps`). The S=0 termination at iter 24 is a `gdel>0`-after-MnPosDef pos-def bail, a downstream consequence of coarse-S0-gradient noise, not a too-tight threshold. At S=1 it does not bail there. |
@@ -164,33 +178,98 @@ terminating — the path iminuit needs five retry passes to approximate.
    `Strategy(0)`; `test_cpp_oracle.jl` (which uses the low-level API and pins
    `strategy_level == 0`) is unaffected.
 
-## Secondary findings (documented, not fixed here)
+## Closing the S=0 retry gap: faithful retry + opt-in multistart
 
-These are real and worth recording, but they live at a *non-default* strategy
-after the fix, so they do not affect the headline bench. They are out of scope
-for this P0 (changing retry semantics risks the X(3872) multistart feature
-PR #8/#12 added).
+The tables above show a second gap: at matched **Strategy 0**, JuMinuit's
+retry stayed at 613 while iminuit's reached 400. A decisive experiment
+isolated the cause to the **retry mechanism, not the core MIGRAD**:
 
-- **At Strategy 0, JuMinuit's single MIGRAD (613) underperforms iminuit's
-  (476).** Cause: the Strategy-0 2-cycle numerical gradient is noisy; the DFP
-  trajectory diverges from iminuit's after ~20 iters and bails on a
+```
+JuMinuit S=0 single-shot:                          613.49
+JuMinuit S=0 + plain re-seed restart (iminuit's):  613.49 → ~383–402  (1 extra pass; then converged)
+JuMinuit S=0 OLD retry (Simplex + S=2 bump):       613.49             (stuck, n_passes=2)
+iminuit  S=0:                          476.15 → 400.23  (iterate 1 → 2)
+```
+
+JuMinuit's MIGRAD reaches the ~400 basin the instant it is given **iminuit's
+retry move**: rebuild a fresh seed at the stall point (discarding the degraded —
+non-pos-def — DFP inverse-Hessian) and re-run at the *same* strategy. At S=0 the
+coarse 2-cycle gradient drives the DFP metric non-positive-definite after ~24
+iters (the trace shows the `"matrix not pos.def"` bail at 613 with EDM spiking
+to 132); the curvature refresh walks straight out. iminuit does exactly this on
+every retry pass. JuMinuit's **old** retry instead bumped to `Strategy(2)`
+(which from a cold-ish point hits the `V≈I` MnHesse-fail clamp — the same
+pathology that sticks S=2-from-`paras0` at 1268) and Simplex-hopped — **neither
+of which is in C++ Minuit2 or iminuit**.
+
+**Fix — faithful default, opt-in multistart** (`migrad!`):
+
+- **Default (`use_simplex=false`)** is now iminuit's `_robust_low_level_fit`
+  exactly: re-run MIGRAD from the last point at the *same* strategy (plain
+  re-seed), up to `iterate`, stop when valid. `migrad!(m)` is therefore
+  drop-in-equivalent to `m.migrad()`, and it closes the gap via iminuit's *own*
+  mechanism: IAM S=0 613 → 383, S=1 330 → 325.8.
+- **Opt-in (`use_simplex=true`, default `false`)** is the growing-perturbation
+  Simplex multistart + `Strategy(2)` escalation — a JuMinuit **extension beyond
+  C++/iminuit**, for genuine multi-minimum fits (X(3872)). It is this path's S=2
+  escalation that walks the IAM **x_jm WARM start** to χ²=322 (PR #10). At the
+  faithful default, x_jm converges to iminuit's 325.8; **322 is reached the
+  C++/iminuit way — by passing `strategy=2`** (both libraries give 322 at S=2).
+
+This removes the divergence the maintainer flagged: the S=2 bump and Simplex
+hop are no longer in the default path. Results: IAM **S=0 default 613 → 383.39**,
+**S=1 default 330.75 → 325.82**, both via the faithful plain-re-seed retry.
+
+## Fidelity: JuMinuit's MIGRAD vs C++ Minuit2 across problems
+
+Is JuMinuit's per-strategy MIGRAD a faithful port, or a different ("better")
+algorithm? Verified by comparing JuMinuit vs iminuit single-shot (`iterate=1`,
+no retry) at every strategy on standard problems **and** IAM:
+
+| Problem (single-shot) | S=0 | S=1 | S=2 |
+|-----------------------|-----|-----|-----|
+| Rosenbrock-2D / 4D / 10D | ✓ match | ✓ match | ✓ match |
+| Quad-4D (stiff)          | ✓ match | ✓ match | ✓ match |
+| **IAM-9LEC**             | ✗ 613 vs 476 | ✗ 330 vs 614 | ✓ match |
+
+On **every well-conditioned problem JuMinuit reproduces C++ Minuit2/iminuit in
+fval and (closely) nfcn** at all three strategies (e.g. Rosenbrock-2D nfcn
+194/194/207 = iminuit's exactly; Rosenbrock-4D within a few calls). **IAM is the
+only divergence**, and it is large because the two MIGRADs settle in *genuinely
+different local minima* — IAM is pathologically ill-conditioned (|g₀|~10⁶, a
+genuinely flat direction, distinct basins at 322/325/330/383/400/476). The
+divergence is *seeded* at the numerical/implementation level, not by a gross
+algorithm difference: at matched S=0 the two traces are identical for the first
+~10 DFP iterations (fval agreeing to ~6 significant figures) and only then drift
+apart — small differences (summation order, BLAS, the Julia-vs-C++ numerics) that
+leave well-conditioned fits unchanged but steer basin selection on IAM.
+
+**What this is NOT:** a demonstrated general advantage. The winner is not
+consistent — JuMinuit is deeper at S=1 (330 vs 614) but iminuit is deeper at S=0
+single-shot (476 vs 613) — and the two agree on every well-conditioned problem.
+**What it IS:** JuMinuit lands in a deeper IAM basin in most of these runs, but
+that is a numerically-sensitive, problem-specific basin selection on a chaotic
+landscape, *not* evidence that JuMinuit's algorithm is better. This is exactly
+why the default retry is now iminuit-faithful: JuMinuit cannot claim to be
+*generally* better than C++ Minuit2, so it stays faithful to it.
+
+(I have **not** proven the IAM-deeper result is "correct" or reproducible across
+machines/BLAS — only that it is a different basin reached by a faithful port
+whose numerics differ from C++/iminuit at the last few digits. Treat the deeper
+IAM number as fortunate, not as a quality claim.)
+
+Full `Pkg.test` 2558/2558, retry-layer testset 98/98.
+
+## Secondary findings
+
+- **At Strategy 0, JuMinuit's *single-shot* MIGRAD (613) underperforms
+  iminuit's (476).** Cause: the Strategy-0 2-cycle numerical gradient is noisy;
+  the DFP trajectory diverges from iminuit's after ~20 iters and bails on a
   non-pos-def trial step. This is inherent to "fast/loose" S=0 and is why
-  neither library validates at S=0 single-shot.
-
-- **JuMinuit's retry differs from iminuit's, and is less effective at S=0.**
-  iminuit's `Minuit.migrad` (verified by reading its source) retries by
-  re-running the *same* `MnMigrad` object — **same strategy, no Simplex hop,
-  no strategy bump** — from the last point, which freshly re-seeds the
-  diagonal curvature each pass (476 → 400 at S=0). JuMinuit's retry instead
-  bumps numerical FCNs to `Strategy(2)` (migrad! / minuit.jl `retry_strategy`)
-  and does a growing Simplex hop. The in-code comment there claims
-  *"Strategy(2) … the iminuit default"* — **this is inaccurate**; iminuit does
-  not bump strategy on retry. The bump pushes a cold seed into the S=2
-  pathology (see below), so JuMinuit's S=0 retry cannot match iminuit's 400.
-  After the default fix this is moot for the default path (pass 1 is S=1 →
-  330; the doomed S=2 retry is caught by fixed-point detection at
-  `n_passes=2`), but the comment should be corrected and the bump
-  reconsidered in a follow-up.
+  neither library validates at S=0 single-shot. The re-seed retry then lands
+  each library in a nearby basin (JuMinuit 383, iminuit 400 — *different*
+  minima). See § *Fidelity*: numerically-seeded basin divergence on the
+  ill-conditioned IAM, not an algorithmic difference.
 
 - **Strategy 2 from a cold seed is pathological for *both* libraries** (both
   stuck at 1268.65 — exact parity). At `paras0` the gradient is ~1e6 and the
@@ -202,12 +281,18 @@ PR #8/#12 added).
 
 ## Verification
 
-- IAM `paras0`, default `migrad!(m)`: **613.49 → 330.75** (beats iminuit 409.89),
-  `n_passes=2`. Guarded by
-  `BenchmarkExamples/IAM_2Pformfactor/test_convergence_gap.jl`.
+- IAM `paras0`, default `migrad!(m)` (S=1, faithful re-seed retry): **613.49 →
+  325.82**. At S=0: **613.49 → 383.39**. These are *different* local minima from
+  iminuit's (409.89 / 400.23) — JuMinuit's are deeper here, but that is a
+  numerically-sensitive basin selection on the ill-conditioned IAM, **not** a
+  demonstrated algorithmic edge (§ *Fidelity*); the key claim is only that the
+  default path now uses iminuit's *mechanism*. Guarded by
+  `BenchmarkExamples/IAM_2Pformfactor/test_convergence_gap.jl` (asserts the S=1
+  default and S=0 reach ≤ 410).
 - IAM `paras0`, single-shot `migrad!(m; iterate=1)` at the default: 330.75 ≤ 410 ✓.
-- Single-shot S=0/S=2 and all iminuit numbers **unchanged** (fix touches only
-  the high-level default, not the algorithm).
+- Single-shot S=0/S=1/S=2 and all iminuit numbers **unchanged** (the
+  strategy-default fix touches only the default; the retry rework touches only
+  the retry, not the single MIGRAD).
 - New unit regression `test/test_minuit.jl::"Default strategy = 1 (iminuit
   Minuit-class parity)"` asserts: numerical default → `Strategy(1)`, AD
   (`grad=`) default **also → `Strategy(1)`** and a default AD fit runs
