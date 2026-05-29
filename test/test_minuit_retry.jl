@@ -445,6 +445,22 @@
         # Empty history → nothing to match.
         @test !JuMinuit._retry_is_fixed_point(
             bfm_a, Tuple{Vector{Float64},Float64}[], base_errs)
+
+        # Stress the position gate: a CLOSE but distinct minimum (5% of the
+        # value scale away, equal fval) must still NOT be merged — the scale
+        # is max(|value|, |user step|), so the window is ~1% of |value|.
+        mc = Minuit(x -> (x[1] - 1.05)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
+                     names = ["x", "y"], errors = [0.1, 0.1])
+        migrad!(mc; iterate = 1)
+        @test !JuMinuit._retry_is_fixed_point(mc.fmin, visited_a, base_errs)
+
+        # The length scale is the *input* base_errs (the stable user step),
+        # NOT the fit's converged ext_errors (which can blow up on an invalid
+        # fit and falsely widen the window). Sanity check that base_errs is
+        # what drives the scale: with an absurd base step the window grows to
+        # ~1% of it (≈10) and the (5,8)-vs-(1,2) gap of 6 then DOES fall
+        # inside it. (Real fits pass the small user step, so this can't fire.)
+        @test JuMinuit._retry_is_fixed_point(bfm_b, visited_a, [1000.0, 1000.0])
     end
 
 end

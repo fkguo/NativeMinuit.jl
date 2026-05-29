@@ -529,9 +529,9 @@ function migrad!(m::Minuit;
         _retry_is_fixed_point(bfm, visited, base_errs) && break
         push!(visited, (copy(bfm.ext_values), fval(bfm)))
 
-        # Natural termination: the growing perturbation has spanned every
-        # free parameter's physical range, so no larger meaningful hop
-        # remains (only relevant for `use_simplex`).
+        # Natural termination: this pass already used `factor`; if that scale
+        # has spanned every free parameter's physical range, no larger
+        # meaningful hop remains, so stop (only relevant for `use_simplex`).
         use_simplex && _retry_perturb_saturated(m, factor, base_errs) && break
     end
 
@@ -636,7 +636,11 @@ end
 # (10·step, see `simplex`) does not exceed the parameter's physical range.
 # `factor ≤ 1` returns `params_next` unchanged so pass 2 is byte-identical
 # to the PR #8 fixed-scale hop. Fixed parameters and all values pass
-# through untouched.
+# through untouched. NOTE: the cap is reasoned in EXTERNAL coordinates; for
+# two-sided-bounded parameters the bounded `simplex` actually perturbs in
+# internal (arcsin-transformed) coordinates, so the cap is an external-
+# coordinate proxy — it controls the (heuristic) growth schedule, while the
+# int↔ext transform independently keeps every probe inside the bounds.
 function _retry_scaled_params(m::Minuit, params_next::Parameters,
                                factor::Float64, base_errs::Vector{Float64})
     factor <= 1.0 && return params_next
@@ -660,11 +664,16 @@ function _retry_scaled_params(m::Minuit, params_next::Parameters,
     return Parameters(new_pars, m.prec)
 end
 
-# True once the perturbation has spanned the physical range of EVERY free
-# parameter (10·factor·step ≥ range): further growth is meaningless, so the
-# retry loop can stop independently of the `iterate` cap. For unbounded
-# parameters the range is `_RETRY_UNBOUNDED_RANGE_MULT × step`, so this only
-# binds for bounded fits or very large `iterate`.
+# True once the (external-coordinate) perturbation has spanned the physical
+# range of EVERY free parameter (10·factor·base_err ≥ range): further growth
+# is meaningless, so the retry loop can stop independently of the `iterate`
+# cap. Uses `base_errs` (the stable user step) for a pass-invariant
+# schedule. For unbounded parameters the range is
+# `_RETRY_UNBOUNDED_RANGE_MULT × step`, so this only binds for bounded fits
+# or very large `iterate`. For two-sided-bounded parameters this is an
+# external-coordinate proxy (the simplex perturbs in internal coords); it
+# is a heuristic stop, never a correctness guarantee — the best-of-passes
+# selector, not this predicate, protects the published fval.
 function _retry_perturb_saturated(m::Minuit, factor::Float64,
                                     base_errs::Vector{Float64})
     @inbounds for i in 1:n_pars(m.params)
@@ -691,26 +700,28 @@ function _retry_select_better(cand::BoundedFunctionMinimum,
 end
 
 # Fixed-point (cycle) detection: true when `bfm`'s converged (x, fval)
-# matches any previously-visited (x, fval) within the parameter-error-
-# relative tolerances above — i.e. the retry map has returned to an
-# already-explored minimum. fval is the coarse gate; position
-# disambiguates fval-degenerate distinct minima. The length scale is
-# max(|value|, |uncertainty|, |user step|) per coordinate, which stays
-# meaningful even on invalid fits where `ext_errors` collapses to the
-# (possibly tiny) user step.
+# matches any previously-visited (x, fval) within the relative tolerances
+# above — i.e. the retry map has returned to an already-explored minimum.
+# fval is the coarse gate; position disambiguates fval-degenerate distinct
+# minima. The per-coordinate length scale is max(|value|, |user step|).
+# We deliberately do NOT include the converged `ext_errors`: on an invalid
+# fit the int→ext Jacobian (near a bound or with a near-singular Hessian)
+# can BLOW UP that uncertainty, which would widen the match window and risk
+# merging two genuinely distinct minima — a false stop returning the worse
+# fit. |value| and the (stable, pass-invariant) user step are sufficient
+# scales. Erring tight only ever misses a cycle (≡ a few extra passes,
+# harmless), never causes a false merge.
 function _retry_is_fixed_point(bfm::BoundedFunctionMinimum,
                                 visited::Vector{Tuple{Vector{Float64},Float64}},
                                 base_errs::Vector{Float64})
     x = bfm.ext_values
     f = fval(bfm)
     isfinite(f) || return false   # NaN/Inf pass is not a usable fixed point
-    ferr = bfm.ext_errors
     @inbounds for (xj, fj) in visited
         abs(f - fj) <= _RETRY_FTOL_REL * (abs(fj) + _RETRY_FTOL_ABS) || continue
         same = true
         for i in eachindex(x)
-            scale = max(abs(x[i]), abs(xj[i]), abs(ferr[i]),
-                        abs(base_errs[i]), _RETRY_FTOL_ABS)
+            scale = max(abs(x[i]), abs(xj[i]), abs(base_errs[i]), _RETRY_FTOL_ABS)
             if abs(x[i] - xj[i]) > _RETRY_XTOL_REL * scale
                 same = false
                 break
