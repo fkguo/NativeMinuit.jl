@@ -1088,13 +1088,113 @@ end
 # Property-style access (iminuit copy-paste compatibility)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Write-back parameter views (iminuit `ValueView` / `LimitView` parity).
+#
+# `m.values`, `m.errors`, `m.fixed`, and `m.limits` each return a
+# lightweight `ParameterView` that READS live from `m` and WRITES back
+# through the per-parameter mutators. This makes iminuit's canonical
+# indexed-assignment idiom mutate `m` in place instead of a throwaway
+# copy (the silent-no-op bug this type fixes):
+#
+#     m.fixed["alpha"] = true            # → fix!(m, "alpha")
+#     m.values["x"]    = 1.5             # → set_value!(m, "x", 1.5)
+#     m.errors[1]      = 0.3             # → set_error!(m, 1, 0.3)
+#     m.limits["x"]    = (0.0, nothing)  # → set_limits!(m, "x", 0.0, nothing)
+#     m.limits["x"]    = nothing         # → remove_limits!(m, "x")
+#
+# Each view subtypes `AbstractVector{T}` so *reading* is byte-for-byte
+# what these properties used to return as freshly built `Vector`s: `==`
+# against a plain `Vector`, `collect`, `copy`, broadcasting
+# (`m.values .+ 1`), iteration, and scalar `getindex` all work
+# unchanged (the AbstractArray fallbacks derive them from `size` +
+# `getindex`, and `similar`/`copy` produce a plain `Array`). The `kind`
+# type parameter (`:values`/`:errors`/`:fixed`/`:limits`) selects the
+# read source and write target; `T` is the element type.
+#
+# Indexing accepts an `Int` (1-based external index) OR an
+# `AbstractString` (parameter name → `ext_index`). Writes route through
+# the same mutators as the explicit API, so cache-invalidation
+# (`m.fmin=nothing`, `empty!(m.minos_errors)`) and validation are
+# guaranteed identical. Whole-vector assignment (`m.values = [...]`) is
+# handled by `setproperty!` and is unaffected.
+# ─────────────────────────────────────────────────────────────────────────────
+
+struct ParameterView{kind,T} <: AbstractVector{T}
+    m::Minuit
+end
+
+# `:limits` reads/writes `(lower, upper)` tuples (NaN sentinel = absent
+# bound), matching the pre-view `[(p.lower, p.upper) for p in ...]`.
+_view_eltype(::Val{:values}) = Float64
+_view_eltype(::Val{:errors}) = Float64
+_view_eltype(::Val{:fixed})  = Bool
+_view_eltype(::Val{:limits}) = Tuple{Float64,Float64}
+
+ParameterView(m::Minuit, kind::Symbol) =
+    ParameterView{kind,_view_eltype(Val(kind))}(m)
+
+# All views span every (free AND fixed) parameter, like iminuit.
+Base.size(v::ParameterView) = (n_pars(v.m.params),)
+Base.IndexStyle(::Type{<:ParameterView}) = IndexLinear()
+
+# ── reads (live; mirror the old getproperty branches exactly) ────────────────
+# `:values`/`:errors` prefer the post-fit external vector when a fit is
+# cached, else the stored initial value/step.
+_view_get(::Val{:values}, m::Minuit, i::Int) =
+    m.fmin === nothing ? m.params.pars[i].value : m.fmin.ext_values[i]
+_view_get(::Val{:errors}, m::Minuit, i::Int) =
+    m.fmin === nothing ? m.params.pars[i].error : m.fmin.ext_errors[i]
+_view_get(::Val{:fixed}, m::Minuit, i::Int) = is_fixed(m.params.pars[i])
+_view_get(::Val{:limits}, m::Minuit, i::Int) =
+    (m.params.pars[i].lower, m.params.pars[i].upper)
+
+@inline function Base.getindex(v::ParameterView{kind}, i::Int) where {kind}
+    @boundscheck checkbounds(v, i)
+    return _view_get(Val(kind), v.m, i)
+end
+
+# Name indexing: `m.values["x"]`. `ext_index` throws `KeyError` for an
+# unknown name (same as the explicit mutators).
+Base.getindex(v::ParameterView, name::AbstractString) =
+    v[ext_index(v.m.params, String(name))]
+
+# ── writes (route through the per-parameter mutators) ────────────────────────
+_view_set!(::Val{:values}, m::Minuit, i::Int, val) = set_value!(m, i, val)
+_view_set!(::Val{:errors}, m::Minuit, i::Int, val) = set_error!(m, i, val)
+_view_set!(::Val{:fixed}, m::Minuit, i::Int, val) =
+    Bool(val) ? fix!(m, i) : release!(m, i)
+# `m.limits[i] = (lo, hi)` (either side may be `nothing`/`±Inf` → absent)
+# or `m.limits[i] = nothing` to clear both. Mirrors `_bulk_set_limits!`.
+function _view_set!(::Val{:limits}, m::Minuit, i::Int, val)
+    if val === nothing
+        remove_limits!(m, i)
+    elseif val isa Union{Tuple,AbstractVector} && length(val) == 2
+        set_limits!(m, i, val[1], val[2])
+    else
+        # A scalar (e.g. `m.limits[i] = 5.0`) would otherwise throw a
+        # cryptic destructuring `BoundsError`; give the user-facing API a
+        # clear message instead.
+        throw(ArgumentError(
+            "m.limits[par] expects a 2-tuple `(lo, hi)` (either side may be " *
+            "`nothing`/`±Inf`) or `nothing` to clear; got $(typeof(val))"))
+    end
+end
+
+@inline function Base.setindex!(v::ParameterView{kind}, val, i::Int) where {kind}
+    @boundscheck checkbounds(v, i)
+    _view_set!(Val(kind), v.m, i, val)
+    return v
+end
+
+Base.setindex!(v::ParameterView, val, name::AbstractString) =
+    setindex!(v, val, ext_index(v.m.params, String(name)))
+
 function Base.getproperty(m::Minuit, name::Symbol)
     if name === :values
-        return m.fmin === nothing ? [p.value for p in m.params.pars] :
-                                     m.fmin.ext_values
+        return ParameterView(m, :values)
     elseif name === :errors
-        return m.fmin === nothing ? [p.error for p in m.params.pars] :
-                                     m.fmin.ext_errors
+        return ParameterView(m, :errors)
     elseif name === :fval
         return m.fmin === nothing ? NaN : fval(m.fmin)
     elseif name === :edm
@@ -1120,9 +1220,9 @@ function Base.getproperty(m::Minuit, name::Symbol)
         # iminuit's `parameters` is a tuple of parameter names
         return Tuple(p.name for p in m.params.pars)
     elseif name === :fixed
-        return [is_fixed(p) for p in m.params.pars]
+        return ParameterView(m, :fixed)
     elseif name === :limits
-        return [(p.lower, p.upper) for p in m.params.pars]
+        return ParameterView(m, :limits)
     elseif name === :errordef
         return m.fcn.up
     elseif name === :up
@@ -1411,6 +1511,60 @@ function remove_limits!(m::Minuit, i::Integer)
     _check_par_index(m, i)
     return _replace_one_param!(m, Int(i),
         _build_limits_par(m.params.pars[i], nothing, nothing))
+end
+
+"""
+    set_upper_limit!(m::Minuit, par::Union{Integer,AbstractString}, hi::Real) -> Minuit
+
+Constrain `par` from ABOVE ONLY: set its upper bound to `hi` and clear
+any lower bound, leaving it half-open `(-∞, hi]`. Mirrors C++
+`MnUserParameters::SetUpperLimit` → `MinuitParameter::SetUpperLimit`
+(`reference/Minuit2_cpp/inc/Minuit2/MinuitParameter.h:123-129`), which
+sets `fLoLimValid=false`, `fUpLimValid=true`. Drops `m.fmin` and clears
+`m.minos_errors`. Returns `m` for chaining.
+
+NB: clearing the lower bound is the C++ behavior — to instead KEEP an
+existing lower bound and add an upper one, use the two-sided
+[`set_limits!`](@ref) (or `m.limits[par] = (lo, hi)`). `hi` must be
+finite (NaN / ±Inf throw `ArgumentError`); use [`remove_limits!`](@ref)
+to drop a bound.
+"""
+set_upper_limit!(m::Minuit, par::AbstractString, hi::Real) =
+    set_upper_limit!(m, ext_index(m.params, String(par)), hi)
+function set_upper_limit!(m::Minuit, i::Integer, hi::Real)
+    _check_par_index(m, i)
+    isfinite(Float64(hi)) ||
+        throw(ArgumentError("set_upper_limit!: upper bound must be finite, got $hi"))
+    # C++ SetUpperLimit clears the lower bound (fLoLimValid=false).
+    return _replace_one_param!(m, Int(i),
+        _build_limits_par(m.params.pars[i], nothing, hi))
+end
+
+"""
+    set_lower_limit!(m::Minuit, par::Union{Integer,AbstractString}, lo::Real) -> Minuit
+
+Constrain `par` from BELOW ONLY: set its lower bound to `lo` and clear
+any upper bound, leaving it half-open `[lo, +∞)`. Mirrors C++
+`MnUserParameters::SetLowerLimit` → `MinuitParameter::SetLowerLimit`
+(`reference/Minuit2_cpp/inc/Minuit2/MinuitParameter.h:131-137`), which
+sets `fLoLimValid=true`, `fUpLimValid=false`. Drops `m.fmin` and clears
+`m.minos_errors`. Returns `m` for chaining.
+
+NB: clearing the upper bound is the C++ behavior — to instead KEEP an
+existing upper bound and add a lower one, use the two-sided
+[`set_limits!`](@ref) (or `m.limits[par] = (lo, hi)`). `lo` must be
+finite (NaN / ±Inf throw `ArgumentError`); use [`remove_limits!`](@ref)
+to drop a bound.
+"""
+set_lower_limit!(m::Minuit, par::AbstractString, lo::Real) =
+    set_lower_limit!(m, ext_index(m.params, String(par)), lo)
+function set_lower_limit!(m::Minuit, i::Integer, lo::Real)
+    _check_par_index(m, i)
+    isfinite(Float64(lo)) ||
+        throw(ArgumentError("set_lower_limit!: lower bound must be finite, got $lo"))
+    # C++ SetLowerLimit clears the upper bound (fUpLimValid=false).
+    return _replace_one_param!(m, Int(i),
+        _build_limits_par(m.params.pars[i], lo, nothing))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

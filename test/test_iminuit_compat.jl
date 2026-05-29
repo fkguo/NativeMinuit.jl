@@ -59,9 +59,11 @@
         cf_inner = CostFunction(x -> sum(abs2, x))
         m = Minuit(x -> sum(abs2, x), [1.0, 2.0]; error = [0.1, 0.1])
         migrad(m)
-        # JuMinuit-native
-        @test m.values isa Vector{Float64}
-        @test m.errors isa Vector{Float64}
+        # JuMinuit-native. `m.values`/`m.errors` now return write-back
+        # `ParameterView`s (iminuit ValueView parity) — an AbstractVector
+        # of Float64 rather than a concrete Vector.
+        @test m.values isa AbstractVector{Float64}
+        @test m.errors isa AbstractVector{Float64}
         @test m.fval ≈ 0.0 atol = 1e-8
         @test m.valid == true
         # IMinuit.jl-compatible aliases
