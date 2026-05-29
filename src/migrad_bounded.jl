@@ -169,6 +169,26 @@ function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helper: per-internal(free)-parameter bound flags for the MnHesse step
+# clamp (MnHesse.cxx:160-167, 194-195). Entry `i` is `true` iff the i-th
+# FREE parameter (internal index) maps to an externally-bounded parameter
+# — the JuMinuit analogue of C++ `trafo.Parameter(i).HasLimits()`. The
+# bounded `migrad(cf, params)` / `hesse(m::Minuit)` paths pass the result
+# as `has_limits=` so the diagonal probe step `d` is clamped at 0.5 in
+# INTERNAL (transformed) coordinates — the frame the C++ clamp targets.
+# Length matches the internal optimizer's parameter vector (`n_free`).
+# ─────────────────────────────────────────────────────────────────────────────
+function _has_limits_internal(params::Parameters)
+    n_active = n_free(params)
+    out = Vector{Bool}(undef, n_active)
+    @inbounds for int_idx in 1:n_active
+        p = params.pars[params.ext_of_int[int_idx]]
+        out[int_idx] = has_lower_limit(p) || has_upper_limit(p)
+    end
+    return out
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Helper: build (ext_values, ext_errors, ext_covariance) from an internal-coord
 # FunctionMinimum + the Parameters describing the bound structure.
 #
@@ -333,6 +353,7 @@ function migrad(
                        threaded_gradient = threaded_gradient,
                        verify_threading = verify_threading,
                        prior_cov = prior_cov,
+                       has_limits = _has_limits_internal(params),
                        print_level = print_level)
 
     # ── Convert internal results back to external ────────────────
@@ -395,6 +416,7 @@ function migrad(
                        threaded_gradient = threaded_gradient,
                        verify_threading = verify_threading,
                        prior_cov = prior_cov,
+                       has_limits = _has_limits_internal(params),
                        print_level = print_level)
 
     ext_values, ext_errors_vec, ext_cov_mat =

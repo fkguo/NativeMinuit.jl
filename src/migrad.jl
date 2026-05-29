@@ -384,6 +384,7 @@ function migrad(
     verify_threading::Bool = threaded_gradient,
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
     storage_level::Integer = 0,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
 )
     n = length(x0)
@@ -398,6 +399,7 @@ function migrad(
                           threaded_gradient = threaded_gradient,
                           verify_threading = verify_threading,
                           storage_level = storage_level,
+                          has_limits = has_limits,
                           print_level = print_level)
 end
 
@@ -495,6 +497,7 @@ function _migrad_loop(
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
     storage_level::Integer = 0,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
 )
     n = length(seed)
@@ -897,8 +900,13 @@ function _migrad_loop(
                                       strategy.level, s0.error.dcovar))
             end
             budget_left = maxfcn_eff - ncalls(cf)
+            # Thread the per-parameter bound flags so the inner-HESSE
+            # diagonal step clamp (C++ MnHesse.cxx:160-167, 194-195) fires
+            # for bounded fits too — this runs in INTERNAL coords, the
+            # frame the C++ clamp targets. `nothing` for unbounded callers.
             s_hesse = hesse(cf, s0, strategy;
                              prec = prec, maxcalls = max(budget_left, 1),
+                             has_limits = has_limits,
                              print_level = print_level)
             hessian_computed = true
             if !is_valid(s_hesse)

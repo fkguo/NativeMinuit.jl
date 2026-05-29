@@ -1834,9 +1834,13 @@ function hesse(m::Minuit; strategy::Strategy = Strategy(1),
         throw(ArgumentError("Call `migrad(m)` before `hesse(m)`"))
     bfm = m.fmin
 
-    # Refresh the internal-coord Hessian.
+    # Refresh the internal-coord Hessian. Thread the per-parameter bound
+    # flags so the diagonal step clamp (C++ MnHesse.cxx:160-167, 194-195)
+    # fires for bounded parameters — `bfm.internal.state` is in INTERNAL
+    # (transformed) coordinates, exactly the frame the C++ clamp targets.
     new_state = JuMinuit.hesse(bfm.internal_cf, bfm.internal.state, strategy;
                                  prec = m.prec,
+                                 has_limits = JuMinuit._has_limits_internal(bfm.params),
                                  print_level = print_level)
 
     # Wrap into a fresh FunctionMinimum reflecting the CURRENT covariance

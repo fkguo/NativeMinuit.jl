@@ -195,4 +195,92 @@
         @test_throws DimensionMismatch hesse(x -> sum(abs2, x), [0.0, 0.0],
                                               [0.1])
     end
+
+    # ─────────────────────────────────────────────────────────────────
+    # Fix 1: bounded-parameter step clamp (C++ MnHesse.cxx:160-167,
+    # 194-195). For a parameter with limits, the diagonal probe step `d`
+    # is bounded at 0.5 in INTERNAL coordinates. Unbounded HESSE
+    # (`has_limits === nothing`) must be byte-identical to before.
+    # ─────────────────────────────────────────────────────────────────
+    @testset "Bounded step clamp — unbounded path byte-identical" begin
+        # `has_limits = nothing` (default) ≡ an all-false vector ≡ the
+        # legacy no-clamp path. The clamp must NEVER fire when unbounded.
+        cf = CostFunction(x -> x[1]^2 + 0.3 * x[1] * x[2] + 2.0 * x[2]^2 +
+                                0.05 * x[1]^3)
+        m = migrad(cf, [0.6, -0.3], [0.1, 0.1])
+        st_default = hesse(cf, m.state, Strategy(2))
+        st_none    = hesse(cf, m.state, Strategy(2); has_limits = nothing)
+        st_false   = hesse(cf, m.state, Strategy(2); has_limits = [false, false])
+        # Bit-identical covariance, g2, and step across all three.
+        @test st_default.error.inv_hessian == st_none.error.inv_hessian
+        @test st_none.error.inv_hessian    == st_false.error.inv_hessian
+        @test st_none.gradient.g2    == st_false.gradient.g2
+        @test st_none.gradient.gstep == st_false.gradient.gstep
+        # Sanity: the unbounded covariance is the correct analytic one.
+        @test is_valid(st_default.error)
+
+        # Length validation: a mismatched has_limits vector throws.
+        @test_throws DimensionMismatch hesse(cf, m.state, Strategy(1);
+                                              has_limits = [true])
+    end
+
+    @testset "Bounded step clamp limits the probe step (MnHesse.cxx:160-167)" begin
+        # FCN with a flat plateau in [-0.1, 0.1] (central-difference sag
+        # is exactly 0 there) and quadratic walls outside. The diagonal
+        # multiplier loop must grow the probe step `d` out of the plateau
+        # to get a non-zero sag. C++ clamps that growth at 0.51 for a
+        # BOUNDED parameter (HasLimits); an UNBOUNDED parameter grows
+        # unchecked (×10 per step → 1.0 here).
+        plateau = x -> (max(0.0, abs(x[1]) - 0.1))^2
+
+        function run_hesse(lim::Bool)
+            probes = Float64[]
+            cf = CostFunction(x -> (push!(probes, x[1]); plateau(x)))
+            x0 = [0.0]
+            fval0 = cf(x0)
+            # Seed step 0.01 starts INSIDE the plateau (sag == 0 → growth).
+            grad = FunctionGradient([0.0], [1.0], [0.01])
+            par  = MinimumParameters(copy(x0), [0.01], fval0)
+            err0 = MinimumError(reshape([1.0], 1, 1), MnHesseValid)
+            state = MinimumState(par, err0, grad, 0.0, ncalls(cf))
+            st = hesse(cf, state, Strategy(1); has_limits = [lim])
+            return st, maximum(abs, probes)
+        end
+
+        st_b, maxprobe_b = run_hesse(true)
+        st_u, maxprobe_u = run_hesse(false)
+
+        # Bounded: the multiplier-loop clamp caps the probe step at 0.51.
+        @test maxprobe_b ≤ 0.51 + 1e-9
+        # Unbounded: the same plateau forces the step well past 0.5 (→ 1.0).
+        @test maxprobe_u > 0.9
+        # The clamp samples g2 at a different step ⇒ a different covariance.
+        @test parent(st_b.error.inv_hessian)[1, 1] !=
+              parent(st_u.error.inv_hessian)[1, 1]
+    end
+
+    @testset "hesse(m::Minuit) clamps bounded params near a bound" begin
+        # Optimum at x = 0.02, jammed against the lower bound 0.0 (∈ [0,1])
+        # — the region where the sin-transform is steep and an unclamped
+        # HESSE probe would make a wild external excursion. Strategy(2)
+        # exercises BOTH the inner-MIGRAD HESSE and the standalone hesse(m).
+        m = Minuit(x -> (x[1] - 0.02)^2 + (x[2] - 0.5)^2, [0.5, 0.5];
+                    names = ["x", "y"],
+                    limits = [(0.0, 1.0), (0.0, 1.0)],
+                    strategy = 2)
+        # Tight tol so the convergence check is meaningful near the bound,
+        # where the default tol=0.1 leaves the steep-transform external
+        # value ~0.023 (the clamp does NOT move the converged point — it is
+        # identical across Strategy 0/1/2 — it only bounds the HESSE probe).
+        migrad!(m; tol = 1e-6)
+        @test m.is_valid
+        @test m.values[1] ≈ 0.02 atol = 1e-3
+        hesse(m)
+        # HESSE returns a usable covariance even with the optimum against
+        # the bound (the clamp keeps the internal probe sane).
+        @test m.fmin.internal.state.error.status in (MnHesseValid, MnMadePosDef)
+        @test all(isfinite, m.errors)
+        @test m.errors[1] > 0
+        @test m.errors[2] > 0
+    end
 end

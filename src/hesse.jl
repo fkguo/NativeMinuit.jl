@@ -52,9 +52,11 @@ MnUserTransformation, maxcalls)` —
 
 # Arguments
 
-- `cf::CostFunction` — the user FCN (operates on the parameter
-  vector that `state.parameters.x` reports — Phase 1 first cut: no
-  bounds, so internal == external; bounded HESSE is a follow-up).
+- `cf::CostFunction` — the user FCN. Operates on the coordinate
+  frame `state.parameters.x` reports: for a bounded fit this is the
+  INTERNAL (sin/sqrt-transformed) frame supplied by the
+  `migrad(cf, params)` / `hesse(m::Minuit)` wrappers, which is exactly
+  the frame the C++ step clamp (`has_limits`) targets.
 - `state::MinimumState` — current state. The gradient field provides
   initial step sizes (`gst[i] = state.gradient.gstep[i]`) and the
   algorithm refines `g2[i]`.
@@ -64,6 +66,11 @@ MnUserTransformation, maxcalls)` —
 - `prec::MachinePrecision` — floor for step sizes and pos-def gate.
 - `maxcalls::Integer` — FCN call cap; `0` means use the default
   `200 + 100n + 5n²` per `MnApplication.cxx:43`.
+- `has_limits::Union{Nothing,AbstractVector{Bool}}` — per-parameter
+  (internal index) bound flags. `nothing` (default) ⇒ all unbounded
+  ⇒ no step clamp ⇒ byte-identical to an unbounded HESSE. When a
+  parameter is flagged, its diagonal probe step `d` is clamped at 0.5
+  in internal coordinates (C++ `MnHesse.cxx:160-167, 194-195`).
 
 # Return statuses
 
@@ -80,6 +87,7 @@ function hesse(
     strategy::Strategy = Strategy(1);
     prec::MachinePrecision = MachinePrecision(),
     maxcalls::Integer = 0,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
 )
     # HESSE computes 2nd derivatives by central differences on `cf(x)`
@@ -181,13 +189,27 @@ function hesse(
 
     vhmat = zeros(Float64, n, n)
 
-    # No `has_limits` info per parameter in Phase 1 first-cut (bounds
-    # integration is the follow-up). Treat all params as unbounded for
-    # the d-clamp branches; this matches the migrad.jl Phase 0 caller.
-    has_limits = false
+    # Per-parameter bound flags for the C++ MnHesse step clamp
+    # (MnHesse.cxx:160-167, 194-195): when a parameter HasLimits(), the
+    # diagonal probe step `d` is bounded at 0.5 in INTERNAL (sin/sqrt-
+    # transformed) coordinates. Near a bound the transform is steep, so
+    # an unclamped `d` maps to a wild external excursion and a wrong 2nd
+    # derivative. `has_limits === nothing` (the unbounded default — and
+    # every unbounded caller, including the standalone `hesse(f,x0,err)`)
+    # makes the per-parameter `lim_i` below always `false`, so the
+    # diagonal pass is byte-identical to the no-clamp path. The bounded
+    # callers (`migrad(cf, params)`, `hesse(m::Minuit)`) pass a length-n
+    # vector indexed by INTERNAL/free-parameter position
+    # (`_has_limits_internal`), the JuMinuit analogue of C++
+    # `trafo.Parameter(i).HasLimits()`.
+    has_limits === nothing || length(has_limits) == n ||
+        throw(DimensionMismatch(
+            "hesse: has_limits length $(length(has_limits)) != n=$n"))
 
     # ── Diagonal pass ─────────────────────────────────────────────
     for i in 1:n
+        # C++ `trafo.Parameter(i).HasLimits()` (MnHesse.cxx:160, 194).
+        lim_i = has_limits === nothing ? false : has_limits[i]
         xtf = x[i]
         dmin = 8.0 * prec.eps2 * (abs(xtf) + prec.eps2)
         d = abs(gst[i])
@@ -210,7 +232,7 @@ function hesse(
                 x[i] = xtf
                 sag = 0.5 * (fs1 + fs2 - 2.0 * amin)
                 sag != 0 && break
-                if has_limits
+                if lim_i
                     d > 0.5 && (mlp_failed = true; break)
                     d *= 10
                     d > 0.5 && (d = 0.51)
@@ -234,7 +256,7 @@ function hesse(
             dlast = d
 
             d = sqrt(2.0 * aimsag / abs(g2[i]))
-            has_limits && (d = min(0.5, d))
+            lim_i && (d = min(0.5, d))
             d < dmin && (d = dmin)
 
             # Convergence checks

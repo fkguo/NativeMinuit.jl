@@ -369,6 +369,7 @@ function migrad(
     verify_threading::Bool = false,
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
     storage_level::Integer = 0,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
 )
     n = length(x0)
@@ -384,11 +385,14 @@ function migrad(
     # `numerical_gradient!(::CFwG, ...)` accepts but ignores it.
     # `verify_threading` likewise a no-op (nothing to verify on a
     # single-call gradient path). Default false even when threaded=true.
+    # `has_limits` threads the per-parameter bound flags to the inner-HESSE
+    # step clamp for bounded AD fits (same as the numerical path).
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
                           verify_threading = verify_threading,
                           storage_level = storage_level,
+                          has_limits = has_limits,
                           print_level = print_level)
 end
 
