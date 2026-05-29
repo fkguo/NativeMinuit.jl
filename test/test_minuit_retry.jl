@@ -336,10 +336,18 @@
         # the cycle was detected. This is the core "stops early ONLY when
         # provably redundant" claim.
         @test 2 <= m5.n_passes < 5
-        # The published result is exactly the single-shot result — the
-        # retries cycled and added nothing, so the best-of-passes selector
-        # keeps pass 1 (no worse than iterate=1: the safety invariant).
-        @test m5.fval == m1.fval
+        # The retries cycle and add nothing material, so the best-of-passes
+        # selector returns essentially pass 1's result.
+        #
+        # NOTE: the 2nd-pass-invalid bail (C++ VariableMetricBuilder.cxx
+        # :127-132) makes each invalid inner pass return its EARLIER-pass
+        # point — matching C++, which returns the pass-1 minimum — so the
+        # retry no longer cycles to a BIT-identical fval; it agrees to ~1e-7.
+        # The safety invariant (best-of-passes is never WORSE than the
+        # single-shot pass 1) still holds exactly, since the selector takes
+        # the min over passes and m5's pass 1 equals m1.
+        @test m5.fval ≈ m1.fval atol = 1e-5
+        @test m5.fval <= m1.fval + 1e-9
     end
 
     @testset "Multi-scale retry escapes a noisy stall to a deeper basin" begin

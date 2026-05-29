@@ -131,4 +131,49 @@
         @test is_valid(m1d)
         @test Base.values(m1d)[1] ≈ 3.0 atol = 1e-4
     end
+
+    # ─────────────────────────────────────────────────────────────────
+    # Fix 2: 2nd-pass-invalid early bail (C++ VariableMetricBuilder.cxx
+    # :127-132). After a non-first inner DFP pass that is invalid, MIGRAD
+    # bails instead of burning further HESSE+DFP passes to the call limit.
+    # ─────────────────────────────────────────────────────────────────
+    @testset "2nd-pass-invalid bail predicate (VariableMetricBuilder.cxx:127-132)" begin
+        # White-box, deterministic check that the bail condition matches
+        # the C++ guard `ipass > 0 && !min.IsValid()`.
+        cf = CostFunction(x -> sum(abs2, x))
+        valid_state = migrad(cf, [1.0, 1.0], [0.1, 0.1]).state
+        @test is_valid(valid_state)
+        invalid_state = MinimumState(2)            # n=2 invalid sentinel
+        @test !is_valid(invalid_state)
+
+        edmval = 1.0e-3
+        # ipass == 0 → never bails (preserves the first-pass do-while
+        # semantics), even with an invalid state and a huge edm.
+        @test !JuMinuit._migrad_second_pass_invalid(0, invalid_state, 1.0e9, edmval)
+        @test !JuMinuit._migrad_second_pass_invalid(0, valid_state, 1.0e9, edmval)
+        # ipass > 0 + invalid inner state → bail.
+        @test JuMinuit._migrad_second_pass_invalid(1, invalid_state, 0.0, edmval)
+        # ipass > 0 + above-max-edm (edm_corrected > 10·edmval) → bail.
+        @test JuMinuit._migrad_second_pass_invalid(1, valid_state, 11 * edmval, edmval)
+        # ipass > 0 + valid + edm within 10·edmval → do NOT bail; a
+        # converging multi-pass fit must keep iterating.
+        @test !JuMinuit._migrad_second_pass_invalid(1, valid_state, 5 * edmval, edmval)
+        @test !JuMinuit._migrad_second_pass_invalid(2, valid_state, 9 * edmval, edmval)
+    end
+
+    @testset "2nd-pass bail leaves converging Strategy≥1 fits unchanged" begin
+        # The bail fires only for an INVALID non-first pass, so a
+        # converging Strategy(2) fit (always valid, edm → 0, exercises the
+        # inner-HESSE + bail-check path) must be untouched: same minimum
+        # and same valid verdict as Strategy(0).
+        f = x -> (x[1] - 1.0)^2 + 0.5 * x[1] * x[2] + (x[2] + 2.0)^2
+        m0 = migrad(CostFunction(f), [0.0, 0.0], [0.1, 0.1]; strategy = Strategy(0))
+        m2 = migrad(CostFunction(f), [0.0, 0.0], [0.1, 0.1]; strategy = Strategy(2))
+        @test is_valid(m0)
+        @test is_valid(m2)
+        @test !m2.reached_call_limit       # converged, not bailed-to-limit
+        @test !m2.above_max_edm
+        @test Base.values(m2) ≈ Base.values(m0) atol = 1e-5
+        @test fval(m2) ≈ fval(m0) atol = 1e-8
+    end
 end
