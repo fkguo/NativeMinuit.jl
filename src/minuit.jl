@@ -463,11 +463,12 @@ function migrad!(m::Minuit;
     #       is meaningless → natural termination, independent of `iterate`.
     #
     # We do NOT claim the global minimum is found — global optimization is
-    # undecidable. The defensible statement is: searched perturbation scales
-    # up to re-convergence on a known basin or the parameter physical range;
-    # if a deeper minimum existed within the searched range it would have
-    # been found (cf. MINUIT `MnMinimize` = Migrad+Simplex, scipy
-    # `basinhopping`, the multistart literature).
+    # undecidable, and this deterministic Simplex+MIGRAD search is
+    # basin/seed/call-limit dependent. The defensible statement is: it
+    # samples increasing perturbation scales up to re-convergence on a known
+    # basin or the parameter physical range, and MAY thereby find a deeper
+    # minimum it would otherwise miss (cf. MINUIT `MnMinimize` =
+    # Migrad+Simplex, scipy `basinhopping`, the multistart literature).
     #
     # Loop exits when the fit validates, the call limit is exhausted, the
     # perturbation saturates the physical range, or a cycle is detected.
@@ -598,17 +599,22 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Position match tolerance for fixed-point detection, as a fraction of the
-# per-coordinate length scale (max of |value|, |converged uncertainty|,
-# |user step|). Two converged points count as "the same minimum" when every
-# free coordinate agrees to this fraction AND their fvals agree (below). 1%
-# is far tighter than the spacing between physically-distinct minima (many σ
-# apart) yet far looser than a minimizer's position reproducibility, so it
-# can neither merge distinct minima nor miss a genuine re-convergence.
+# per-coordinate length scale (max of |value|, |user step|). Two converged
+# points count as "the same minimum" when every free coordinate agrees to
+# this fraction AND their fvals agree (below). 1% of the value/step scale is
+# tighter than the spacing of physically-distinct minima yet looser than a
+# minimizer's position reproducibility. This is a HEURISTIC, not a proof:
+# erring tight only misses a cycle (a few extra passes — harmless); the
+# growing perturbation also means a revisit at one scale does not prove a
+# larger scale could not escape (see the loop comment).
 const _RETRY_XTOL_REL = 1.0e-2
-# fval match tolerance (relative + absolute floor). The coarse "same energy"
-# gate; the position test is the disambiguator for fval-degenerate distinct
-# minima (e.g. symmetric wells with equal depth).
-const _RETRY_FTOL_REL = 1.0e-4
+# fval match tolerance for "same minimum". Deliberately MUCH tighter than the
+# general retry tolerance: a genuine re-convergence reproduces fval to
+# ~EDM-tolerance (≈1e-6 relative for the default tol), while physically
+# distinct minima differ far more. Using a small epsilon (not the coarse
+# retry `tol`) avoids treating a real improvement as "the same energy".
+# Floor `max(_RETRY_FTOL_ABS, _RETRY_FTOL_REL·|fj|)` keeps it sane near fj≈0.
+const _RETRY_FTOL_REL = 1.0e-6
 const _RETRY_FTOL_ABS = 1.0e-12
 # Unbounded "physical range" = this multiple of the parameter step. The
 # perturbation growth is capped here; chosen large enough that for the
@@ -654,8 +660,12 @@ function _retry_scaled_params(m::Minuit, params_next::Parameters,
         end
         range_i = _retry_param_range(m.params.pars[i], base_errs[i])
         grown = p.error * factor
-        # simplex edge is 10·step; cap the step so 10·step ≤ range, but
-        # never shrink below the carried-forward base step.
+        # Bound GROWTH so the simplex edge (10·step) ≤ range, but never
+        # shrink below the carried base step `p.error`. So `10·step ≤ range`
+        # holds EXCEPT when the parameter's own step already exceeds
+        # range/10 (an unusually large user step for a narrow range); there
+        # the step is left at `p.error` and the bounded simplex's int↔ext
+        # transform clamps any over-range probe back inside the bounds.
         step = max(min(grown, range_i / 10.0), p.error)
         new_pars[i] = MinuitParameter(p.name, p.value, step;
                                        lower = p.lower, upper = p.upper,
@@ -686,14 +696,18 @@ function _retry_perturb_saturated(m::Minuit, factor::Float64,
 end
 
 # Best-of-passes selector enforcing the safety invariant: a strictly-lower
-# fval always wins; an exact tie goes to the valid result; a worse (or
-# non-finite) candidate never replaces the incumbent. Guarantees the
-# published fval is ≤ the pass-1 fval (so `iterate=N` ≤ `iterate=1`).
+# fval always wins; an exact tie goes to the valid result; a worse candidate
+# never replaces the incumbent. A non-finite (NaN/Inf) candidate never wins,
+# but a finite candidate DOES replace a non-finite incumbent — otherwise a
+# NaN pass-1 fval could never be improved (codex BLOCKING). Guarantees the
+# published fval is ≤ the pass-1 fval whenever any finite pass exists (so
+# `iterate=N` ≤ `iterate=1`).
 function _retry_select_better(cand::BoundedFunctionMinimum,
                                best::BoundedFunctionMinimum)
     fc = fval(cand)
     fb = fval(best)
-    isfinite(fc) || return best
+    isfinite(fc) || return best   # NaN/Inf candidate never wins
+    isfinite(fb) || return cand   # any finite candidate beats a non-finite incumbent
     fc < fb && return cand
     (fc == fb && is_valid(cand) && !is_valid(best)) && return cand
     return best
@@ -718,7 +732,8 @@ function _retry_is_fixed_point(bfm::BoundedFunctionMinimum,
     f = fval(bfm)
     isfinite(f) || return false   # NaN/Inf pass is not a usable fixed point
     @inbounds for (xj, fj) in visited
-        abs(f - fj) <= _RETRY_FTOL_REL * (abs(fj) + _RETRY_FTOL_ABS) || continue
+        isfinite(fj) || continue  # never match against a non-finite history entry
+        abs(f - fj) <= max(_RETRY_FTOL_ABS, _RETRY_FTOL_REL * abs(fj)) || continue
         same = true
         for i in eachindex(x)
             scale = max(abs(x[i]), abs(xj[i]), abs(base_errs[i]), _RETRY_FTOL_ABS)
