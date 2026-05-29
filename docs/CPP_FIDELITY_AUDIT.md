@@ -15,6 +15,8 @@ Audited so far:
    `VariableMetricBuilder.cxx` ↔ `src/migrad.jl:_migrad_loop`
 3. [MnMinos](#3-mnminos) — `MnMinos.cxx` (+ `MnFunctionCross.cxx`) ↔
    `src/minos.jl` / `src/function_cross.jl`
+4. [MnContours](#4-mncontours) — `MnContours.cxx` ↔
+   `src/contours.jl::contour_exact`
 
 ---
 
@@ -241,17 +243,78 @@ larger fits, easily fixed.
 
 ---
 
-## Summary across the three audits
+## 4. MnContours
+
+`MnContours.cxx:34-204` ↔ `src/contours.jl::contour_exact`. JuMinuit ships two
+contour routines: `contour` (a simplified convenience, documented as such) and
+**`contour_exact`** — the C++-faithful port audited here. The actual crossing
+search reuses the already-audited cross-search core via `function_cross_multi`
+(the 2-fixed-parameter path of `_cross_core`).
+
+### Branch map
+
+| C++ (MnContours.cxx) | JuMinuit (contour_exact) | Verdict |
+|---|---|---|
+| `assert npoints>3` (38) | `npoints ≥ 4` (119) | ✓ |
+| `maxcalls = 100·(npoints+5)·(nvar+1)` (39) | 187 | ✓ exact |
+| `toler = 0.1` (50) | `tlr=0.1` (110) | ✓ |
+| `mex=Minos(px)`, `mey=Minos(py)` + validity (54–73) | 136–143 | ✓ |
+| 4 axis points: fix px/py at val±err, MIGRAD, take other coord (75–110) | `_axis_point` (148–166) | ✓ (strategy nuance below) |
+| `scalx=1/(ex.up−ex.lo)`, `scaly=…` (112–113) | 183–184 | ✓ |
+| 4 seed points in CCW order (115–118) | 175–180 | ✓ same order |
+| fix px,py; `MnFunctionCross` (125–131) | `function_cross_multi` (221) | ✓ |
+| largest scaled-gap pair incl. wrap (135–150) | cyclic scan (190–205) | ✓ equivalent |
+| midpoint `a1·p1+a2·p2`, perpendicular `xdir=Δy, ydir=−Δx` (163–166) | 209–212 | ✓ exact |
+| `scalfac = sca·max(\|xdir·scalx\|,\|ydir·scaly\|)` (167) | `max(...)` (213) | **✗ no `sca`** (below) |
+| `cross(...)`; insert at idist2 / append if wrap (177, 191–198) | 221–238 | ✓ (wrap-append matches) |
+| `nfcn>maxcalls` → return (158–161) | break on `nfcn>maxcalls` (229) | ✓ |
+| return `ContoursError` (203) | 241 | ✓ |
+
+### Findings
+
+- **✗ Divergence (MODERATE): missing the `sca` direction-switch retry**
+  (MnContours.cxx:152–189). When the crossing search fails for a contour point,
+  C++ flips the perpendicular direction (`sca = 1 → −1`, `goto L300`) and retries
+  *once* before giving up. JuMinuit's `contour_exact` instead `break`s on the
+  first failed `function_cross_multi` (contours.jl:229–231). Effect: on irregular
+  contours where the crossing lies in the `−perpendicular` direction, C++ finds
+  the point and JuMinuit returns **fewer points than requested**. Affects
+  contour *completeness*, not the correctness of the points found. **~10 LOC**
+  (wrap the cross in a `for sca in (1.0, -1.0)` retry).
+
+- **Minor: axis-point inner-MIGRAD strategy.** The four seed-point MIGRADs use
+  the full `strategy` (`_axis_point`, contours.jl:152); C++ uses
+  `MnStrategy(max(0, strategy−1))` (75, 94). Only diverges at `strategy ≥ 1`
+  (the default `contour_exact` strategy is `Strategy(0)`, where `max(0,−1)=0` —
+  no divergence). The *ray-point* cross correctly uses `strategy−1`
+  (function_cross.jl:965). Marginal accuracy/call-count effect on the 4 seeds.
+
+- **`contour` vs `contour_exact`:** the default `contour` is a simplified
+  convenience (linearized ellipse-ish), not a C++ port; `contour_exact` is the
+  faithful one. Tracked in `GAP_AUDIT.md` P3 (verified iminuit-compat).
+
+**Verdict: faithful port** (`contour_exact`). The seed-point construction,
+largest-gap bisection, perpendicular-ray geometry, scaling, insert-order, and
+the reuse of the audited cross-search all map exactly. The one substantive
+divergence is the **missing `sca` retry**, which costs contour *completeness*
+(fewer points) on irregular contours but never produces a wrong point.
+
+---
+
+## Summary across the four audits
 
 | Algorithm | Verdict | Substantive items |
 |---|---|---|
-| **MnHesse** | faithful | bounded-parameter step clamp not implemented (`has_limits=false`; documented Phase-1 deferral; unbounded fits unaffected) |
-| **MIGRAD** | faithful | deliberate status-gated entry shortcut (correctness-preserving); missing C++ 2nd-pass-invalid early-bail (efficiency-only, S≥1 non-converging) |
-| **MnMinos** | faithful | default call budget 1000 vs C++/iminuit n-scaled (drop-in-compat; ~3-line fix) |
+| **MnHesse** | faithful | bounded-parameter step clamp not implemented (`has_limits=false`; documented Phase-1 deferral; unbounded fits unaffected) — ~15 LOC |
+| **MIGRAD** | faithful | deliberate status-gated entry shortcut (correctness-preserving *keep*); missing C++ 2nd-pass-invalid early-bail (efficiency-only, S≥1 non-converging) — ~3 LOC |
+| **MnMinos** | faithful | default call budget 1000 vs C++/iminuit n-scaled (drop-in-compat) — ~3 LOC |
+| **MnContours** | faithful (`contour_exact`) | missing `sca` direction-switch retry (fewer points on irregular contours) — ~10 LOC; axis-point strategy nuance (S≥1 only) |
 
-All three are faithful ports of the C++ Minuit2 algorithm. No whole branch is
-silently absent; the divergences are (a) documented deliberate optimizations,
-(b) a documented Phase-1 bounds deferral, (c) a narrow efficiency gap, and (d) a
-default-budget mismatch. Two carry a concrete, small recommended fix (MnHesse
-bounded clamp; MnMinos default budget); one is a deliberate keep (MIGRAD
-shortcut); the rest are same-result reformulations or hardening beyond C++.
+All four are faithful ports of the C++ Minuit2 algorithm — **no whole branch is
+silently absent**. The divergences are: documented deliberate optimizations (the
+MIGRAD shortcut — a *keep*), a documented Phase-1 bounds deferral (MnHesse),
+narrow efficiency/robustness gaps (MIGRAD 2nd-pass bail, MnContours `sca`
+retry), and a default-budget mismatch (MnMinos). Four carry a small,
+contained recommended fix (MnHesse clamp ~15 LOC, MIGRAD bail ~3, MnMinos budget
+~3, MnContours `sca` retry ~10); one is a deliberate keep; the rest are
+same-result reformulations or hardening beyond C++.
