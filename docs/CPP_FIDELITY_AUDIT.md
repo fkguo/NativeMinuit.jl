@@ -1,22 +1,33 @@
 # C++ Minuit2 ↔ JuMinuit line-by-line fidelity audit
 
-**Date**: 2026-05-29 · **Branch**: `feat/iam-convergence-gap`
+**Date**: 2026-05-30 · **Base**: `main` @ `3de0857` (after PR #16 + PR #17 §1-4 merged)
 **Reference**: `reference/Minuit2_cpp/{src,inc}/*` (GooFit/Minuit2 v6.24.0)
+**Line numbers**: all cites verified against `main` @ `3de0857`.
 **Scope**: deep, branch-by-branch comparison of individual ported algorithms —
 *not* the component-level coverage map (that lives in `DEFERRED.md` /
 `GAP_AUDIT.md`). Each section maps every C++ branch/exit path to its JuMinuit
 counterpart and classifies it: ✓ faithful · documented-divergence · minor ·
 missing.
 
-Audited so far:
+Audited (14 algorithms — the full minimization / error-analysis spine):
 
-1. [MnHesse](#1-mnhesse) — `MnHesse.cxx:93-316` ↔ `src/hesse.jl`
-2. [VariableMetricBuilder / MIGRAD](#2-variablemetricbuilder--migrad) —
-   `VariableMetricBuilder.cxx` ↔ `src/migrad.jl:_migrad_loop`
-3. [MnMinos](#3-mnminos) — `MnMinos.cxx` (+ `MnFunctionCross.cxx`) ↔
-   `src/minos.jl` / `src/function_cross.jl`
-4. [MnContours](#4-mncontours) — `MnContours.cxx` ↔
-   `src/contours.jl::contour_exact`
+1. MnHesse — `MnHesse.cxx:93-316` ↔ `src/hesse.jl`
+2. VariableMetricBuilder / MIGRAD — `VariableMetricBuilder.cxx` ↔ `src/migrad.jl:_migrad_loop`
+3. MnMinos — `MnMinos.cxx` (+ `MnFunctionCross.cxx`) ↔ `src/minos.jl` / `src/function_cross.jl`
+4. MnContours — `MnContours.cxx` ↔ `src/contours.jl::contour_exact`
+5. MnSimplex — `SimplexBuilder/Parameters/SeedGenerator.cxx` ↔ `src/simplex.jl`
+6. MnLineSearch (+ MnParabola) — `MnLineSearch.cxx` ↔ `src/linesearch.jl`
+7. NegativeG2LineSearch — `NegativeG2LineSearch.cxx` ↔ `src/negative_g2.jl` / `src/ad_gradient.jl`
+8. MnSeedGenerator — `MnSeedGenerator.cxx` ↔ `src/seed.jl`
+9. Gradient calculators (Initial/Numerical2P/Hessian/Analytical) ↔ `src/gradient.jl` / `hessian_gradient.jl` / `ad_gradient.jl`
+10. DavidonErrorUpdator + VariableMetricEDMEstimator ↔ `src/davidon.jl` / `edm.jl`
+11. MnPosDef — `MnPosDef.cxx` ↔ `src/posdef.jl`
+12. MnEigen / MnGlobalCorrelationCoeff / MnCovarianceSqueeze ↔ `src/eigen_corr.jl` / `covariance_squeeze.jl`
+13. MnScan — `MnParameterScan.cxx` / `ScanBuilder.cxx` ↔ `src/scan.jl`
+14. Parameter transforms + MnStrategy + MnMachinePrecision ↔ `src/transform.jl` / `strategy.jl` / `precision.jl`
+
+See [Summary across all 14 algorithms](#summary-across-all-14-algorithms) for the
+severity-sorted findings (one MAJOR: §14 precision `eps`).
 
 ---
 
@@ -301,20 +312,248 @@ divergence is the **missing `sca` retry**, which costs contour *completeness*
 
 ---
 
-## Summary across the four audits
+> **Sections 5–14 below** were produced by a parallel per-component audit pass
+> (one independent auditor per algorithm), then reviewed. All line numbers are
+> verified against `main` @ `3de0857` (the audit ran against the post-PR-#16
+> code, which is now merged into main, so the cites are already current). The
+> two consequential findings (§14 precision `eps`, §5 Simplex `minedm`) were
+> re-verified by hand against the C++ source; spot-checks confirmed the
+> shifted-file cites (`minuit.jl`, `ad_gradient.jl`) resolve correctly.
 
-| Algorithm | Verdict | Substantive items |
-|---|---|---|
-| **MnHesse** | faithful | bounded-parameter step clamp not implemented (`has_limits=false`; documented Phase-1 deferral; unbounded fits unaffected) — ~15 LOC |
-| **MIGRAD** | faithful | deliberate status-gated entry shortcut (correctness-preserving *keep*); missing C++ 2nd-pass-invalid early-bail (efficiency-only, S≥1 non-converging) — ~3 LOC |
-| **MnMinos** | faithful | default call budget 1000 vs C++/iminuit n-scaled (drop-in-compat) — ~3 LOC |
-| **MnContours** | faithful (`contour_exact`) | missing `sca` direction-switch retry (fewer points on irregular contours) — ~10 LOC; axis-point strategy nuance (S≥1 only) |
+## 5. MnSimplex
 
-All four are faithful ports of the C++ Minuit2 algorithm — **no whole branch is
-silently absent**. The divergences are: documented deliberate optimizations (the
-MIGRAD shortcut — a *keep*), a documented Phase-1 bounds deferral (MnHesse),
-narrow efficiency/robustness gaps (MIGRAD 2nd-pass bail, MnContours `sca`
-retry), and a default-budget mismatch (MnMinos). Four carry a small,
-contained recommended fix (MnHesse clamp ~15 LOC, MIGRAD bail ~3, MnMinos budget
-~3, MnContours `sca` retry ~10); one is a deliberate keep; the rest are
-same-result reformulations or hardening beyond C++.
+`SimplexBuilder.cxx` / `SimplexParameters.cxx` / `SimplexSeedGenerator.cxx` ↔
+`src/simplex.jl`. The Nelder–Mead core is a faithful line-for-line port:
+reflection/expansion/contraction coefficients (α=1, β=0.5, γ=2, ρmin=4, ρmax=8,
+the David-Sachs ρ1/ρ2), the `Update`/`Dirin`/`Edm = f(jh)−f(jl)` machinery, all
+reflect/contract/expand/ρ-fit branches and breaks, the post-loop centroid step,
+and the final `dirin·√(Up/Edm)` error scaling all map exactly.
+
+Findings:
+- **✗ MODERATE — default `minedm` is 10⁴× too tight.** JuMinuit uses
+  `minedm = 1e-5·up` (simplex.jl:134-135); C++/iminuit's Simplex EDM goal is
+  `toler·Up()` with default `toler=0.1`, i.e. **`0.1·up`** (`ModularFunctionMinimizer::Minimize`
+  scales `effective_toler = toler·Up()` for *all* builders; the `×0.002` is
+  MIGRAD-only — verified). The in-code comment ("`0.1·tol·up·1e-3`") is
+  factually wrong about the C++ Simplex path. Effect: JuMinuit's simplex iterates
+  far longer and reports `above_max_edm` much more readily. ~1 LOC + comment fix
+  (`minedm = 0.1·cf.up`), OR re-document honestly if a tighter goal is wanted.
+- **✗ MODERATE — initial-simplex edge ~10× too large.** C++ edge =
+  `10·Gstep` with `Gstep = max(gsmin, 0.1·dirin)` ⇒ effective `≈ dirin`; JuMinuit
+  seeds `10·errs` where `errs ≈ dirin` ⇒ edge `≈ 10·dirin`. Same minimum,
+  materially different trajectory/call-count. ~3-5 LOC.
+- minor: do-while→while-precheck (pre-converged seed skips one reflection; same
+  final state); seed EDM/G2 not formed (cosmetic; SimplexBuilder overwrites).
+
+Verdict: faithful Nelder–Mead core, but two compounding scale divergences
+(stopping rule 10⁴× tighter, starting simplex 10× larger) reach the same minimum
+along a different path with a much stricter — and mis-justified — stopping rule.
+
+## 6. MnLineSearch
+
+`MnLineSearch.cxx` (default parabolic; `#ifdef USE_OTHER_LS` cubic/Brent is
+default-off and correctly omitted) + `MnParabolaFactory` ↔ `src/linesearch.jl`.
+
+Findings:
+- ✓ **Fully faithful.** Every constant (`overal=1000, undral=-100, toler=0.05,
+  slambg=5, alpha=2, maxiter=12`), the slamin/eps2 logic, the 2-point and
+  3-point loops, the F2/F3 comparisons, the window clamps, and all early-returns
+  match line-for-line. The Lagrange parabola (`linesearch.jl`) is **numerically
+  verified ≡** C++'s centered-mean `MnParabolaFactory` (rel-diff ≤ 4e-11 over
+  200k random triples).
+- minor: a benign off-by-one in the `niter` termination counter (C++ has a
+  trailing `niter++`); cannot change the returned `(xvmin, fvmin)`.
+
+Verdict: **SEVERITY none** — a faithful, line-accurate port of the default
+parabolic line search.
+
+## 7. NegativeG2LineSearch
+
+`NegativeG2LineSearch.cxx` ↔ `src/negative_g2.jl` (numerical) + `src/ad_gradient.jl` (AD).
+
+Findings:
+- ✓ The **numerical-path** `negative_g2_line_search` is faithful line-for-line:
+  the `2n` cap, the `Eps`/`Eps2` skip gates, the downhill step sign, the `gdel`,
+  the dirin-drop, the full-gradient recompute, the `1/g2` diagonal rebuild, and
+  the `MnNotPosDef`-on-negative-EDM all match.
+- **✗ MODERATE — AD path is a stub.** `negative_g2_line_search(::CostFunctionWithGradient,…)`
+  (ad_gradient.jl:338-350) `@warn`s and returns the seed unchanged, whereas C++
+  (`MnSeedGenerator.cxx:161-164`) runs the *full* recovery via a
+  `Numerical2PGradientCalculator`. It is on the **live AD seed path**
+  (ad_gradient.jl:293-297), so an AD fit seeded with a non-positive `g2` keeps a
+  bad curvature instead of the C++-corrected one. ~30-45 LOC (route the recompute
+  through the finite-difference `cf.f`, as the Strategy-2 AD HESSE bootstrap
+  already does).
+
+Verdict: numerical path faithful; AD path a real (documented) stub gap.
+
+## 8. MnSeedGenerator
+
+`MnSeedGenerator.cxx:41-101` (numerical overload) ↔ `src/seed.jl`.
+
+Findings:
+- ✓ The numerical seed is a **constant-for-constant faithful** port: the
+  InitialGradient + Numerical2P refine, the `1/g2` (eps2-clamped) diagonal, the
+  EDM, the unconditional negative-G2 check, the `HasCovariance`/`prior_cov`
+  branch, and the **Strategy(2) seed-time MnHesse bootstrap** all map 1:1.
+- minor (AD overload only): the `CheckGradient()` user-gradient discrepancy
+  check (~15 LOC) and the negative-G2 refine (~10 LOC, = §7) are Phase-2.1 stubs.
+
+Verdict: numerical seed faithful; only the AD-overload Phase-2.1 stubs diverge.
+
+## 9. Gradient calculators (Initial / Numerical2P / Hessian / Analytical)
+
+`InitialGradientCalculator.cxx`, `Numerical2PGradientCalculator.cxx`,
+`HessianGradientCalculator.cxx`, `AnalyticalGradientCalculator.cxx` ↔
+`src/gradient.jl`, `src/hessian_gradient.jl`, `src/ad_gradient.jl`.
+
+Findings:
+- ✓ Initial, Numerical2P, and Hessian are **byte-exact** in every formula
+  (`gsmin=8·eps2·(|x|+eps2)`, `g2=2·up/dirin²`, `gstep=max(gsmin,0.1·dirin)`,
+  `dfmin`, `vrysml`, `optstp`, `stpmin/stpmax`), the GradientNCycles loop, and
+  both convergence breaks (step-tol, grad-tol), with identical ordering. The
+  Hessian calc's intentional quirks (the `4·eps2` factor, the missing-`abs`
+  `dmin`, the `j>2` rebased divergence break) are faithfully preserved.
+- ✓ Analytical: the int↔ext Jacobian (`DInt2Ext`) is **relocated** to the
+  bounded-FCN-wrap layer (migrad_bounded.jl) rather than inside the calculator —
+  net result identical (diagonal transform, component-wise chain rule exact).
+- minor: the `if HasLimits && step>0.5` clamps are unported but **architecturally
+  unreachable** (bounded fits wrap to an unbounded internal `CostFunction`, so
+  the calculators never see limit metadata) — zero behavioral gap; `CheckGradient()`
+  helper not ported (uncalled in the operator path).
+
+Verdict: all four faithful — exact gradient math; only unreachable clamps + an
+uncalled helper diverge.
+
+## 10. DavidonErrorUpdator + VariableMetricEDMEstimator
+
+`DavidonErrorUpdator.cxx`, `VariableMetricEDMEstimator.cxx` ↔ `src/davidon.jl`,
+`src/edm.jl`. (Cross-checked against `docs/DAVIDON_CXX_AUDIT.md`.)
+
+Findings:
+- ✓ **Fully faithful, verified term-by-term.** The DFP update (the rank-2 base
+  `dx⊗dx/δ − vg⊗vg/γ`, the *additive* rank-1 correction when `δ>γ`, the abs-sum
+  `dcovar` quality estimator) and the EDM `0.5·gᵀVg` match exactly, including all
+  three guards (`δ==0`, `δ<0` warn-only, `γ≤0`) and the `sum_of_elements`
+  absolute-value semantics (a signed sum would have silently diverged — it does
+  not). The C++ n=1 EDM fast-path is algebraically identical to the general form.
+
+Verdict: **SEVERITY none** — term-for-term faithful; confirms the prior DFP audit.
+
+## 11. MnPosDef
+
+`MnPosDef.cxx` ↔ `src/posdef.jl`.
+
+Findings:
+- ✓ The matrix-correction core is **bit-for-bit faithful**: diagonal
+  normalization `s=1/√diag`, the `dg = 0.5 + epspdf − dgmin` shift, the
+  `pmax=max(|pmax|,1)` clamp, the `pmin > epspdf·pmax` eigenvalue gate, the
+  `padd = 0.001·pmax − pmin` final shift, and the upper-triangle storage transpose.
+- **✗ minor — metadata divergences (×2).** (a) The `MnMadePosDef` exits pass the
+  *incoming* `err.dcovar` (posdef.jl:69,130) instead of C++'s forced `1.0`
+  (`BasicMinimumError` MnMadePosDef ctor) — this under-inflates MIGRAD's
+  `edm_corrected = edm·(1+3·dcovar)` after a pos-def event, potentially
+  terminating one iteration early. (b) The eigenvalue-gate exit preserves
+  `err.status` instead of forcing valid+posdef, which can keep a `MnMadePosDef`
+  status across the gdel>0→edm<0 re-invocation within one MIGRAD iteration. ~3 LOC.
+
+Verdict: numerics faithful; two undocumented metadata divergences perturb the
+post-pos-def EDM correction / iteration count (minor).
+
+## 12. MnEigen / MnGlobalCorrelationCoeff / MnCovarianceSqueeze
+
+`MnEigen.cxx`+`LaEigenValues.cxx`, `MnGlobalCorrelationCoeff.cxx`,
+`MnCovarianceSqueeze.cxx` ↔ `src/eigen_corr.jl`, `src/covariance_squeeze.jl`.
+
+Findings:
+- ✓ **MnEigen** faithful — the f2c QL solver is replaced by LAPACK `eigvals`
+  (sanctioned substitution; both ascending; LAPACK is *more* accurate than C++'s
+  fixed `1e-6`).
+- ✓ **MnGlobalCorrelationCoeff** faithful — `ρᵢ = √(1 − 1/(Cᵢᵢ·C⁻¹ᵢᵢ))` is
+  byte-identical; the `denom≤0` clamp difference is unreachable under real C++
+  control flow (that path already set `valid=false`).
+- **✗ minor (latent) — MnCovarianceSqueeze.** The first-inversion-failure
+  fallback returns the same diagonal values but tags **`MnInvertFailed`** where
+  C++ would relabel **Valid** (status-enum divergence). And the **`MnUserCovariance`
+  overload is not ported** (the one C++ calls from `MnUserParameterState` on
+  parameter-fix) — but JuMinuit has no `MnUserParameterState` analog, so both are
+  **latent** (squeeze has no non-test caller).
+
+Verdict: MnEigen + global-cc faithful; CovSqueeze happy-path faithful with a
+latent status-enum divergence + an unported (currently-unused) overload.
+
+## 13. MnScan
+
+`MnParameterScan.cxx` + `ScanBuilder.cxx` ↔ `src/scan.jl`.
+
+Findings:
+- ✓ Observable behavior faithful: central-point-first ordering, `maxsteps+1`
+  length, the `±2σ` default range, the grid math `stp=(high−low)/(maxsteps−1)`,
+  and best-point retention all match.
+- minor (architectural, behaviorally equivalent): best-point write-back is
+  hoisted to the `Minuit` wrapper (`_scan_retain_best!`, + NaN-hardened); the
+  dead C++ one-sided-limit branch is collapsed to a both-bounds test; the
+  `ScanMinimizer` multi-axis seed-builder is left unported in favor of
+  iminuit-style diagnostic semantics (`m.scan()`).
+
+Verdict: faithful observable behavior; deviations are intentional documented
+architecture choices.
+
+## 14. Parameter transforms + MnStrategy + MnMachinePrecision
+
+`Sin/SqrtLow/SqrtUp ParameterTransformation.cxx` + `MnUserTransformation.cxx`,
+`MnStrategy.cxx`, `MnMachinePrecision.cxx` ↔ `src/transform.jl`, `src/strategy.jl`,
+`src/precision.jl`.
+
+Findings:
+- ✓ **Parameter transforms faithful** — every formula exact: Sin
+  `Int2ext`/`Ext2int` (incl. `distnn=8·√eps2`, `yy²>1−eps2` saturation), `DInt2Ext`,
+  both Sqrt transforms (sign-correct derivatives ∓v), and the `Int2extError`
+  two-sided `dx>1` clamp.
+- ✓ **MnStrategy faithful** — all **21** preset constants (7 knobs × L0/L1/L2)
+  match exactly; default level 1.
+- **✗ MAJOR — `MnMachinePrecision.eps` is missing the factor of 4.** C++
+  `fEpsMac = 4·numeric_limits<double>::epsilon() = 8.88e-16`
+  (`MnMachinePrecision.cxx:26`); JuMinuit `MachinePrecision() = MachinePrecision(eps(Float64))`
+  = `2.22e-16` (precision.jl). Consequently `eps2 = 2·√eps` is **2× too small**
+  (2.98e-8 vs C++ 5.96e-8). `eps2` is the master tolerance threading through the
+  *entire* engine via the default `MachinePrecision()`: the numerical-gradient
+  minimum step `gsmin=8·eps2·…`, the HESSE deltas `4·eps2·…`, the Sin/MINOS
+  near-bound saturation `distnn=8·√eps2`, and the negative-g2 / AD-Hessian
+  regularization threshold `|g2|>eps2`. Every one trips at a different point than
+  C++/iminuit, so converged values and near-bound error reporting drift at the
+  precision-sensitive margin. **~1 LOC fix:**
+  `MachinePrecision() = MachinePrecision(4.0 * eps(Float64))` (+ update the
+  `p.eps == eps(Float64)` doctest). **Re-verified by hand against the C++ source.**
+
+Verdict: transforms + all strategy constants exact, but the default machine
+precision is 4× off (`eps2` 2× off) — a pervasive, ~1-LOC, **MAJOR** divergence.
+
+---
+
+## Summary across all 14 algorithms
+
+**No whole C++ algorithm or branch is silently absent** — every divergence is a
+specific, located, mostly-small item. Sorted by severity:
+
+| Severity | Algorithm | Finding | Fix |
+|---|---|---|---|
+| **MAJOR** | §14 Precision | default `eps` missing ×4 ⇒ `eps2` 2× too small vs C++/iminuit; pervasive tolerance shift | ~1 LOC |
+| **MODERATE** | §5 MnSimplex | `minedm` 1e-5·up vs C++ 0.1·up (10⁴× tighter) + initial edge 10× large; wrong in-code citation | ~5 LOC |
+| **MODERATE** | §7 NegativeG2 (AD) | AD-path recovery is a `@warn` stub vs C++ Numerical2P-driven; live AD seed path | ~30-45 LOC |
+| **MODERATE** | §4 MnContours | missing `sca` direction-switch retry → fewer points on irregular contours | ~10 LOC |
+| minor | §1 MnHesse | bounded-param step clamp unported (`has_limits=false`; unbounded unaffected) | ~15 LOC |
+| minor | §2 MIGRAD | missing 2nd-pass-invalid early-bail (efficiency, S≥1 non-converging) | ~3 LOC |
+| minor | §3 MnMinos | default budget 1000 vs n-scaled | ~3 LOC |
+| minor | §11 MnPosDef | `MnMadePosDef` dcovar/status metadata (perturbs edm-correction/iters) | ~3 LOC |
+| minor (latent) | §12 CovSqueeze | fallback status-enum (Valid vs MnInvertFailed); `MnUserCovariance` overload unported | — |
+| minor (deferred) | §8/§9 AD seed/grad | `CheckGradient` + AD negative-G2 Phase-2.1 stubs | ~25 LOC |
+| **none** | §6 LineSearch, §10 Davidon/EDM, §14 transforms+strategy | fully faithful (parabola ≡ to 4e-11; DFP/EDM term-by-term; 21 strategy constants exact) | — |
+
+**Headline:** the comprehensive pass found **one MAJOR** item — the machine-precision
+`eps` factor-of-4 (§14), a 1-LOC fix with engine-wide reach — plus three MODERATE
+items (Simplex stopping rule, AD negative-G2 stub, contour `sca` retry). All are
+small, located, and contained; the core minimization/error spine (MIGRAD,
+Davidon, EDM, line search, HESSE, MINOS, seed, gradients, transforms, strategy)
+is a faithful port. The deliberate keeps (MIGRAD status-gated shortcut) and the
+documented Phase-1/2.1 deferrals are called out as such.
