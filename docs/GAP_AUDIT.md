@@ -29,7 +29,25 @@ divergence) are tracked separately and not re-listed here.
 | P3 contour vs contour_exact | (verified iminuit-compat; docs-only) | — |
 | P4 packed-storage layout | (COSMETIC; no action) | — |
 
-All gaps surfaced by the audit have been closed in main.
+All gaps surfaced by the **first** audit (M1–M6, P1–P5) have been closed in main.
+
+## Re-audit (2026-05-29, post-bfd6e30)
+
+A fresh full-surface re-audit after PRs #1–#12 found 1 BLOCKING + 4 NICE
+gaps the M/P-focused first pass had missed (plus cosmetic items). In flight:
+
+| gap | severity | fix chip / branch |
+|---|---|---|
+| `m.fixed["x"]=true` indexed assignment silently no-ops (getproperty returns a copy) | **BLOCKING** | `feat/indexed-param-assignment` |
+| one-sided limit setters `set_upper_limit!`/`set_lower_limit!` + `m.limits["x"]=(0,nothing)` | NICE | `feat/indexed-param-assignment` |
+| standalone `hesse(f, x0, errs)` without prior migrad | NICE | `feat/cpp-surface-completeness` |
+| single-side MINOS `minos_lower`/`minos_upper` + `toler`/`maxcall` kwargs (maxcall was accepted-but-unused) | NICE | `feat/cpp-surface-completeness` |
+| `MnParameterScan` best-value retention (scan should update `m` to best grid point) | NICE | `feat/cpp-surface-completeness` |
+| C++-named accessors on `MinosError`/`ContoursError` (`at_lower_max_fcn`, `x_min`, …); `CovarianceStatus()` int; `Hessian()` accessor; points-only contour; `ComputePrecision()` auto-detect | COSMETIC | (deferred — fields/data exist, only C++-name wrappers missing) |
+
+Separately, a Jupyter-first rich-output overhaul (correlation heatmap,
+value±err formatting, validity checklist, χ²/dof, LaTeX export) is in
+flight on `feat/jupyter-rich-output` — an enhancement, not a C++ gap.
 
 Pre-closure / historical state preserved below for context.
 
