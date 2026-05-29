@@ -129,6 +129,44 @@
         @test length(m2.minos_errors) == 2
     end
 
+    # ─────────────────────────────────────────────────────────────────
+    # Fix 3: MnMinos n-scaled default call budget (C++ MnMinos.cxx
+    # :111-114). With no explicit `maxcall`, the per-cross-search budget
+    # is 2·(nvar+1)·(200+100·nvar+5·nvar²), not the legacy hardcoded 1000.
+    # An explicit `maxcall` must still be respected.
+    # ─────────────────────────────────────────────────────────────────
+    @testset "MINOS default budget is n-scaled (MnMinos.cxx:111-114)" begin
+        # (a) The default per-cross-search budget equals the C++/iminuit
+        #     formula (the value the `maxcall == 0` path forwards).
+        for nvar in (1, 2, 5, 9)
+            @test JuMinuit._minos_default_maxcalls(nvar) ==
+                  2 * (nvar + 1) * (200 + 100 * nvar + 5 * nvar^2)
+        end
+        @test JuMinuit._minos_default_maxcalls(9) == 30100   # the audit's figure
+        @test JuMinuit._minos_default_maxcalls(2) > 1000     # beats legacy default
+
+        # (b) Fixed parameters are excluded from nvar (matches C++
+        #     MnUserParameterState::VariableParameters()).
+        mf = Minuit(x -> sum(abs2, x), [1.0, 2.0, 3.0];
+                    names = ["a", "b", "c"], fixed = [false, true, false])
+        @test JuMinuit.n_free(mf.params) == 2
+
+        # (c) Default (maxcall=0 sentinel) succeeds with the n-scaled
+        #     budget; an explicit tiny `maxcall` is RESPECTED — it
+        #     truncates the cross-search (fcn_limit) rather than being
+        #     ignored in favor of the n-scaled default.
+        m = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
+                    names = ["x", "y"])
+        migrad!(m)
+        minos!(m, 1)                       # default budget
+        minos!(m, 2; maxcall = 1)          # explicit tiny override
+        @test JuMinuit.is_valid(m.minos_errors[1])
+        @test !m.minos_errors[1].upper_fcn_limit
+        @test !m.minos_errors[1].lower_fcn_limit
+        @test !JuMinuit.is_valid(m.minos_errors[2])
+        @test m.minos_errors[2].upper_fcn_limit || m.minos_errors[2].lower_fcn_limit
+    end
+
     @testset "contour workflow" begin
         m = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
                     names = ["x", "y"])

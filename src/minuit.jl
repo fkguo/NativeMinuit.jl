@@ -812,6 +812,17 @@ function minos!(m::Minuit, par::Integer;
     return m
 end
 
+# C++/iminuit default per-cross-search MINOS FCN budget (MnMinos.cxx
+# :111-114): when the user passes maxcalls == 0,
+#     maxcalls = 2·(nvar+1)·(200 + 100·nvar + 5·nvar²)
+# where `nvar` is the number of variable (free) parameters
+# (`MnUserParameterState::VariableParameters()`, the JuMinuit `n_free`).
+# Replaces the legacy hardcoded 1000, which could trip `fcn_limit` on
+# larger fits where C++/iminuit would keep iterating. Each ± cross-search
+# gets the full budget (C++ recomputes it per `FindCrossValue` call).
+_minos_default_maxcalls(nvar::Integer) =
+    2 * (nvar + 1) * (200 + 100 * nvar + 5 * nvar * nvar)
+
 # Internal: compute the asymmetric MinosError for ONE parameter WITHOUT
 # storing it on `m`. Shared choke point for `minos!` (which stores the
 # result), `minos_lower`, and `minos_upper`. Validates, translates the
@@ -842,13 +853,17 @@ function _minos_error(m::Minuit, par::Int;
 
     # iminuit / C++ MnMinos control-name translation. `maxcall` (iminuit,
     # singular) → internal `maxcalls`; `toler` (C++ MnMinos positional) and
-    # `tol` (iminuit kwarg) both → internal `tlr`. `maxcall=0` keeps the
-    # internal default budget (`maxcalls=1000`). Explicit internal-name
-    # kwargs (`maxcalls` / `tlr`) passed by power users win over the
-    # translation via the final merge.
+    # `tol` (iminuit kwarg) both → internal `tlr`. When the user passes no
+    # explicit `maxcall` (the `maxcall == 0` sentinel) we forward the C++/
+    # iminuit n-scaled default budget (MnMinos.cxx:111-114) instead of
+    # letting the downstream fall back to its legacy hardcoded 1000.
+    # Explicit internal-name kwargs (`maxcalls` / `tlr`) passed by power
+    # users still win over the translation via the final merge.
     fwd = NamedTuple()
     if maxcall > 0
         fwd = merge(fwd, (; maxcalls = Int(maxcall)))
+    else
+        fwd = merge(fwd, (; maxcalls = _minos_default_maxcalls(n_free(m.params))))
     end
     if toler !== nothing
         fwd = merge(fwd, (; tlr = Float64(toler)))
