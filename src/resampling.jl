@@ -710,6 +710,16 @@ pointing to the generic interface.
 `filter_invalid`, `threaded`) and the returned [`BootstrapResult`](@ref) match
 the `model` + `Data` method. Masked points are excluded (the cost is resampled
 over its active set).
+
+!!! note "Extended count/normalization parameter is pinned under the nonparametric bootstrap"
+    For `ExtendedUnbinnedNLL`, every nonparametric resample draws exactly the
+    same number of points `N` (with replacement), so the extended score
+    `∂(−lnL)/∂N = 1 − n/N` fixes the fitted total-count / normalization
+    parameter at `N* = n` in *every* resample, independent of which points were
+    drawn. Its bootstrap spread is therefore `≈ 0` **by construction** — this is
+    correct, not a failure: a nonparametric bootstrap of `N` fixed points
+    carries no information about the count. Use HESSE (`≈ √N`) for the count
+    error, or a Poisson/parametric resample if you need it from resampling.
 """
 function bootstrap(cost::AbstractCost, start::Union{AbstractVector,Minuit};
                    nresample::Integer = 1000,

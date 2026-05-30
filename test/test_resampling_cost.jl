@@ -145,6 +145,13 @@ using Test
         bs = bootstrap(ext, m; nresample = 150, seed = 2)
         @test size(bs.samples) == (150, 2)
         @test all(isfinite, bs.std)
+        # Param 1 (rate λ) has genuine bootstrap spread; param 2 (count N) is
+        # PINNED: every nonparametric resample draws exactly Ns points, and the
+        # extended score ∂(−lnL)/∂N = 1 − n/N fixes N* = n independent of the
+        # data, so σ(N) ≈ 0 by construction (≪ HESSE's √N ≈ 17.3) — documented
+        # in the bootstrap docstring, asserted here rather than masked away.
+        @test bs.std[1] > 0
+        @test bs.std[2] < 1.0
     end
 
     @testset "non-resamplable costs raise a clear error (before any fit)" begin
