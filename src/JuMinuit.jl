@@ -25,6 +25,8 @@ module JuMinuit
 using LinearAlgebra
 using Logging
 using Printf
+using Random
+using Statistics
 
 include("precision.jl")
 include("strategy.jl")
@@ -58,6 +60,7 @@ include("display.jl")
 include("eigen_corr.jl")
 include("iminuit_compat.jl")
 include("cost_functions.jl")
+include("resampling.jl")
 include("serialize.jl")
 include("plot_recipes.jl")
 include("plot_text.jl")
@@ -125,6 +128,9 @@ export @plt_data, @plt_data!, @plt_best, @plt_best!
 export AbstractCost, LeastSquares, UnbinnedNLL, BinnedNLL
 export ExtendedUnbinnedNLL, ExtendedBinnedNLL, CostSum
 export parameter_names
+
+# Data-resampling error analysis (resampling.jl)
+export bootstrap, jackknife, BootstrapResult, JackknifeResult, correlation
 
 # Algorithms ported from C++ Minuit2
 export simplex, scan

@@ -39,4 +39,42 @@ If you need explicit column selection by name, use the 3-arg form:
 """
 JuMinuit.Data(df::DataFrame) = JuMinuit.Data(df[:, 1], df[:, 2], df[:, 3])
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Resampling-result → DataFrame (resampling.jl). Per-parameter summary tables;
+# the raw θ̂ sample matrix stays in `r.samples` (one row per resample).
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    DataFrame(r::BootstrapResult)
+
+Per-parameter bootstrap summary: `parameter`, `estimate` (θ̂_full), `mean`,
+`std` (bootstrap SE), `ci_lower`, `ci_upper` (percentile CI at `r.ci_level`).
+The raw `nresample × npar` θ̂ matrix is in `r.samples`.
+"""
+function DataFrames.DataFrame(r::JuMinuit.BootstrapResult)
+    return DataFrame(parameter = r.names,
+                     estimate = r.estimate,
+                     mean = r.mean,
+                     std = r.std,
+                     ci_lower = r.ci_lower,
+                     ci_upper = r.ci_upper)
+end
+
+"""
+    DataFrame(r::JackknifeResult)
+
+Per-parameter jackknife summary: `parameter`, `estimate` (θ̂_full), `mean` (θ̄),
+`bias`, `bias_corrected`, `variance`, `std` (jackknife SE). The raw
+`g × npar` leave-one-out matrix is in `r.samples`.
+"""
+function DataFrames.DataFrame(r::JuMinuit.JackknifeResult)
+    return DataFrame(parameter = r.names,
+                     estimate = r.estimate,
+                     mean = r.mean,
+                     bias = r.bias,
+                     bias_corrected = r.bias_corrected,
+                     variance = r.variance,
+                     std = r.std)
+end
+
 end # module JuMinuitDataFramesExt
