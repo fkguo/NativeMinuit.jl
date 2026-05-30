@@ -76,6 +76,28 @@ end
 # chisq — χ² cost function for Data or tuple form
 # ─────────────────────────────────────────────────────────────────────────────
 
+# THE shared least-squares kernel (Req 2: a single χ² implementation).
+#
+# Sums ``((yᵢ − model(xᵢ, par)) / errᵢ)²`` over `eachindex` of the three
+# parallel arrays. `chisq`, `model_fit` (via `chisq`), and the
+# `LeastSquares` cost type ALL route here — there is no second χ² loop
+# anywhere in the package, so `LeastSquares(x,y,ye,model)(par)` is
+# bit-identical to `chisq(model, Data(x,y,ye), par)` by construction.
+#
+# Pass full `Vector`s for the unmasked hot path (contiguous `@simd`
+# reduction). For the restricted paths pass `@view`-sliced arrays — a
+# contiguous `first:last` `fitrange` slice, or an integer-indexed mask
+# slice (`@view x[active]`, `active::Vector{Int}`). Both view kinds keep
+# the `@simd` reduction because they support fast linear / gather
+# indexing (no data is copied — only the cheap `SubArray` wrapper).
+@inline function _chisq_core(model::F, x, y, err, par) where {F}
+    res = 0.0
+    @inbounds @simd for i in eachindex(x, y, err)
+        res += ((y[i] - model(x[i], par)) / err[i])^2
+    end
+    return res
+end
+
 @doc raw"""
     chisq(dist::Function, data::Data, par; fitrange=()) -> Float64
     chisq(dist::Function, data, par;       fitrange=()) -> Float64
@@ -92,29 +114,24 @@ Use `chisq` as the FCN argument to `Minuit`/`migrad`, or wrap via
 [`model_fit`](@ref) / `@model_fit`.
 """
 function chisq(dist::Function, data::Data, par; fitrange = ())
+    isempty(fitrange) &&
+        return _chisq_core(dist, data.x, data.y, data.err, par)
     # Match IMinuit.jl semantics: fitrange collapses to `first:last`
     # (contiguous), even if the user passes a stepped range. Review
     # IMPORTANT #7 — preserving stride would silently diverge from
-    # the drop-in source.
-    rng = isempty(fitrange) ? (1:data.ndata) : (first(fitrange):last(fitrange))
-    res = 0.0
-    @inbounds @simd for i in rng
-        res += ((data.y[i] - dist(data.x[i], par)) / data.err[i])^2
-    end
-    return res
+    # the drop-in source. The contiguous `@view` keeps the `@simd`
+    # reduction and is value-for-value identical to iterating `rng`.
+    rng = first(fitrange):last(fitrange)
+    return @views _chisq_core(dist, data.x[rng], data.y[rng], data.err[rng], par)
 end
 
 function chisq(dist::Function, data, par; fitrange = ())
     _x = data[1]
     _y = data[2]
-    _n = length(_x)
-    _err = length(data) == 2 ? ones(_n) : data[3]
-    rng = isempty(fitrange) ? (1:_n) : (first(fitrange):last(fitrange))
-    res = 0.0
-    @inbounds @simd for i in rng
-        res += ((_y[i] - dist(_x[i], par)) / _err[i])^2
-    end
-    return res
+    _err = length(data) == 2 ? ones(length(_x)) : data[3]
+    isempty(fitrange) && return _chisq_core(dist, _x, _y, _err, par)
+    rng = first(fitrange):last(fitrange)
+    return @views _chisq_core(dist, _x[rng], _y[rng], _err[rng], par)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -57,6 +57,7 @@ include("minuit.jl")
 include("display.jl")
 include("eigen_corr.jl")
 include("iminuit_compat.jl")
+include("cost_functions.jl")
 include("serialize.jl")
 include("plot_recipes.jl")
 include("plot_text.jl")
@@ -118,6 +119,12 @@ export Data, chisq, model_fit, @model_fit
 export func_argnames
 export chi2, poisson_chi2, multinominal_chi2
 export @plt_data, @plt_data!, @plt_best, @plt_best!
+
+# Julia-native cost type family (cost_functions.jl). `errordef` (the
+# trait) is already exported above; these are the cost types + helpers.
+export AbstractCost, LeastSquares, UnbinnedNLL, BinnedNLL
+export ExtendedUnbinnedNLL, ExtendedBinnedNLL, CostSum
+export parameter_names
 
 # Algorithms ported from C++ Minuit2
 export simplex, scan
