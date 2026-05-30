@@ -155,6 +155,14 @@ threads with `threaded = true`, and are **deterministic** given an explicit
 bit-identical to a serial one). Percentile CIs default to a `0.68` (±1σ-equiv.)
 coverage; pass `covariance = true` for the bootstrap covariance matrix.
 
+`bootstrap` / `jackknife` accept three input shapes: **(i)** a cost object —
+`bootstrap(cost, start)` for `LeastSquares` / `UnbinnedNLL` /
+`ExtendedUnbinnedNLL` (the cost carries its own data + model, so nothing else is
+passed; binned costs and `CostSum` are not point-resamplable and raise a clear
+error); **(ii)** `model` + `Data` + start (shown above); and **(iii)** a generic
+`refit(subdata) -> θ̂` callback over any indexable `data`. The cost-object form is
+bit-identical to the `model` + `Data` form for the equivalent `LeastSquares` fit.
+
 ### Jackknife — `jackknife(model, data, start; ...)`
 Deletes one point (delete-1, the default) — or one consecutive block
 (`d > 1`) — re-fits, and aggregates the leave-one-out estimates θ̂₍ⱼ₎ into a

@@ -46,6 +46,7 @@ using Test
     include("test_iminuit_compat_data.jl")
     include("test_cost_functions.jl")
     include("test_resampling_errors.jl")
+    include("test_resampling_cost.jl")
     include("test_simplex_scan.jl")
     include("test_error_sampling.jl")
     include("test_eigen_corr.jl")

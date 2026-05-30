@@ -141,12 +141,17 @@ end
 
 # Recover the `Minuit`-constructor keyword configuration from a (fitted) Minuit
 # so each resample re-fit is built with identical names / errors / limits /
-# fixed / errordef / strategy / tol / gradient / machine-precision. Carrying
-# `prec` keeps a `set_precision`-tuned anchor's gradient step sizes from
-# silently reverting to the 4·eps default in the resamples (iminuit-parity:
-# no per-construction asymmetry). Threading flags are deliberately NOT carried —
-# resample re-fits run single-threaded gradients (parallelism is at the
-# resample level; nesting would oversubscribe).
+# fixed / errordef / strategy / tol / machine-precision. Carrying `prec` keeps a
+# `set_precision`-tuned anchor's gradient step sizes from silently reverting to
+# the 4·eps default in the resamples (iminuit-parity: no per-construction
+# asymmetry). Threading flags are deliberately NOT carried — resample re-fits run
+# single-threaded gradients (parallelism is at the resample level; nesting would
+# oversubscribe).
+#
+# The analytic gradient is deliberately NOT carried: a user `grad` is a closure
+# over the ORIGINAL dataset, so it is INVALID for a resampled re-fit (objective
+# over the resample, gradient over the full data → inconsistent). Each resample
+# falls back to the numerical gradient, which is correct for its own data.
 function _fit_kwargs(m::Minuit)
     nm = [p.name for p in m.params.pars]
     er = [p.error for p in m.params.pars]
@@ -157,10 +162,8 @@ function _fit_kwargs(m::Minuit)
         hi = isnan(p.upper) ? nothing : p.upper
         lim[i] = (lo === nothing && hi === nothing) ? nothing : (lo, hi)
     end
-    grad = m.cfwg === nothing ? nothing : m.cfwg.g
     return (; name = nm, error = er, fixed = fx, limits = lim,
-            up = m.fcn.up, strategy = m.strategy, tol = m.tol, grad = grad,
-            prec = m.prec)
+            up = m.fcn.up, strategy = m.strategy, tol = m.tol, prec = m.prec)
 end
 
 # Resolve the master RNG: an explicit `seed` wins (and is recorded for
@@ -342,8 +345,11 @@ end
 Bootstrap error analysis for a χ² fit of `model(x, par)` to `data`. `start` is
 either the initial-value `AbstractVector` (the full-data fit is run internally
 to obtain the anchor optimum θ̂_full) or a `Minuit` template (its configuration —
-names, limits, fixed flags, errordef, strategy, tol, gradient — is cloned, and
-its current values seed the anchor; it is fitted first if not already).
+names, limits, fixed flags, errordef, strategy, tol, precision — is cloned, and
+its current values seed the anchor; it is fitted first if not already). A user
+analytic `grad` is deliberately **not** carried into the re-fits (it is a closure
+over the original data, so it would be wrong for a resampled set); each resample
+uses the numerical gradient.
 
 Keyword arguments:
 
@@ -615,6 +621,192 @@ function jackknife(refit::Function, data;
 
     return JackknifeResult(samples, valid, nm, θ_full, θ̄, bias, bias_corr,
                            variance, σ, cov, N, Int(d), g, gv)
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Interface (i): cost objects (cost_functions.jl). The cost carries the data +
+# model/pdf, so no separate `model` is needed. We resample the data POINTS and
+# rebuild the same cost on the subset, then reuse the whole bootstrap/jackknife
+# machinery above. Only the point-level costs are resamplable.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# `(n, build)` where `build(idx::AbstractVector{Int})` rebuilds the cost on the
+# points selected by `idx` (a with-replacement draw for bootstrap, the kept
+# indices for jackknife). The effective data is materialised ONCE here, so the
+# per-resample builder only indexes + constructs. The rebuilt cost is unmasked
+# (the mask was already applied when forming the effective data).
+function _cost_nonparam(c::LeastSquares)
+    d = c.data
+    x, y, e = c.active === nothing ? (d.x, d.y, d.err) :
+              (d.x[c.active], d.y[c.active], d.err[c.active])
+    return length(x),
+           idx -> LeastSquares(Data(x[idx], y[idx], e[idx]), c.model; name = c.pnames)
+end
+function _cost_nonparam(c::UnbinnedNLL)
+    xx = c.active === nothing ? c.x : c.x[c.active]
+    return length(xx),
+           idx -> UnbinnedNLL(xx[idx], c.pdf; log = c.log, name = c.pnames)
+end
+function _cost_nonparam(c::ExtendedUnbinnedNLL)
+    xx = c.active === nothing ? c.x : c.x[c.active]
+    return length(xx),
+           idx -> ExtendedUnbinnedNLL(xx[idx], c.density, c.integral;
+                                      log = c.log, name = c.pnames)
+end
+# Resamplability guards — throw a clear error BEFORE any anchor fit is run.
+_assert_resamplable(::Union{LeastSquares,UnbinnedNLL,ExtendedUnbinnedNLL}) = nothing
+_assert_resamplable(c::AbstractCost) = throw(ArgumentError(
+    "bootstrap/jackknife: point-resampling is undefined for $(nameof(typeof(c))) " *
+    "(binned/aggregated counts, or a composite CostSum). Use the parametric " *
+    "bootstrap on the underlying model, or the generic `bootstrap(refit, data)` " *
+    "interface."))
+_cost_nonparam(c::AbstractCost) = _assert_resamplable(c)
+
+# Parametric builder (LeastSquares only): `(n, build)` with `build(noise)`
+# regenerating yᵢ* = model(xᵢ, θ̂) + σᵢ·noiseᵢ on the fixed x/σ.
+function _cost_param(c::LeastSquares, θ_anchor)
+    d = c.data
+    x, e = c.active === nothing ? (d.x, d.err) : (d.x[c.active], d.err[c.active])
+    ymodel0 = Float64[c.model(x[i], θ_anchor) for i in eachindex(x)]
+    return length(x),
+           noise -> LeastSquares(Data(x, ymodel0 .+ e .* noise, e), c.model;
+                                 name = c.pnames)
+end
+_assert_parametric_cost(::LeastSquares) = nothing
+_assert_parametric_cost(c::AbstractCost) = throw(ArgumentError(
+    "bootstrap(kind=:parametric): only LeastSquares supports a parametric " *
+    "bootstrap on cost objects (Gaussian y-regeneration); $(nameof(typeof(c))) " *
+    "does not. Use kind=:nonparametric, or the model+Data method."))
+_cost_param(c::AbstractCost, θ_anchor) = _assert_parametric_cost(c)
+
+# Anchor fit + start config shared by the cost bootstrap / jackknife methods.
+function _cost_anchor(cost::AbstractCost, start, warm_start, kws)
+    if start isa Minuit
+        m_full = start.fmin === nothing ? migrad!(Minuit(cost, start; kws...)) : start
+        cold = [p.value for p in start.params.pars]
+    else
+        m_full = migrad!(Minuit(cost, collect(Float64, start); kws...))
+        cold = collect(Float64, start)
+    end
+    θ = args(m_full)
+    return m_full, θ, [p.name for p in m_full.params.pars], _fit_kwargs(m_full),
+           (warm_start ? θ : cold)
+end
+
+"""
+    bootstrap(cost::AbstractCost, start; kws...) -> BootstrapResult
+
+Bootstrap for a Julia-native cost object (**interface i**) — the cost carries
+its data + model/pdf, so no separate `model` is passed. Supported for the
+point-level costs `LeastSquares`, `UnbinnedNLL`, and `ExtendedUnbinnedNLL`
+(nonparametric resampling of the data points with replacement); `LeastSquares`
+additionally supports `kind = :parametric` (Gaussian y-regeneration from the
+best-fit model). Binned costs (`BinnedNLL` / `ExtendedBinnedNLL`) and the
+composite `CostSum` are **not** point-resamplable and raise an `ArgumentError`
+pointing to the generic interface.
+
+`start` is an initial-value vector or a fitted `Minuit`; all keywords
+(`nresample`, `kind`, `seed`, `rng`, `warm_start`, `ci_level`, `covariance`,
+`filter_invalid`, `threaded`) and the returned [`BootstrapResult`](@ref) match
+the `model` + `Data` method. Masked points are excluded (the cost is resampled
+over its active set).
+"""
+function bootstrap(cost::AbstractCost, start::Union{AbstractVector,Minuit};
+                   nresample::Integer = 1000,
+                   kind::Symbol = :nonparametric,
+                   seed::Union{Integer,Nothing} = nothing,
+                   rng::Random.AbstractRNG = Random.default_rng(),
+                   warm_start::Bool = true,
+                   ci_level::Real = 0.68,
+                   covariance::Bool = false,
+                   filter_invalid::Bool = true,
+                   threaded::Bool = false,
+                   kws...)
+    nresample >= 1 || throw(ArgumentError("bootstrap: nresample must be ≥ 1"))
+    0 < ci_level < 1 || throw(ArgumentError("bootstrap: ci_level must be in (0,1)"))
+    kind === :nonparametric || kind === :parametric ||
+        throw(ArgumentError("bootstrap: kind must be :nonparametric or :parametric (got :$kind)"))
+    _assert_resamplable(cost)                       # early — before the anchor fit
+    kind === :parametric && _assert_parametric_cost(cost)
+
+    m_full, θ_anchor, names, cfg, start_vals =
+        _cost_anchor(cost, start, warm_start, kws)
+    m_full.valid ||
+        @warn "bootstrap: the full-data fit did not converge; θ̂_full anchor may be unreliable"
+    npar = length(θ_anchor)
+
+    # `draw(rng_k) -> resampled cost`. Nonparametric: N draws with replacement;
+    # parametric: N Gaussian deviates regenerating y. Effective data built once.
+    if kind === :nonparametric
+        n, build = _cost_nonparam(cost)
+        draw = rng_k -> build(rand(rng_k, 1:n, n))
+    else
+        n, build = _cost_param(cost, θ_anchor)
+        draw = rng_k -> build(randn(rng_k, n))
+    end
+
+    master, recorded = _resolve_rng(seed, rng)
+    seeds = _resample_seeds(master, Int(nresample))
+    fit_one = function (k)
+        c_k = draw(Random.Xoshiro(seeds[k]))
+        m_k = Minuit(c_k, start_vals; cfg..., threaded_gradient = false)
+        migrad!(m_k)
+        return args(m_k), m_k.valid
+    end
+
+    samples, valid = _run_resamples(fit_one, Int(nresample), npar, threaded)
+    valmask = _stat_mask(samples, valid, filter_invalid)
+    μ, σ, lo, hi, cov, nv =
+        _bootstrap_stats(samples, valmask, Float64(ci_level), covariance)
+    nv == 0 && @warn "bootstrap: no resample re-fit converged; statistics are NaN"
+
+    return BootstrapResult(samples, valid, names, θ_anchor, μ, σ, lo, hi,
+                           Float64(ci_level), cov, kind, Int(nresample),
+                           count(valid), recorded)
+end
+
+"""
+    jackknife(cost::AbstractCost, start; kws...) -> JackknifeResult
+
+Delete-1 (or delete-`d` block) jackknife for a cost object (**interface i**).
+Supported for the point-level costs `LeastSquares`, `UnbinnedNLL`,
+`ExtendedUnbinnedNLL`; binned costs and `CostSum` raise an `ArgumentError`.
+Keywords (`d`, `warm_start`, `threaded`) and the returned
+[`JackknifeResult`](@ref) match the `model` + `Data` method.
+"""
+function jackknife(cost::AbstractCost, start::Union{AbstractVector,Minuit};
+                   d::Integer = 1,
+                   warm_start::Bool = true,
+                   threaded::Bool = false,
+                   kws...)
+    d >= 1 || throw(ArgumentError("jackknife: d must be ≥ 1"))
+    _assert_resamplable(cost)                       # early — before the anchor fit
+
+    m_full, θ_full, names, cfg, start_vals =
+        _cost_anchor(cost, start, warm_start, kws)
+    m_full.valid ||
+        @warn "jackknife: the full-data fit did not converge; θ̂_full anchor may be unreliable"
+    npar = length(θ_full)
+
+    n, build = _cost_nonparam(cost)
+    Int(d) <= n || throw(ArgumentError("jackknife: d ($d) must be ≤ N ($n)"))
+    blocks = _jackknife_blocks(n, Int(d))
+    g = length(blocks)
+    g >= 2 || throw(ArgumentError("jackknife: need ≥ 2 groups (got g=$g; reduce d)"))
+
+    fit_one = function (j)
+        keep = _complement(n, blocks[j])
+        m_j = Minuit(build(keep), start_vals; cfg..., threaded_gradient = false)
+        migrad!(m_j)
+        return args(m_j), m_j.valid
+    end
+
+    samples, valid = _run_resamples(fit_one, g, npar, threaded)
+    θ̄, bias, bias_corr, variance, σ, cov, gv = _jackknife_stats(samples, valid, θ_full)
+    gv < g && @warn "jackknife: $(g - gv) of $g leave-one-out re-fits did not converge; statistics use the $gv valid groups"
+
+    return JackknifeResult(samples, valid, names, θ_full, θ̄, bias, bias_corr,
+                           variance, σ, cov, n, Int(d), g, gv)
 end
 
 # ═════════════════════════════════════════════════════════════════════════════
