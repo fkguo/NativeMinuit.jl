@@ -5,13 +5,15 @@
 # (error-normalized) distance metric, per-mode re-fit + deeper-basin flag, and
 # the Clustering.jl-not-loaded fallback to the built-in clusterer.
 
-# Clustering is a WEAKDEP, deliberately kept out of the test deps so the
-# "not loaded → built-in works + friendly :dbscan error" path stays testable in
-# the default suite. If Clustering IS present in the load path (a dev added it,
-# or it lands in the test target later), load it so the DBSCAN extension is
-# actually exercised here too. (`@eval using` because `using` can't be
-# conditional or live inside a scope.) The ext is also verified manually
-# against Clustering 0.15.
+# Clustering is a WEAKDEP that is ALSO a test dependency (in Project.toml's
+# `test` target), so the DBSCAN extension gets standing CI coverage: loading it
+# here activates `JuMinuitClusteringExt`, and the "built-in :components ..."
+# testset below then takes its DBSCAN-agreement branch. The complementary
+# "not loaded → friendly :dbscan error" path can no longer be reached in-process
+# (Clustering is loaded), so it is preserved by a dedicated subprocess test that
+# spawns a fresh Julia WITHOUT `using Clustering` (see the subprocess testset
+# below). The guard keeps the file runnable standalone even without Clustering;
+# (`@eval using` because `using` can't be conditional or live inside a scope.)
 if Base.find_package("Clustering") !== nothing
     @eval using Clustering
 end
@@ -179,9 +181,11 @@ _fixed_matrix(nrow::Int, ncol::Int) =
     end
 
     @testset "built-in :components (no dep) + DBSCAN extension / not-loaded fallback" begin
-        # The default suite runs WITHOUT Clustering, so every test above already
-        # exercises the dependency-free built-in clusterer. Assert it explicitly,
-        # then branch on whether the DBSCAN extension is active.
+        # Every test above uses method=:components (the default), so the
+        # dependency-free built-in clusterer is already exercised regardless of
+        # whether Clustering is loaded. Assert it explicitly, then branch on
+        # whether the DBSCAN extension is active. With Clustering in the test
+        # target the `else` (DBSCAN-agreement) branch is the one CI runs.
         m = Minuit(fq, [0.0, 0.0]; names = ["a", "b"], errors = [0.1, 0.1])
         migrad!(m)
         S = vcat(_cloud([1.0, 2.0], [0.1, 0.1], 50),
@@ -209,6 +213,44 @@ _fixed_matrix(nrow::Int, ncol::Int) =
                                       min_neighbors = 3, min_size = 5)
             @test length(md) == 2
             @test sort([s.n_points for s in md]) == sort([s.n_points for s in comp])
+        end
+    end
+
+    @testset "Clustering-not-loaded → helpful :dbscan error (subprocess)" begin
+        # Clustering is in the test target (so the DBSCAN-agreement branch above
+        # runs in CI), which means the not-loaded branch can't be reached in this
+        # process. Spawn a fresh Julia that loads JuMinuit WITHOUT `using
+        # Clustering` and confirm method=:dbscan throws the actionable 'load
+        # Clustering' ArgumentError — not a bare MethodError. Mirrors the
+        # Optim-bridge not-loaded subprocess test in test_optim_bridge.jl.
+        code = """
+        using JuMinuit
+        fq(x) = (x[1] - 1.0)^2 + (x[2] - 2.0)^2
+        m = Minuit(fq, [0.0, 0.0]; names = ["a", "b"], errors = [0.1, 0.1])
+        migrad!(m)
+        S = [1.0 2.0; 1.05 1.98; 0.97 2.03; 6.0 6.0; 6.04 5.97; 5.98 6.05]
+        try
+            find_solution_modes(S, m; method = :dbscan)
+            println("NO_ERROR")
+        catch e
+            msg = sprint(showerror, e)
+            ok = e isa ArgumentError && occursin("Clustering", msg) &&
+                 occursin("using Clustering", msg)
+            println(ok ? "GOT_CLUSTERING_MSG" : "WRONG: " * msg)
+        end
+        """
+        proj = Base.active_project()
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$proj -e $code`
+        out = try
+            read(ignorestatus(cmd), String)
+        catch err
+            @warn "could not spawn not-loaded subprocess; skipping" err
+            "SKIP"
+        end
+        if out == "SKIP"
+            @test_skip "subprocess unavailable"
+        else
+            @test occursin("GOT_CLUSTERING_MSG", out)
         end
     end
 
