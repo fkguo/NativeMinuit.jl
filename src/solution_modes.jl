@@ -512,7 +512,7 @@ function find_solution_modes(samples::AbstractMatrix, m::Minuit;
 
     # ── Cluster in whitened space ──
     do_parallel = parallel === nothing ?
-        (m.threaded_gradient && Threads.nthreads() > 1) : parallel
+        (_use_threads(m) && Threads.nthreads() > 1) : parallel
     labels, n_noise = if method === :components
         raw, nraw = _connected_components(Z, threshold)
         l, _, nn = _apply_min_size(raw, nraw, Int(min_size))
