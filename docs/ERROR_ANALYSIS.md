@@ -75,14 +75,54 @@ valley — the standard HEP choice when the parabolic HESSE error is too crude.
 MINOS needs a genuinely valid minimum; on a broken or multimodal fit its
 crossings are meaningless.
 
-### MC-Δχ² region (companion Monte-Carlo sampling feature)
+### MC-Δχ² region — `get_contours_samples(m; ...)` / `contour_df_samples`
 Samples trial parameter vectors (proposal = the fit covariance, or a user range),
-keeps those inside the true `Δχ² ≤ threshold` shell, and uses the surviving cloud
-to describe the confidence region. Unlike MINOS it captures **non-Gaussian** and
-**joint multi-parameter** regions directly. It is still a likelihood method — the
-data are fixed and the per-point `σ` are trusted — so its honesty rests on the
-error model just as HESSE's and MINOS' do. If the covariance is unreliable, widen
-the proposal so it over-covers, or the kept region will be clipped.
+keeps those inside the true `Δχ² ≤ up·delta_chisq(cl, ndof)` shell — **the exact
+`χ²`/`−2lnL` re-evaluated at every sample** — and uses the surviving cloud to
+describe the confidence region. Unlike MINOS it captures **non-Gaussian** and
+**joint multi-parameter** regions directly. It is still a likelihood method (the
+data are fixed and the per-point `σ` are trusted), so its honesty rests on the
+error model just as HESSE's and MINOS' do. Returns a `NamedTuple` (kept
+`samples`, per-parameter asymmetric `bounds`, `acceptance`, `under_coverage`, …);
+`contour_df_samples` gives the same cloud as a `DataFrame`. Validated against the
+X(3872) published line-shape analysis (`BenchmarkExamples/X3872_dip`).
+
+**The proposal is not the cut.** The Gaussian (or box) is only how trial points
+are *proposed*; acceptance is the **true `Δχ²`**, never the Mahalanobis distance
+`(x−μ)ᵀΣ⁻¹(x−μ)` — cutting on Mahalanobis would just reproduce the HESSE ellipse,
+defeating the purpose. The optional Mahalanobis output is a diagnostic only.
+
+**Proposal under-coverage (the pitfall).** A `MvNormal(best, Σ)` proposal
+**under-estimates** the region when `Σ` is unreliable (`made_pos_def` / invalid
+`fmin`) or the posterior is strongly nonlinear (the true shell extends beyond the
+local Gaussian). Mitigations, all built in: an `inflate` factor; **adaptive
+widening** (auto-grow `inflate` until the region stops being clipped, with an
+`under_coverage` flag if it can't); a covariance-free **`proposal = :uniform`**
+box over explicit `ranges`; and a **warning** when the covariance looks unreliable
+— it never silently under-estimates. When in doubt, use the range proposal: it
+does not depend on `Σ` at all.
+
+**Joint vs single-parameter level — `delta_chisq(cl, ndof)`.** The threshold is
+`delta_chisq(cl, ndof)` (`chisq_cl` inverts it). `cl` follows iminuit (probability
+if `< 1`, nσ if `≥ 1`). **`ndof` is the dimension of the region, not the parameter
+count of the fit:** a single-parameter 1σ interval is `Δχ² = 1`, but a **2-D joint**
+68 % region is `Δχ² = 2.30`, and 3-D is `3.53` — *not* 1. The sampler defaults
+`ndof = n_free` (the joint region over all sampled parameters), which is usually
+what you want; override it deliberately if not.
+
+```julia
+# 1σ JOINT region for all 3 free parameters ⇒ Δχ² = 3.53 (NOT 1):
+r = get_contours_samples(m; nsamples = 30_000, cl = 1)   # ndof defaults to n_free = 3
+r.bounds          # asymmetric (min,max) per parameter
+r.under_coverage  # false ⇒ the proposal covered the region
+# Untrustworthy Σ → covariance-free box proposal:
+r = get_contours_samples(m; proposal = :uniform, ranges = [(0,0.8),(-0.05,0.05),(-15,0)])
+```
+
+Related: `contour_parameter_sets(ce)` returns the full parameter vector at every
+`contour_exact` / `mncontour` boundary point (the 2 contour coordinates + the
+profiled rest) at no extra cost — the native analogue of IMinuit.jl's
+`get_contours`.
 
 ### Bootstrap — `bootstrap(model, data, start; ...)`
 Resamples the dataset and re-fits `nresample` times, returning a
@@ -165,7 +205,10 @@ MC-Δχ² (the true, possibly non-elliptical, joint region with the data held fi
 
 ## See also
 
-- Implementation: [`src/resampling.jl`](../src/resampling.jl)
-- Tests: [`test/test_resampling_errors.jl`](../test/test_resampling_errors.jl)
+- Resampling implementation: [`src/resampling.jl`](../src/resampling.jl);
+  tests [`test/test_resampling_errors.jl`](../test/test_resampling_errors.jl)
+- MC-Δχ² / `delta_chisq` implementation:
+  [`src/error_sampling.jl`](../src/error_sampling.jl); tests
+  [`test/test_error_sampling.jl`](../test/test_error_sampling.jl)
 - HESSE / MINOS / contours: [`src/hesse.jl`](../src/hesse.jl),
   [`src/minos.jl`](../src/minos.jl), [`src/contours.jl`](../src/contours.jl)

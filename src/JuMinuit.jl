@@ -61,6 +61,7 @@ include("eigen_corr.jl")
 include("iminuit_compat.jl")
 include("cost_functions.jl")
 include("resampling.jl")
+include("error_sampling.jl")
 include("serialize.jl")
 include("plot_recipes.jl")
 include("plot_text.jl")
@@ -97,8 +98,11 @@ export initial_int_values, initial_int_errors
 export hesse, HesseResult
 export squeeze_symmetric, squeeze_error
 export MnCross, MinosError, minos, minos_lower, minos_upper
-export ContoursError, contour, contour_exact
+export ContoursError, contour, contour_exact, contour_parameter_sets
 export function_cross_multi
+# Sampling-based / contour error analysis (error_sampling.jl)
+export delta_chisq, chisq_cl
+export get_contours_samples, contour_df_samples
 export BoundedFunctionMinimum, ext_errors, ext_covariance, free_covariance
 export Minuit, migrad!, minos!
 # IMinuit.jl drop-in fit-type names (AbstractFit supertype; Fit/ArrayFit

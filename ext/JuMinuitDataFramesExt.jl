@@ -77,4 +77,30 @@ function DataFrames.DataFrame(r::JuMinuit.JackknifeResult)
                      std = r.std)
 end
 
+"""
+    JuMinuit.contour_df_samples(m::Minuit; kwargs...) -> DataFrame
+
+`DataFrame` of the accepted Monte-Carlo parameter sets from
+[`JuMinuit.get_contours_samples`](@ref): one row per kept set, one column
+per free parameter (named after the parameters), plus a `:delta_chisq`
+column carrying each set's true Δχ². All
+[`JuMinuit.get_contours_samples`](@ref) keyword arguments are forwarded.
+
+```julia
+using DataFrames, JuMinuit
+df = contour_df_samples(m; nsamples = 30_000, cl = 1)
+df.delta_chisq          # each kept set's χ²(x) − χ²_min (in χ² units)
+```
+"""
+function JuMinuit.contour_df_samples(m::JuMinuit.Minuit; kwargs...)
+    res = JuMinuit.get_contours_samples(m; kwargs...)
+    # Each matrix column is one free parameter; rows are accepted samples.
+    df = DataFrame(res.samples, Symbol.(res.free_names); makeunique = true)
+    # Per-sample true Δχ² (χ²-equivalent FCN delta). `makeunique` above
+    # guards parameter-name collisions; guard the diagnostic column too.
+    dcol = :delta_chisq in propertynames(df) ? :delta_chisq_ : :delta_chisq
+    df[!, dcol] = res.delta_chisq_values
+    return df
+end
+
 end # module JuMinuitDataFramesExt

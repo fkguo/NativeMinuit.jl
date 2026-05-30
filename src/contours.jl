@@ -30,6 +30,14 @@ Result of `contour`. Mirrors C++ `ContoursError`.
   along each axis (used as the basis of the ellipse).
 - `nfcn::Int` — total FCN calls.
 - `valid::Bool` — true if MINOS succeeded on both axes.
+- `full_points::Vector{Vector{Float64}}` — the **full n-dim parameter
+  vector** at each contour boundary point: the 2 contour coordinates
+  (`par_x`, `par_y`) plus the n−2 profiled (re-minimized) values from
+  the inner cross-search, in the same coordinate frame as `points`.
+  Populated by [`contour_exact`](@ref) at **zero extra cost** (the inner
+  re-minimization state is already computed per boundary point — see
+  [`contour_parameter_sets`](@ref)). Empty for the ellipse
+  approximation [`contour`](@ref) (which does no inner re-minimization).
 """
 struct ContoursError
     par_x::Int
@@ -39,6 +47,106 @@ struct ContoursError
     minos_y::MinosError
     nfcn::Int
     valid::Bool
+    # Phase 2.x: full n-dim parameter vector at each boundary point
+    # (2 fixed at the contour coords + n−2 profiled). Filled from the
+    # inner cross-search states `contour_exact` already computes; NO
+    # extra fits (the IMinuit.jl `get_contours` re-fit was a PyCall
+    # round-trip limitation that native Julia does not have). See
+    # `contour_parameter_sets`.
+    full_points::Vector{Vector{Float64}}
+end
+
+# Backward-compatible constructor (callers predating `full_points`).
+# Defaults `full_points` to empty — mirrors the `MinosError` state-field
+# compat constructors. The ellipse `contour` and all invalid-return
+# paths use this 7-arg form; only the valid `contour_exact` return fills
+# `full_points`.
+ContoursError(par_x::Int, par_y::Int, points::Vector{Tuple{Float64,Float64}},
+              minos_x::MinosError, minos_y::MinosError, nfcn::Int, valid::Bool) =
+    ContoursError(par_x, par_y, points, minos_x, minos_y, nfcn, valid,
+                  Vector{Float64}[])
+
+"""
+    contour_parameter_sets(ce::ContoursError) -> Vector{Vector{Float64}}
+
+The **full parameter set at every contour boundary point** — one
+n-dimensional vector per point in `ce.points`, each holding the 2 contour
+coordinates (`par_x`, `par_y`) together with the n−2 other parameters at
+their profiled (re-minimized) values along the contour.
+
+This is the native-Julia analogue of IMinuit.jl's `get_contours`, but
+with **no extra fits**: [`contour_exact`](@ref) already runs an inner
+re-minimization at each boundary point, so the full state is captured for
+free (IMinuit.jl re-fit each point only because PyCall could not return
+the inner `MinimumState` across the Python boundary).
+
+Each vector is in the **same coordinate frame as `ce.points`** (internal
+coordinates when reached via `mncontour` on a bounded fit; identical to
+external for unbounded fits). Empty when `ce` came from the ellipse
+[`contour`](@ref) or when the contour was invalid.
+
+# Example
+
+```julia
+ce = contour_exact(fmin, cf, 1, 2; npoints = 24)
+psets = contour_parameter_sets(ce)        # 24 full parameter vectors
+# Re-evaluating the FCN at any set returns ≈ fmin + up (the boundary):
+cf(psets[1]) ≈ fval(fmin) + cf.up
+```
+"""
+contour_parameter_sets(ce::ContoursError) = ce.full_points
+
+# ── full-point assembly helpers (Phase 2.x; used by contour_exact) ───────────
+# Re-insert the fixed contour coordinate(s) into an inner cross-search
+# free vector to recover the full n-dim parameter vector at a boundary
+# point. The inner free vector is ordered by ASCENDING original parameter
+# index with the fixed parameter(s) removed — see `_fix_multi_params` /
+# `_migrad_with_multi_fixed` (src/function_cross.jl). Returns `Float64[]`
+# on a shape mismatch (defensive: never scramble a wrong-dim state).
+
+# One parameter fixed (axis points; inner free vector has n−1 entries).
+function _insert_one_fixed(freex::AbstractVector{<:Real}, fixed_i::Int,
+                           vfix::Float64, n::Int)
+    length(freex) == n - 1 || return Float64[]
+    out = Vector{Float64}(undef, n)
+    @inbounds for k in 1:(fixed_i - 1)
+        out[k] = Float64(freex[k])
+    end
+    @inbounds out[fixed_i] = vfix
+    @inbounds for k in (fixed_i + 1):n
+        out[k] = Float64(freex[k - 1])
+    end
+    return out
+end
+
+# Two parameters fixed (ray points; inner free vector has n−2 entries).
+function _contour_full_point(inner_x::AbstractVector{<:Real}, ix::Int, iy::Int,
+                             xval::Float64, yval::Float64, n::Int)
+    if n == 2
+        # No profiled parameters: the full point is exactly the two contour
+        # coordinates at their slots. Use the AUTHORITATIVE (xval, yval) from
+        # the converged ray multiplier — NOT the inner state's last-probe
+        # coords, which lag by one parabolic α step.
+        out = Vector{Float64}(undef, 2)
+        @inbounds (out[ix] = xval; out[iy] = yval)
+        return out
+    end
+    length(inner_x) == n - 2 || return Float64[]
+    out = Vector{Float64}(undef, n)
+    lo, hi = minmax(ix, iy)
+    vlo = ix < iy ? xval : yval
+    vhi = ix < iy ? yval : xval
+    f = 1
+    @inbounds for k in 1:n
+        if k == lo
+            out[k] = vlo
+        elseif k == hi
+            out[k] = vhi
+        else
+            out[k] = Float64(inner_x[f]); f += 1
+        end
+    end
+    return out
 end
 
 """
@@ -145,6 +253,10 @@ function contour_exact(
     # Inner MIGRAD with each axis MINOS minimum gives the "other" coord
     # at the four axis crossings. For each: fix par_x at val ± σ, MIGRAD
     # the rest; the y-coord at that minimum is the contour-crossing.
+    # Returns `(other_coord, full_vec, nfcn)`. `full_vec` is the full
+    # n-dim parameter vector at the axis crossing (par_fix at v_fix +
+    # the n−1 re-minimized free coords); captured for `full_points` at
+    # NO extra cost (the inner re-minimization already ran).
     function _axis_point(par_fix::Int, v_fix::Float64, par_other::Int)
         m_axis, nf_axis = _migrad_with_multi_fixed(
             cf, state, [par_fix], [v_fix];
@@ -153,17 +265,19 @@ function contour_exact(
             scratch = scratch_nm1,
             threaded_gradient = threaded_gradient)
         if !m_axis.is_valid
-            return nothing, nf_axis
+            return nothing, Float64[], nf_axis
         end
-        return Base.values(m_axis)[par_other == par_fix ? 1 : (par_other > par_fix ? par_other - 1 : par_other)],
-               nf_axis
+        freevals = Base.values(m_axis)
+        other = freevals[par_other == par_fix ? 1 : (par_other > par_fix ? par_other - 1 : par_other)]
+        full = _insert_one_fixed(freevals, par_fix, v_fix, n)
+        return other, full, nf_axis
     end
 
     # The 4 initial axis points (in external coords)
-    y_at_xlo, nf_xlo = _axis_point(Int(par_x), valx + mex.lower, Int(par_y))
-    y_at_xhi, nf_xhi = _axis_point(Int(par_x), valx + mex.upper, Int(par_y))
-    x_at_ylo, nf_ylo = _axis_point(Int(par_y), valy + mey.lower, Int(par_x))
-    x_at_yhi, nf_yhi = _axis_point(Int(par_y), valy + mey.upper, Int(par_x))
+    y_at_xlo, full_xlo, nf_xlo = _axis_point(Int(par_x), valx + mex.lower, Int(par_y))
+    y_at_xhi, full_xhi, nf_xhi = _axis_point(Int(par_x), valx + mex.upper, Int(par_y))
+    x_at_ylo, full_ylo, nf_ylo = _axis_point(Int(par_y), valy + mey.lower, Int(par_x))
+    x_at_yhi, full_yhi, nf_yhi = _axis_point(Int(par_y), valy + mey.upper, Int(par_x))
     nfcn += nf_xlo + nf_xhi + nf_ylo + nf_yhi
 
     if any(p === nothing for p in (y_at_xlo, y_at_xhi, x_at_ylo, x_at_yhi))
@@ -178,6 +292,8 @@ function contour_exact(
         (valx + mex.upper, y_at_xhi),
         (x_at_yhi, valy + mey.upper),
     ]
+    # full_points stays index-aligned with `points` through every insert!.
+    full_points = Vector{Float64}[full_xlo, full_ylo, full_xhi, full_yhi]
 
     # Scaling factors for distance comparison (per C++ MnContours.cxx:112-113)
     scalx = 1.0 / (mex.upper - mex.lower)
@@ -247,8 +363,16 @@ function contour_exact(
                 aopt = cross.aopt
                 new_x = xmid + aopt * xdircr
                 new_y = ymid + aopt * ydircr
-                # Insert at idist2 position so points stay in order
-                insert!(points, idist2 == 1 ? nn + 1 : idist2, (new_x, new_y))
+                # Full n-dim parameter vector at this ray crossing: the 2
+                # contour coords + the n−2 profiled inner-state coords (no
+                # extra fit). Built from whichever `sca` direction converged.
+                full_pt = _contour_full_point(cross.state.parameters.x,
+                                              Int(par_x), Int(par_y), new_x, new_y, n)
+                # Insert at idist2 position so points stay in order; keep
+                # full_points index-aligned with the same insertion.
+                ins = idist2 == 1 ? nn + 1 : idist2
+                insert!(points, ins, (new_x, new_y))
+                insert!(full_points, ins, full_pt)
                 found = true
                 break
             end
@@ -260,7 +384,8 @@ function contour_exact(
         found || break
     end
 
-    return ContoursError(Int(par_x), Int(par_y), points, mex, mey, nfcn, true)
+    return ContoursError(Int(par_x), Int(par_y), points, mex, mey, nfcn, true,
+                         full_points)
 end
 
 function contour(

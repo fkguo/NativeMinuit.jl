@@ -47,6 +47,7 @@ using Test
     include("test_cost_functions.jl")
     include("test_resampling_errors.jl")
     include("test_simplex_scan.jl")
+    include("test_error_sampling.jl")
     include("test_eigen_corr.jl")
     include("test_phase1_cleanup.jl")
     include("test_print_level.jl")
