@@ -85,21 +85,23 @@ Mirrors `SimplexBuilder::Minimum` in
   errors.
 - `x0::AbstractVector{<:Real}` — initial parameter values.
 - `errs::AbstractVector{<:Real}` — initial 1σ step sizes. The simplex
-  initial edge length is `10·errs[i]` per dim (matches the C++ default
-  `step = 10 · seed.Gradient().Gstep()`).
+  initial edge length is `10·Gstep[i]` per dim with the seed
+  `Gstep[i] = max(gsmin, 0.1·|errs[i]|)`, i.e. an effective edge ≈ `|errs[i]|`
+  (matches the C++ default `step = 10 · seed.Gradient().Gstep()`;
+  `SimplexBuilder.cxx:38` + `InitialGradientCalculator.cxx:64`).
 
 # Keyword arguments
 
 - `maxfcn::Union{Integer,Nothing}=nothing` — FCN call budget; defaults
   to `200 + 100·n + 5·n²` (same as MIGRAD).
 - `minedm::Union{Real,Nothing}=nothing` — convergence tolerance on
-  `edm = f(jh) - f(jl)`. Defaults to `1e-5 · up` (matches C++
-  `SimplexBuilder` literal `0.1·tol·up·1e-3` with the canonical
-  `tol = 0.1`). The 2004 CERN MINUIT user guide literal reading is
-  `tol·up` (≈ 10⁴× looser); JuMinuit follows the C++ Minuit2 default
-  instead, consistent with iminuit / IMinuit.jl behavior. Pass
-  `minedm = tol·cf.up` explicitly if you want the strict manual
-  semantics.
+  `edm = f(jh) - f(jl)`. Defaults to `0.1 · up`, the C++/iminuit Simplex
+  EDM goal: `ModularFunctionMinimizer::Minimize` scales
+  `effective_toler = toler·Up()` with the canonical `toler = 0.1` and
+  passes it to ALL builders (`ModularFunctionMinimizer.cxx:175`). The
+  extra `×0.002` of `VariableMetricBuilder.cxx:66` is MIGRAD-only —
+  Simplex does not apply it. Pass a smaller `minedm` explicitly for a
+  tighter (non-C++-default) stopping rule.
 - `prec::MachinePrecision` — floating-point precision (rarely tuned).
 
 # Returns
@@ -131,8 +133,15 @@ function simplex(
     n > 0 || throw(ArgumentError("simplex needs at least one parameter"))
 
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
-    # C++ default: 0.1 * tol * up * 1e-3 with tol=0.1 → 1e-5·up.
-    minedm_eff = minedm === nothing ? 1.0e-5 * cf.up : Float64(minedm)
+    # C++ Simplex EDM goal = effective_toler = toler·Up() with the canonical
+    # toler = 0.1: ModularFunctionMinimizer::Minimize scales the tolerance by
+    # Up() for ALL builders (ModularFunctionMinimizer.cxx:175). The extra
+    # ×0.002 in VariableMetricBuilder.cxx:66 is MIGRAD-only — Simplex does NOT
+    # apply it. ⇒ minedm = 0.1·up (audit §5). v1's 1e-5·up was ~10⁴× too tight,
+    # making Simplex over-iterate and report `above_max_edm` far too readily.
+    # C++ also floors effective_toler to eps2 (ModularFunctionMinimizer.cxx:178-179);
+    # unreachable for any sane Up() (0.1·up ≫ eps2) but kept here for exactness.
+    minedm_eff = minedm === nothing ? max(0.1 * cf.up, prec.eps2) : Float64(minedm)
 
     # Nelder-Mead coefficients — exact match to C++ defaults
     α = 1.0
@@ -147,7 +156,15 @@ function simplex(
     x = collect(Float64, x0)
     step = Vector{Float64}(undef, n)
     @inbounds for i in 1:n
-        step[i] = 10.0 * abs(Float64(errs[i]))
+        # C++ SimplexBuilder.cxx:38 — initial edge = 10·Gstep, where Gstep is
+        # the seed InitialGradientCalculator value gstep = max(gsmin, 0.1·dirin)
+        # (InitialGradientCalculator.cxx:64) with dirin ≈ |errs[i]| in the
+        # no-limits case and gsmin = 8·eps2·(|x|+eps2). The effective edge is
+        # therefore ≈ |errs[i]|, NOT 10·|errs[i]| (audit §5 — v1 was 10× too
+        # large, which inflated the starting simplex and the call count).
+        gsmin = 8.0 * prec.eps2 * (abs(x[i]) + prec.eps2)
+        gstep = max(gsmin, 0.1 * abs(Float64(errs[i])))
+        step[i] = 10.0 * gstep
     end
 
     # Seed (vertex 1) is the initial point.

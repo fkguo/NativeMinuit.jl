@@ -355,24 +355,25 @@ reflect/contract/expand/ρ-fit branches and breaks, the post-loop centroid step,
 and the final `dirin·√(Up/Edm)` error scaling all map exactly.
 
 Findings:
-- **✗ MODERATE — default `minedm` is 10⁴× too tight.** JuMinuit uses
+- **✓ RESOLVED (`2488fd9`) — default `minedm` was 10⁴× too tight.** JuMinuit used
   `minedm = 1e-5·up` (simplex.jl:134-135); C++/iminuit's Simplex EDM goal is
   `toler·Up()` with default `toler=0.1`, i.e. **`0.1·up`** (`ModularFunctionMinimizer::Minimize`
-  scales `effective_toler = toler·Up()` for *all* builders; the `×0.002` is
-  MIGRAD-only — verified). The in-code comment ("`0.1·tol·up·1e-3`") is
-  factually wrong about the C++ Simplex path. Effect: JuMinuit's simplex iterates
-  far longer and reports `above_max_edm` much more readily. ~1 LOC + comment fix
-  (`minedm = 0.1·cf.up`), OR re-document honestly if a tighter goal is wanted.
-- **✗ MODERATE — initial-simplex edge ~10× too large.** C++ edge =
+  scales `effective_toler = toler·Up()` for *all* builders, ModularFunctionMinimizer.cxx:175;
+  the `×0.002` of VariableMetricBuilder.cxx:66 is MIGRAD-only — verified). Fixed to
+  `minedm = 0.1·cf.up`; the factually-wrong in-code comment ("`0.1·tol·up·1e-3`")
+  is corrected. Simplex now stops at the C++ EDM goal (fewer iterations;
+  `above_max_edm` no longer set spuriously).
+- **✓ RESOLVED (`2488fd9`) — initial-simplex edge was ~10× too large.** C++ edge =
   `10·Gstep` with `Gstep = max(gsmin, 0.1·dirin)` ⇒ effective `≈ dirin`; JuMinuit
-  seeds `10·errs` where `errs ≈ dirin` ⇒ edge `≈ 10·dirin`. Same minimum,
-  materially different trajectory/call-count. ~3-5 LOC.
+  seeded `10·errs` where `errs ≈ dirin` ⇒ edge `≈ 10·dirin`. Fixed to
+  `10·max(gsmin, 0.1·|errs|)` ⇒ effective edge `≈ |errs|`, matching C++.
 - minor: do-while→while-precheck (pre-converged seed skips one reflection; same
   final state); seed EDM/G2 not formed (cosmetic; SimplexBuilder overwrites).
 
-Verdict: faithful Nelder–Mead core, but two compounding scale divergences
-(stopping rule 10⁴× tighter, starting simplex 10× larger) reach the same minimum
-along a different path with a much stricter — and mis-justified — stopping rule.
+Verdict: **RESOLVED (`2488fd9`)** — faithful Nelder–Mead core; the two compounding
+scale divergences (stopping rule, starting simplex) are fixed and the simplex now
+follows the C++ trajectory. Test expectations updated to the C++-faithful converged
+values (test_simplex_scan.jl + retry/compat shifts), with an EDM-band regression guard.
 
 ## 6. MnLineSearch
 
@@ -398,19 +399,26 @@ parabolic line search.
 
 Findings:
 - ✓ The **numerical-path** `negative_g2_line_search` is faithful line-for-line:
-  the `2n` cap, the `Eps`/`Eps2` skip gates, the downhill step sign, the `gdel`,
-  the dirin-drop, the full-gradient recompute, the `1/g2` diagonal rebuild, and
-  the `MnNotPosDef`-on-negative-EDM all match.
-- **✗ MODERATE — AD path is a stub.** `negative_g2_line_search(::CostFunctionWithGradient,…)`
-  (ad_gradient.jl:338-350) `@warn`s and returns the seed unchanged, whereas C++
+  the `Eps`/`Eps2` skip gates, the downhill step sign, the `gdel`, the dirin-drop,
+  the full-gradient recompute, the `1/g2` diagonal rebuild, and the
+  `MnNotPosDef`-on-negative-EDM all match (the iteration-cap nuance — `2n` vs C++'s
+  post-increment `2n+1` — is covered in the verdict below).
+- **✓ RESOLVED (`c28ec98`) — AD path was a stub.** `negative_g2_line_search(::CostFunctionWithGradient,…)`
+  used to `@warn` and return the seed unchanged, whereas C++
   (`MnSeedGenerator.cxx:161-164`) runs the *full* recovery via a
   `Numerical2PGradientCalculator`. It is on the **live AD seed path**
-  (ad_gradient.jl:293-297), so an AD fit seeded with a non-positive `g2` keeps a
-  bad curvature instead of the C++-corrected one. ~30-45 LOC (route the recompute
-  through the finite-difference `cf.f`, as the Strategy-2 AD HESSE bootstrap
-  already does).
+  (ad_gradient.jl:293-297). Fixed by wrapping `cf.f` in a `CostFunction` that
+  shares `cf.nfcn` and delegating to the faithful numerical-path recovery (the
+  finite-difference 2-point gradient), so an AD seed with non-positive `g2` is
+  repaired exactly as in C++. Verified equivalent to the numerical path (including
+  the FCN-call count).
 
-Verdict: numerical path faithful; AD path a real (documented) stub gap.
+Verdict: **RESOLVED (`c28ec98`)** — the AD-path stub is replaced by the real
+recovery; both paths now perform it. (Residual micro-nuance flagged by the codex
+fidelity pass: the numerical recovery's loop cap is `2n` vs C++'s post-increment
+`2n+1` — deferred, since raising it measurably perturbs seeds for negative-curvature
+FCNs, a behavior change beyond this finding's AD-stub scope, and it only ever bites
+in non-convergent pathology.)
 
 ## 8. MnSeedGenerator
 
@@ -474,16 +482,18 @@ Findings:
   normalization `s=1/√diag`, the `dg = 0.5 + epspdf − dgmin` shift, the
   `pmax=max(|pmax|,1)` clamp, the `pmin > epspdf·pmax` eigenvalue gate, the
   `padd = 0.001·pmax − pmin` final shift, and the upper-triangle storage transpose.
-- **✗ minor — metadata divergences (×2).** (a) The `MnMadePosDef` exits pass the
-  *incoming* `err.dcovar` (posdef.jl:69,130) instead of C++'s forced `1.0`
-  (`BasicMinimumError` MnMadePosDef ctor) — this under-inflates MIGRAD's
-  `edm_corrected = edm·(1+3·dcovar)` after a pos-def event, potentially
-  terminating one iteration early. (b) The eigenvalue-gate exit preserves
-  `err.status` instead of forcing valid+posdef, which can keep a `MnMadePosDef`
-  status across the gdel>0→edm<0 re-invocation within one MIGRAD iteration. ~3 LOC.
+- **✓ RESOLVED (`a56d87a`) — metadata divergences (×2).** (a) The `MnMadePosDef`
+  exits passed the *incoming* `err.dcovar` (posdef.jl:69,130) instead of C++'s
+  forced `1.0` (`BasicMinimumError` MnMadePosDef ctor, MnPosDef.cxx:39,103) — this
+  under-inflated MIGRAD's `edm_corrected = edm·(1+3·dcovar)` after a pos-def event,
+  potentially terminating one iteration early. Now forces `1.0`. (b) The
+  eigenvalue-gate exit preserved `err.status` instead of forcing valid+posdef,
+  which could keep a `MnMadePosDef` status across the gdel>0→edm<0 re-invocation
+  within one MIGRAD iteration. Now forces `MnHesseValid` while keeping the incoming
+  dcovar (C++ MnPosDef.cxx:85-86 `MinimumError(err, e.Dcovar())`).
 
-Verdict: numerics faithful; two undocumented metadata divergences perturb the
-post-pos-def EDM correction / iteration count (minor).
+Verdict: **RESOLVED (`a56d87a`)** — numerics were already bit-faithful; both
+metadata divergences are fixed.
 
 ## 12. MnEigen / MnGlobalCorrelationCoeff / MnCovarianceSqueeze
 
@@ -577,16 +587,16 @@ specific, located, mostly-small item. Sorted by severity:
 
 | Severity | Algorithm | Finding | Fix |
 |---|---|---|---|
-| ~~MAJOR~~ **✅ FIXED** | §14 Precision | default `eps` was missing ×4 ⇒ `eps2` 2× too small vs C++/iminuit; **resolved** in `feat/precision-eps-x4` (now matches C++/iminuit; oracle agreement improved 2–4 orders) | ~1 LOC |
-| **MODERATE** | §5 MnSimplex | `minedm` 1e-5·up vs C++ 0.1·up (10⁴× tighter) + initial edge 10× large; wrong in-code citation | ~5 LOC |
-| **MODERATE** | §7 NegativeG2 (AD) | AD-path recovery is a `@warn` stub vs C++ Numerical2P-driven; live AD seed path | ~30-45 LOC |
-| **MODERATE** | §4 MnContours | missing `sca` direction-switch retry → fewer points on irregular contours | ~10 LOC |
-| **resolved** | §1 MnHesse | bounded-param step clamp **RESOLVED** (was `has_limits=false`; unbounded byte-identical) | `153f41d` |
-| **resolved** | §2 MIGRAD | 2nd-pass-invalid early-bail **RESOLVED** (efficiency, S≥1 non-converging) | `e256506` |
-| **resolved** | §3 MnMinos | default budget **RESOLVED**: n-scaled `2·(nvar+1)·(200+100n+5n²)` | `88bceea` |
-| minor | §11 MnPosDef | `MnMadePosDef` dcovar/status metadata (perturbs edm-correction/iters) | ~3 LOC |
+| ~~MAJOR~~ **✅ FIXED** | §14 Precision | default `eps` was missing ×4 ⇒ `eps2` 2× too small vs C++/iminuit; **resolved** in `feat/precision-eps-x4` (PR #19; now matches C++/iminuit; oracle agreement improved 2–4 orders) | done |
+| **MODERATE** (open) | §4 MnContours | missing `sca` direction-switch retry → fewer points on irregular contours | ~10 LOC |
+| **✓ RESOLVED** | §5 MnSimplex | `minedm` 1e-5·up → C++ 0.1·up + initial edge 10×→≈errs; in-code citation fixed — PR #21 `2488fd9` | done |
+| **✓ RESOLVED** | §7 NegativeG2 (AD) | AD-path recovery wired through the numerical 2-point fallback (was a `@warn` stub) — PR #21 `c28ec98` | done |
+| **✓ RESOLVED** | §1 MnHesse | bounded-param step clamp (was `has_limits=false`; unbounded byte-identical) — PR #20 `153f41d` | done |
+| **✓ RESOLVED** | §2 MIGRAD | 2nd-pass-invalid early-bail (efficiency, S≥1 non-converging) — PR #20 `e256506` | done |
+| **✓ RESOLVED** | §3 MnMinos | default budget n-scaled `2·(nvar+1)·(200+100n+5n²)` — PR #20 `88bceea` | done |
+| **✓ RESOLVED** | §11 MnPosDef | `MnMadePosDef` dcovar→1.0 + eigenvalue-gate forces valid+posdef — PR #21 `a56d87a` | done |
 | minor (latent) | §12 CovSqueeze | fallback status-enum (Valid vs MnInvertFailed); `MnUserCovariance` overload unported | — |
-| minor (deferred) | §8/§9 AD seed/grad | `CheckGradient` + AD negative-G2 Phase-2.1 stubs | ~25 LOC |
+| minor (deferred) | §8/§9 AD seed/grad | `CheckGradient` discrepancy-check stub (the AD negative-G2 stub is now resolved — §7 `c28ec98`) | ~15 LOC |
 | **none** | §6 LineSearch, §10 Davidon/EDM, §14 transforms+strategy | fully faithful (parabola ≡ to 4e-11; DFP/EDM term-by-term; 21 strategy constants exact) | — |
 
 **Headline:** the comprehensive pass found **one MAJOR** item — the machine-precision

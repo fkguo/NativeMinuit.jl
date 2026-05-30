@@ -253,7 +253,10 @@ using Test
         m = Minuit(f, [0.0, 0.0]; error = [0.1, 0.1])
         # ncall is iminuit alias for maxfcn
         simplex(m; ncall = 200)
-        @test m.values ≈ [1.0, 2.0] atol = 1e-2
+        # Basin-level accuracy under the C++-faithful EDM goal minedm = 0.1·up
+        # (audit §5; was 1e-5·up). This testset checks the ncall→maxfcn alias,
+        # not tight convergence — atol relaxed from 1e-2 to match the real goal.
+        @test m.values ≈ [1.0, 2.0] atol = 0.1
     end
 
     @testset "profile/mnprofile size alias" begin

@@ -30,19 +30,36 @@
         out = make_posdef(e1_bad)
         @test out.inv_hessian[1, 1] == 1.0
         @test out.status == MnMadePosDef
+        # C++ tag ctor forces dcovar = 1.0, NOT the incoming 0.01 (audit §11a).
+        @test out.dcovar == 1.0
+    end
+
+    @testset "n=1 boundary M==eps falls through to valid+posdef (codex §11 follow-up)" begin
+        # C++ MnPosDef.cxx:37/41 use strict `<` / `>`, so a 1×1 matrix with
+        # `M[1,1] == eps` exactly takes NEITHER n=1 early return → it falls
+        # through to the eigenvalue gate, which forces valid+pos-def while
+        # preserving the incoming dcovar. v1's `else return err` returned the
+        # matrix with the incoming (stale) status, diverging at this boundary.
+        eps = JuMinuit.MachinePrecision().eps
+        err = MinimumError(Symmetric(fill(eps, 1, 1), :U), 0.5, MnMadePosDef, true)
+        out = make_posdef(err)
+        @test out.status == MnHesseValid    # forced valid (old `else` kept MnMadePosDef)
+        @test JuMinuit.is_pos_def(out)
+        @test out.dcovar == 0.5             # incoming dcovar preserved
     end
 
     @testset "Negative diagonal: dg-only fix → MnHesseValid (matches C++)" begin
         # Two-parameter matrix with one negative diagonal — dg-add path
-        # fixes it. Per C++ MnPosDef.cxx:86 the eigenvalue-clean return
-        # preserves original status (not MnMadePosDef — that flag is
-        # only set when eigenvalue-based padd at line 103 fires).
+        # fixes it. Per C++ MnPosDef.cxx:85-86 the eigenvalue-clean return
+        # forces valid+pos-def (MnHesseValid), NOT MnMadePosDef — that flag is
+        # only set when the eigenvalue-based padd at line 103 fires.
         M = Float64[-0.5 0.1; 0.1 2.0]
         err = MinimumError(Symmetric(M, :U), 0.0)
         @test !is_posdef_enough(err)
 
         new_err = make_posdef(err)
-        @test new_err.status == MnHesseValid  # C++ MnPosDef.cxx:86 semantic
+        @test new_err.status == MnHesseValid  # C++ MnPosDef.cxx:85-86 semantic
+        @test new_err.dcovar == 0.0           # incoming dcovar preserved at the gate
         # All diagonals now positive
         for i in 1:2
             @test new_err.inv_hessian[i, i] > 0
@@ -61,8 +78,24 @@
         @test !is_posdef_enough(err)
         new_err = make_posdef(err)
         @test new_err.status == MnMadePosDef
+        @test new_err.dcovar == 1.0   # padd path forces dcovar = 1.0 (audit §11a)
         evs = JuMinuit.sym_eigvals(new_err.inv_hessian)
         @test all(λ -> λ > 0, evs)
+    end
+
+    @testset "Eigenvalue gate drops stale status, keeps dcovar (audit §11b)" begin
+        # A strongly pos-def matrix still carrying a STALE MnMadePosDef status +
+        # a custom dcovar (as it could after an earlier MnPosDef event within the
+        # same MIGRAD iteration). C++ MnPosDef.cxx:85-86 returns the
+        # (matrix, dcovar) ctor → valid+pos-def, so the stale status MUST be
+        # dropped while the incoming dcovar is preserved.
+        M = Float64[4.0 1.0; 1.0 5.0]
+        err = MinimumError(Symmetric(M, :U), 0.3, MnMadePosDef, true)
+        @test is_posdef_enough(err)
+        new_err = make_posdef(err)
+        @test new_err.status == MnHesseValid     # stale MnMadePosDef dropped
+        @test JuMinuit.is_pos_def(new_err)
+        @test new_err.dcovar == 0.3              # incoming dcovar preserved
     end
 
     @testset "MinimumState overload" begin

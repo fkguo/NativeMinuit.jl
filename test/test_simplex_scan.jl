@@ -6,20 +6,32 @@ using Test
 @testset "simplex.jl + scan.jl (C++ MnSimplex / MnScan ports)" begin
 
     @testset "simplex on shifted quadratic" begin
-        # 3D shifted quadratic — Nelder-Mead's natural strength.
+        # 3D shifted quadratic. With the C++-faithful EDM goal minedm = 0.1·up
+        # (audit §5; was a 10⁴×-too-tight 1e-5·up), Simplex stops once the
+        # simplex spread edm = f(jh)-f(jl) reaches the 0.1 scale — exactly
+        # C++/iminuit's rule — locating the minimum to basin accuracy (~0.1),
+        # NOT the 1e-5 fval the over-tight goal used to force. The edm band is a
+        # regression guard: the old 1e-5·up goal would drive edm ≤ 1e-5 and
+        # FAIL `edm > 1e-4`, while `!above_max_edm` guarantees edm ≤ the goal.
         f = x -> sum(abs2, x .- [1.0, 2.0, 3.0])
         fm = simplex(f, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1])
-        @test JuMinuit.fval(fm) < 1.0e-5
-        @test fm.state.parameters.x ≈ [1.0, 2.0, 3.0] atol = 1e-2
+        @test fm.is_valid
+        @test !fm.above_max_edm
+        @test 1e-4 < fm.state.edm ≤ 0.1          # stopped at the C++ 0.1·up goal
+        @test JuMinuit.fval(fm) < 0.1            # fval at the EDM-goal scale
+        @test fm.state.parameters.x ≈ [1.0, 2.0, 3.0] atol = 0.2
         @test JuMinuit.nfcn(fm) > 0
     end
 
     @testset "simplex with up=0.5 (NLL)" begin
-        # ErrorDef = 0.5 (negative log-likelihood) — final per-param
-        # errors should scale as sqrt(up).
+        # ErrorDef = 0.5 → EDM goal minedm = 0.1·up = 0.05 (audit §5); fval lands
+        # at that scale, not 1e-4. The old 1e-5·up = 5e-6 goal → edm ≤ 5e-6.
         f = x -> 0.5 * sum(abs2, x .- [1.0, 2.0])
         fm = simplex(f, [0.0, 0.0], [0.1, 0.1]; up = 0.5)
-        @test JuMinuit.fval(fm) < 1.0e-4
+        @test !fm.above_max_edm
+        @test 1e-4 < fm.state.edm ≤ 0.05         # 0.1·up with up=0.5
+        @test JuMinuit.fval(fm) < 0.05
+        @test fm.state.parameters.x ≈ [1.0, 2.0] atol = 0.15
         @test fm.up ≈ 0.5
     end
 
@@ -50,13 +62,17 @@ using Test
     end
 
     @testset "simplex from Minuit struct" begin
+        # C++-faithful EDM goal (0.1·up) → basin-level accuracy (audit §5), not
+        # the 1e-2 / 1e-4 the old 10⁴×-tight goal forced. The looser, correct
+        # goal also converges cleanly (the old goal frequently tripped
+        # `above_max_edm`, which is why this used to assert only `fmin !== nothing`).
         f = x -> (x[1] - 0.7)^2 + (x[2] - 1.3)^2
         m = Minuit(f, [0.0, 0.0]; name = ["a", "b"], error = [0.1, 0.1])
         simplex(m)
-        @test m.values ≈ [0.7, 1.3] atol = 1e-2
-        @test m.fval < 1.0e-4
-        # is_valid should be true for clean simplex convergence
+        @test m.values ≈ [0.7, 1.3] atol = 0.1
+        @test m.fval < 0.05
         @test m.fmin !== nothing
+        @test m.valid                       # clean simplex convergence
     end
 
     @testset "scan: 1D evaluation" begin

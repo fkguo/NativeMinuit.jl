@@ -331,22 +331,31 @@ function numerical_gradient!(
     return analytical_gradient!(out, par, cf, prev, prec)
 end
 
-# negative_g2_line_search needs to call numerical_gradient! on the
-# CostFunction it gets. For CostFunctionWithGradient we ALSO go through
-# analytical_gradient! (the rare-path scenario won't be performance-
-# critical).
+# negative_g2_line_search on the analytical-gradient (AD) path.
+#
+# Mirrors C++ MnSeedGenerator.cxx:161-164: when the AD seed has a non-positive
+# g2, the negative-G2 recovery is driven by a *Numerical2PGradientCalculator*,
+# NOT the analytical gradient. Re-using AD here would be useless — the AD path
+# forwards the (positive-by-construction) InitialGradientCalculator g2 unchanged
+# (analytical_gradient! above), so it can neither diagnose nor repair a bad
+# curvature. The C++ recovery line search recomputes the gradient via finite
+# differences on the FCN; we reproduce that faithfully by wrapping the
+# underlying `cf.f` in a plain CostFunction and delegating to the numerical-path
+# `negative_g2_line_search` (line search + 2-point gradient recompute + 1/g2
+# diagonal rebuild + MnNotPosDef-on-negative-EDM — all already audited faithful).
+#
+# The wrapper SHARES the AD cf's `nfcn` Ref, so every finite-difference FCN call
+# the recovery makes is counted on the original `cf`; the returned state's
+# `nfcn = ncalls(cf_num) = ncalls(cf)` stays consistent with the seed path.
 function negative_g2_line_search(
     state::MinimumState,
     cf::CostFunctionWithGradient,
     strategy::Strategy,
     prec::MachinePrecision = MachinePrecision(),
 )
-    # Delegate by building a NumericalGradient-like wrap; for first cut,
-    # skip refinement (AD users rarely hit negative_g2 since AD g2 is
-    # not directly computed). Just return the input state.
     has_negative_g2(state.gradient, prec) || return state
-    @warn "negative_g2 detected with analytical-gradient FCN; refinement skipped (Phase 2.1+)"
-    return state
+    cf_num = CostFunction(cf.f, cf.up, cf.nfcn)
+    return negative_g2_line_search(state, cf_num, strategy, prec)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

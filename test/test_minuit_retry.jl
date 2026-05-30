@@ -167,9 +167,16 @@
                       names = ["a", "b"], errors = [0.5, 0.5],
                       strategy = Strategy(0))
         migrad!(m5s; iterate = 5, use_simplex = true, tol = 1e-6, maxfcn = 2000)
+        # On an ALREADY-CONVERGED fit the retry loop is correctly a no-op
+        # (gated on `!is_valid`): with the Strategy(1) default + §14 eps=4ε,
+        # pass 1 reaches the deep minimum, so `n_passes == 1` and we do NOT
+        # assert the retry ran here. (The retry-actually-ran coverage is
+        # proven by the dedicated fixed-point + multi-scale testsets below.)
+        # What this case must guarantee: still valid, never worsened, deep well.
+        @test m5s.n_passes == 1          # retry correctly skipped (pass 1 valid)
         @test m5s.valid
-        @test m5s.fval ≤ fval1 + 1e-10
-        @test m5s.fval < 0.0              # reaches the deep (negative) well
+        @test m5s.fval ≤ fval1 + 1e-10   # safety invariant (never worse)
+        @test m5s.fval < 0.0             # reaches the deep (negative) well
     end
 
     @testset "Multi-minimum safety invariant" begin
@@ -367,8 +374,14 @@
         m5 = Minuit(fcn_rugged, [0.0, 0.0]; names = ["x", "y"], errors = [0.02, 0.02])
         migrad!(m5; iterate = 5, use_simplex = true, tol = 1e-6, maxfcn = 4000)
         @test m5.n_passes >= 2          # retry layer ran
-        @test m5.n_passes < 5           # and stopped early (re-converged on the well)
-        @test m5.fval < -5.0            # reached the deep well
+        # NB: pre-§5 the escape "stopped early" (n_passes < 5). Under the
+        # C++-faithful Simplex (audit §5: minedm = 0.1·up, looser than the old
+        # 1e-5·up), the growing-hop multistart now uses the full iterate
+        # budget to reach the deep well — escape still SUCCEEDS (asserted
+        # below), it just isn't early-terminating anymore. So we assert the
+        # outcome (deep well reached), not the pass count.
+        @test m5.n_passes <= 5          # within the iterate budget
+        @test m5.fval < -5.0            # reached the deep well (the real goal)
         @test m5.fval < m1.fval - 1.0   # strictly, substantially deeper
         # Safety invariant holds across the escape too.
         @test m5.fval <= m1.fval + 1e-10
