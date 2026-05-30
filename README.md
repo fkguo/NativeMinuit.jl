@@ -103,7 +103,7 @@ table (which method, when) and worked examples.
 
 ### Alternative minimizers
 
-`scipy(m)` bridges to any [Optim.jl](https://github.com/JuliaNLSolvers/Optim.jl)
+`optim(m)` bridges to any [Optim.jl](https://github.com/JuliaNLSolvers/Optim.jl)
 optimizer (LBFGS/BFGS/NelderMead/Newton/…) and writes the result back into the
 `Minuit` so you can follow with `hesse!`/`minos!` — the Julia-native analogue of
 iminuit's `Minuit.scipy()`. Loads on `using Optim` (package extension).
@@ -119,7 +119,7 @@ iminuit's `Minuit.scipy()`. Loads on `using Optim` (package extension).
 | `m.mncontour(a, b)` | `mncontour(m, a, b)` |
 | IMinuit.jl `Fit`, `ArrayFit` | exported aliases of `Minuit` |
 | IMinuit.jl `chisq`, `Data` | exported, same signatures |
-| `m.scipy(method=...)` | `scipy(m; method=...)` (needs `using Optim`) |
+| `m.scipy(method=...)` | `optim(m; method=...)` (needs `using Optim`) |
 
 The API mirrors iminuit where it makes sense and leans on Julia's strengths
 (generic FCNs, multiple dispatch, package extensions) where that is better.
@@ -184,6 +184,29 @@ Speedup scales with FCN cost — e.g. a real inverse-amplitude-method (IAM) fit
 > is on your FCN. See the manual for the full treatment and the worked failure
 > case (`BenchmarkExamples/IAM_2Pformfactor/`).
 
+**Fixing a thread-unsafe FCN — give each thread its own buffer.** Yes: replacing
+a shared `const` scratch with one buffer per thread makes the FCN thread-safe.
+Indexing the pool by `Threads.threadid()` is sound here because JuMinuit threads
+the gradient with `Threads.@threads :static`, which pins each iteration to a
+fixed thread — so `threadid()` is stable within a call (under the `:dynamic` /
+`@spawn` schedules it would *not* be). Size the pool with `maxthreadid()`, not
+`nthreads()` (Julia may hand out thread ids beyond `nthreads()`):
+
+```julia
+# Was:  const c_00_4 = zeros(ComplexF64, 3, 3)        # shared → racy
+const C_POOL = [zeros(ComplexF64, 3, 3) for _ in 1:Threads.maxthreadid()]
+function St4_00!(par)
+    c = C_POOL[Threads.threadid()]                    # this thread's private buffer
+    # ... fill and use c ...
+end
+```
+
+Simpler and always correct (any schedule): **allocate the scratch per call**
+inside the FCN — `c = zeros(ComplexF64, 3, 3)`, or `similar(par, ComplexF64, 3, 3)`
+to stay AD-generic. For a millisecond-scale FCN that allocation is negligible.
+Either way, confirm the fix with `JuMinuit.is_thread_safe(cf, x0)` (or just let
+`threaded_gradient=true` auto-verify on the first call).
+
 ### When to choose which
 
 ```
@@ -201,8 +224,9 @@ Speedup scales with FCN cost — e.g. a real inverse-amplitude-method (IAM) fit
 
 ## Performance
 
-Wall time vs C++ Minuit2 on the benchmark corpus (Apple M3 / Julia 1.12 /
-OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides):
+Wall time for a full **MIGRAD** minimization vs C++ Minuit2 on five standard
+test objectives — the FCN being minimized, *not* a Minuit operation (Apple M3 /
+Julia 1.12 / OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides):
 
 | Benchmark | Julia (μs) | C++ (μs) | Julia / C++ |
 |---|---|---|---|
@@ -211,6 +235,17 @@ OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides):
 | `rosenbrock_10d` | 98.1 | 270.2 | **0.363×** |
 | `gauss_ll_10_1000` | 55.6 | 78.2 | **0.710×** |
 | `gauss_ll_2_100` | 34.8 | 39.2 | **0.887×** |
+
+The objectives (the user FCN that MIGRAD minimizes — these are standard
+optimization test problems, not Minuit operations) are:
+
+- `quad_4d` — a 4-parameter quadratic (smooth and convex — the easy baseline).
+- `rosenbrock_2d` / `rosenbrock_10d` — the Rosenbrock "banana" function (a
+  curved, narrow valley; the classic hard test for a minimizer) in 2 and 10
+  dimensions.
+- `gauss_ll_<npar>_<ndata>` — a Gaussian negative-log-likelihood fit with
+  `<npar>` free parameters over `<ndata>` data points (a realistic
+  maximum-likelihood fit; e.g. `gauss_ll_10_1000` = 10 parameters, 1000 points).
 
 **Why Julia wins**: a parametric `CostFunction{F}` devirtualizes the FCN call
 site at compile time, whereas C++ Minuit2 pays for `shared_ptr` ref-counting and

@@ -9,9 +9,8 @@ the iminuit/IMinuit.jl stack with C++-comparable performance.
 > see `docs/UPSTREAM.md`). Filenames cited without a path live under that
 > tree. The module-mapping table (§7) is the authoritative porting compass.
 >
-> **v2** of this document. Reconciled from two independent parallel
-> reviews (codex gpt-5.5 xhigh + native Opus subagent) against v1. See
-> `scratch/codex_review.md` and `scratch/opus_review.md` for the audit trail.
+> **v2** of this document, reconciled from two independent parallel
+> reviews against v1.
 
 ---
 

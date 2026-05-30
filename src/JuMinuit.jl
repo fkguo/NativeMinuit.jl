@@ -25,7 +25,7 @@ algorithm at the heart of every HEP fit. A drop-in replacement for IMinuit.jl
 - Error analysis beyond HESSE/MINOS: Monte-Carlo Δχ² regions, bootstrap,
   jackknife and multi-modal solution detection (see `docs/src/error_analysis.md`).
 - AD-backed gradients (ForwardDiff extension), an opt-in threaded numerical
-  gradient, and an `Optim.jl` alternative-minimizer bridge (`scipy`).
+  gradient, and an `Optim.jl` alternative-minimizer bridge (`optim`).
 
 The implementation mirrors `reference/Minuit2_cpp/` (pinned to GooFit/Minuit2
 `57dc936`, v6.24.0); each src/ file maps to a C++ translation unit so audits
@@ -163,7 +163,7 @@ export SolutionMode, SolutionModes, find_solution_modes
 export mncontour, profile, mnprofile
 export draw_contour, draw_mncontour, draw_profile, draw_mnprofile, draw_mnmatrix
 # Alternative-minimizer bridge (Optim.jl extension — `using Optim` to enable)
-export scipy, minimize_with
+export optim, minimize_with
 
 # Terminal / SSH / headless-CI ASCII renderer (plot_text.jl, gap M2)
 export mn_plot_text

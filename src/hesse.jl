@@ -461,8 +461,7 @@ avoids the paras0+S=2 trap.
   the first check; for `g2 < 0` the first check `g2 < eps2` is true
   → C++ falls back to 1 immediately).
 
-See `scratch/iam_seed_at_failed.jl` and `docs/dev/DAVIDON_CXX_AUDIT.md`
-for the live reproduction and audit trail.
+See `docs/dev/DAVIDON_CXX_AUDIT.md` for the audit trail.
 """
 function _hesse_diagonal_failure(state::MinimumState, g2::Vector{Float64},
                                   prec::MachinePrecision, nfcn::Integer,

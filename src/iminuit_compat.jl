@@ -683,7 +683,7 @@ Requires `using Plots`.
 function draw_mnmatrix end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# scipy / minimize_with — the alternative-minimizer bridge (Optim.jl extension).
+# optim / minimize_with — the alternative-minimizer bridge (Optim.jl extension).
 #
 # iminuit's `m.scipy(method=...)` minimises the FCN with `scipy.optimize.minimize`
 # as the escape hatch when MIGRAD struggles (trust-region / derivative-free
@@ -694,20 +694,20 @@ function draw_mnmatrix end
 # JuMinuitForwardDiffExt / JuMinuitPlotsExt), activated by `using Optim`.
 #
 # These thin entry points dispatch into the extension via `Base.get_extension`,
-# so copy-pasted iminuit `scipy(m)` call sites keep working, and a missing
-# `using Optim` yields a helpful message instead of a bare MethodError.
+# so a missing `using Optim` yields a helpful message instead of a bare
+# MethodError.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Helpful message when the Optim extension isn't loaded. A `const` so tests can
 # assert on its content independent of the loaded state.
 const _OPTIM_BRIDGE_NOT_LOADED =
-    "scipy(m) / minimize_with(m) is JuMinuit's alternative-minimizer bridge, " *
+    "optim(m) / minimize_with(m) is JuMinuit's alternative-minimizer bridge, " *
     "the Julia analog of iminuit's scipy.optimize escape hatch — powered by " *
     "Optim.jl. Load it to enable: `using Optim`. (Or stay in pure JuMinuit with " *
     "`migrad(m)` / `simplex(m)`.)"
 
 # Fetch the loaded Optim extension module, or throw the helpful "load Optim"
-# error. Centralised so `scipy` and `minimize_with` share one dispatch point.
+# error. Centralised so `optim` and `minimize_with` share one dispatch point.
 function _optim_bridge_ext()
     ext = Base.get_extension(@__MODULE__, :JuMinuitOptimExt)
     ext === nothing && throw(ArgumentError(_OPTIM_BRIDGE_NOT_LOADED))
@@ -715,7 +715,7 @@ function _optim_bridge_ext()
 end
 
 """
-    scipy(m::Minuit; method=:lbfgs, ncall=nothing, maxcall=nothing,
+    optim(m::Minuit; method=:lbfgs, ncall=nothing, maxcall=nothing,
                      tol=nothing, options=nothing) -> Minuit
 
 The Julia analog of iminuit's `m.scipy(...)` — the alternative-minimizer escape
@@ -770,17 +770,17 @@ For full control over the optimizer object itself, use [`minimize_with`](@ref):
 ```julia
 using JuMinuit, Optim
 m = Minuit(fcn, x0)
-scipy(m; method=:lbfgs)   # or m |> scipy
+optim(m; method=:lbfgs)   # or m |> optim
 hesse(m)                  # covariance, à la iminuit
 ```
 """
-scipy(m::Minuit; kwargs...) = _optim_bridge_ext()._scipy_optim(m, nothing; kwargs...)
+optim(m::Minuit; kwargs...) = _optim_bridge_ext()._scipy_optim(m, nothing; kwargs...)
 
 """
     minimize_with(m::Minuit, optimizer=nothing; method=:lbfgs, ncall=nothing,
                   maxcall=nothing, tol=nothing, options=nothing) -> Minuit
 
-Clearer-named alias of [`scipy`](@ref): minimise `m`'s FCN with an alternative
+Clearer-named alias of [`optim`](@ref): minimise `m`'s FCN with an alternative
 optimizer from **Optim.jl**, write the optimum back, and return `m` (run
 [`hesse`](@ref)`(m)` afterwards for the covariance). Load `using Optim` to
 enable.
@@ -792,10 +792,10 @@ The first positional argument may be an Optim optimizer object, bypassing the
 using JuMinuit, Optim
 minimize_with(m, LBFGS())                       # optimizer object
 minimize_with(m, NelderMead())
-minimize_with(m; method=:bfgs, tol=1e-10)       # by name, like scipy(m; …)
+minimize_with(m; method=:bfgs, tol=1e-10)       # by name, like optim(m; …)
 ```
 
-See [`scipy`](@ref) for the `method` mapping and keyword semantics.
+See [`optim`](@ref) for the `method` mapping and keyword semantics.
 """
 minimize_with(m::Minuit, optimizer = nothing; kwargs...) =
     _optim_bridge_ext()._scipy_optim(m, optimizer; kwargs...)

@@ -179,9 +179,7 @@ tests passing. Aqua + JET clean.
 
 ### Audit trail
 
-- Four rounds of independent parallel multi-agent review (codex
-  gpt-5.5 xhigh + native Opus subagent), all archived under
-  `scratch/{codex,opus}_review_phase*.md`:
+- Four rounds of independent parallel review:
   1. v1 → v2 ROADMAP reconciliation (caught a real `sum_sym`
      signed-vs-absolute blocking bug in linalg).
   2. Phase 0 MIGRAD integration (caught `reached_call_limit` AND-gate

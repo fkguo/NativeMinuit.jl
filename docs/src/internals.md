@@ -91,21 +91,3 @@ The `_cross_core` in `function_cross.jl` ports C++
 Tolerances `tla = tlr = 0.01` and `tlf = 0.01·up` are hardcoded per C++
 (`MnFunctionCross.cxx:40`); the user's `tlr` controls only the inner-MIGRAD
 tolerance via `mgr_tlr = 0.5 · tlr`.
-
-## Multi-agent review discipline
-
-Every blocking algorithmic change in JuMinuit went through
-**parallel multi-agent review**: codex `gpt-5.5` xhigh reasoning +
-a clean-room native Opus subagent. The Opus reviews are independent
-and have caught BLOCKING issues missed by the primary author:
-
-* Round 1: sum_sym signed-vs-absolute bug (D3).
-* Round 2: D3 upper-triangle uninit read in `parent(Symmetric{:U})`.
-* Round 3: A7/B4 bounded-MINOS coordinate-frame leak.
-* Round 4: C-2 contour sign-blind selector for asymmetric ellipses.
-* Round 5: A3/A4 (function_cross): hardcoded tlr override + missing
-  C++ "new straight line thru first two points" fall-through.
-
-The review prompts are in `~/.claude/` skills; the cite-and-explain
-discipline (find → cite C++ line → propose Julia fix) is the key
-quality lever.

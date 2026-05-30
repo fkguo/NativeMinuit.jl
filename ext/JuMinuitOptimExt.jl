@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# JuMinuitOptimExt — the `scipy(m)` / `minimize_with(m)` alternative-minimizer
+# JuMinuitOptimExt — the `optim(m)` / `minimize_with(m)` alternative-minimizer
 # bridge, powered by Optim.jl.
 #
 # iminuit's `m.scipy(method=...)` minimises the FCN with `scipy.optimize.minimize`
@@ -16,7 +16,7 @@
 # JuMinuitPlotsExt / JuMinuitDataFramesExt): Optim pulls in a sizeable transitive
 # stack (NLSolversBase, LineSearches, PositiveFactorizations, …), so making it a
 # hard dependency would inflate every JuMinuit install. `using Optim` activates
-# the bridge; the thin `scipy` / `minimize_with` entry points in
+# the bridge; the thin `optim` / `minimize_with` entry points in
 # `src/iminuit_compat.jl` dispatch here via `Base.get_extension`, and emit a
 # helpful "load Optim" message when it is absent (rather than a bare MethodError).
 #
@@ -45,7 +45,7 @@ using Optim
 
 # Maps an iminuit-style `method=` name (Symbol or String, case/dash/underscore
 # insensitive) to a freshly-constructed Optim optimizer. Documented in the
-# `scipy` docstring (src/iminuit_compat.jl). Power users can bypass this table
+# `optim` docstring (src/iminuit_compat.jl). Power users can bypass this table
 # entirely by passing an Optim optimizer object to `minimize_with(m, opt)`.
 const _METHOD_TABLE = Dict{Symbol,Function}(
     :lbfgs             => () -> LBFGS(),
@@ -68,7 +68,7 @@ _normalize_method(method) =
 function _resolve_optimizer(method)
     key = _normalize_method(method)
     haskey(_METHOD_TABLE, key) || throw(ArgumentError(
-        "scipy(m): unknown method $(repr(method)). Supported names: " *
+        "optim(m): unknown method $(repr(method)). Supported names: " *
         join(sort!(string.(collect(keys(_METHOD_TABLE)))), ", ") *
         ". Or pass an Optim optimizer object directly, e.g. " *
         "`minimize_with(m, LBFGS())`."))
@@ -110,7 +110,7 @@ end
 # The bridge
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Called by `JuMinuit.scipy` / `JuMinuit.minimize_with` (which dispatch here
+# Called by `JuMinuit.optim` / `JuMinuit.minimize_with` (which dispatch here
 # through `Base.get_extension`). `optimizer`, when non-`nothing`, is an Optim
 # optimizer object that overrides `method`.
 function _scipy_optim(m::Minuit, optimizer = nothing;
@@ -123,7 +123,7 @@ function _scipy_optim(m::Minuit, optimizer = nothing;
     ntot   = n_pars(params)
     nfree  = n_free(params)
     nfree > 0 || throw(ArgumentError(
-        "scipy(m): all parameters are fixed — nothing to optimise."))
+        "optim(m): all parameters are fixed — nothing to optimise."))
 
     # External indices of the free parameters, in internal order. `Parameters`
     # already maintains exactly this as its canonical int→ext map, so reuse it
@@ -205,7 +205,7 @@ function _scipy_optim(m::Minuit, optimizer = nothing;
         # `FirstOrderOptimizer` so the bridge emits its own guided message instead
         # of Optim's bare "X is not supported as the Fminbox optimizer".
         opt isa Optim.FirstOrderOptimizer || throw(ArgumentError(
-            "scipy(m): method $(repr(method)) does not support box constraints — " *
+            "optim(m): method $(repr(method)) does not support box constraints — " *
             "Optim's Fminbox needs a first-order optimizer (derivative-free and " *
             "Newton/second-order methods are rejected). Use a first-order gradient " *
             "method (:lbfgs, :bfgs, :conjugategradient, :gradientdescent) for " *
@@ -287,7 +287,7 @@ function _writeback!(m::Minuit, params, free_idx::Vector{Int},
     return m
 end
 
-# NOTE: both `JuMinuit.scipy` and `JuMinuit.minimize_with` are defined in
+# NOTE: both `JuMinuit.optim` and `JuMinuit.minimize_with` are defined in
 # src/iminuit_compat.jl and dispatch into `_scipy_optim` here via
 # `Base.get_extension` — so this module deliberately does NOT add methods to
 # them (which would overwrite the src dispatch + helpful-error fallback). The

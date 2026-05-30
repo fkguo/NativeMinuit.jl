@@ -117,7 +117,7 @@ JuMinuit.SolutionModes
 ## Alternative minimizers (Optim.jl bridge)
 
 ```@docs
-JuMinuit.scipy
+JuMinuit.optim
 JuMinuit.minimize_with
 ```
 

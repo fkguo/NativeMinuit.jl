@@ -151,10 +151,10 @@ using Test
         end
     end
 
-    @testset "scipy throws helpful error" begin
+    @testset "optim throws helpful error" begin
         f = x -> x[1]^2
         m = Minuit(f, [0.0]; name = ["a"], error = [0.1])
-        @test_throws ArgumentError scipy(m)
+        @test_throws ArgumentError optim(m)
     end
 
     # ─────────────────────────────────────────────────────────────────

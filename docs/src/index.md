@@ -72,7 +72,7 @@ m.minos_errors  # asymmetric ±σ per parameter
   the flat or strongly non-Gaussian likelihoods where MINOS struggles.
 - **AD & threaded gradients** — a ForwardDiff extension and an opt-in
   threaded numerical gradient — plus an `Optim.jl` alternative-minimizer
-  bridge (`scipy`).
+  bridge (`optim`).
 
 ## Tutorials & reference
 
@@ -85,14 +85,20 @@ m.minos_errors  # asymmetric ±σ per parameter
 * [Error analysis](error_analysis.md) — which uncertainty method to use, when.
 * Full [API reference](api.md) and [internals](internals.md).
 
-## Citation
+## Citation & references
 
-If you use JuMinuit.jl in a publication, please also cite upstream
-Minuit2 (which JuMinuit ports algorithmically):
+If you use JuMinuit.jl in a publication, please also cite upstream Minuit
+(which JuMinuit ports algorithmically):
 
-> F. James, M. Roos, "Minuit: A System for Function Minimization and
-> Analysis of the Parameter Errors and Correlations", Comput. Phys.
-> Commun. 10 (1975) 343-367. https://doi.org/10.1016/0010-4655(75)90039-9
+> F. James and M. Roos, "MINUIT: A system for function minimization and
+> analysis of the parameter errors and correlations", Comput. Phys. Commun.
+> **10** (1975) 343–367. [doi:10.1016/0010-4655(75)90039-9](https://doi.org/10.1016/0010-4655(75)90039-9)
+
+Further Minuit documentation:
+
+- F. James, *MINUIT function minimization and error analysis: Reference manual
+  version 94.1*, CERN-D-506 (1994).
+- F. James and M. Winkler, *MINUIT user's guide*, CERN (2004).
 
 ## License
 
