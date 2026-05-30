@@ -110,6 +110,16 @@ count of the fit:** a single-parameter 1σ interval is `Δχ² = 1`, but a **2-D
 `ndof = n_free` (the joint region over all sampled parameters), which is usually
 what you want; override it deliberately if not.
 
+The `delta_chisq(cl, ndof)` thresholds for the common cases (pick the column
+that matches the **dimension of the region you report**, not the fit's
+parameter count):
+
+| Confidence | Probability | 1 param | 2 params | 3 params | 4 params |
+|:-----------|:-----------:|:-------:|:--------:|:--------:|:--------:|
+| 1σ | 68.27 % | **1.00** | **2.30** | **3.53** | **4.72** |
+| 2σ | 95.45 % | 4.00 | 6.18 | 8.02 | 9.72 |
+| 3σ | 99.73 % | 9.00 | 11.83 | 14.16 | 16.25 |
+
 ```julia
 # 1σ JOINT region for all 3 free parameters ⇒ Δχ² = 3.53 (NOT 1):
 r = get_contours_samples(m; nsamples = 30_000, cl = 1)   # ndof defaults to n_free = 3
