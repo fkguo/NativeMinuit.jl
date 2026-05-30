@@ -34,7 +34,9 @@ severity-sorted findings (the one MAJOR — §14 precision `eps` — is now
 on `feat/cpp-fidelity-3fixes` — MnHesse bounded step clamp (`153f41d`), MIGRAD
 2nd-pass-invalid bail (`e256506`), MnMinos n-scaled budget (`88bceea`). Each
 finding below is marked **RESOLVED** with its commit. The MnContours `sca`
-direction-switch retry remains the one open contained fix.
+direction-switch retry — the last open contained fix — is now **resolved**
+(`344a583`, branch `feat/mncontours-sca-retry`; see §4), so the audit's
+actionable-findings list is fully closed.
 
 ---
 
@@ -301,22 +303,24 @@ search reuses the already-audited cross-search core via `function_cross_multi`
 | fix px,py; `MnFunctionCross` (125–131) | `function_cross_multi` (221) | ✓ |
 | largest scaled-gap pair incl. wrap (135–150) | cyclic scan (190–205) | ✓ equivalent |
 | midpoint `a1·p1+a2·p2`, perpendicular `xdir=Δy, ydir=−Δx` (163–166) | 209–212 | ✓ exact |
-| `scalfac = sca·max(\|xdir·scalx\|,\|ydir·scaly\|)` (167) | `max(...)` (213) | **✗ no `sca`** (below) |
+| `scalfac = sca·max(\|xdir·scalx\|,\|ydir·scaly\|)` (167) | `scalfac = sca·basefac` + `for sca in (1,−1)` retry (227–260) | ✓ (sca-retry) |
 | `cross(...)`; insert at idist2 / append if wrap (177, 191–198) | 221–238 | ✓ (wrap-append matches) |
 | `nfcn>maxcalls` → return (158–161) | break on `nfcn>maxcalls` (229) | ✓ |
 | return `ContoursError` (203) | 241 | ✓ |
 
 ### Findings
 
-- **✗ Divergence (MODERATE): missing the `sca` direction-switch retry**
-  (MnContours.cxx:152–189). When the crossing search fails for a contour point,
-  C++ flips the perpendicular direction (`sca = 1 → −1`, `goto L300`) and retries
-  *once* before giving up. JuMinuit's `contour_exact` instead `break`s on the
-  first failed `function_cross_multi` (contours.jl:229–231). Effect: on irregular
-  contours where the crossing lies in the `−perpendicular` direction, C++ finds
-  the point and JuMinuit returns **fewer points than requested**. Affects
-  contour *completeness*, not the correctness of the points found. **~10 LOC**
-  (wrap the cross in a `for sca in (1.0, -1.0)` retry).
+- **✓ RESOLVED (`344a583`): the `sca` direction-switch retry** (MnContours.cxx:152–189).
+  When the crossing search fails for a contour point, C++ flips the perpendicular
+  direction (`sca = 1 → −1`, `goto L300`) and retries *once* before giving up.
+  `contour_exact` now mirrors this: a `for sca in (1.0, -1.0)` loop retries the
+  same point along the reversed ray before bailing (contours.jl:227–260). The
+  `sca = +1` first attempt is byte-identical to the prior code
+  (`scalfac = 1.0·basefac === basefac`), so well-behaved contours are unchanged;
+  on irregular / non-convex level sets the retry recovers the points C++ would
+  find. Measured on `f = x²+y²+(x²−y²)²` (Up=4, S0, npoints=24): the full
+  24-point contour vs 5 before the fix. Affects contour *completeness* only —
+  never the correctness of the points found.
 
 - **Minor: axis-point inner-MIGRAD strategy.** The four seed-point MIGRADs use
   the full `strategy` (`_axis_point`, contours.jl:152); C++ uses
@@ -332,8 +336,10 @@ search reuses the already-audited cross-search core via `function_cross_multi`
 **Verdict: faithful port** (`contour_exact`). The seed-point construction,
 largest-gap bisection, perpendicular-ray geometry, scaling, insert-order, and
 the reuse of the audited cross-search all map exactly. The one substantive
-divergence is the **missing `sca` retry**, which costs contour *completeness*
-(fewer points) on irregular contours but never produces a wrong point.
+divergence — the **`sca` direction-switch retry** — is now resolved (`344a583`):
+`contour_exact` flips the perpendicular ray and retries, recovering the full
+contour on non-convex level sets (measured 5→24 points) while leaving
+well-behaved contours byte-identical.
 
 ---
 
@@ -588,7 +594,7 @@ specific, located, mostly-small item. Sorted by severity:
 | Severity | Algorithm | Finding | Fix |
 |---|---|---|---|
 | ~~MAJOR~~ **✅ FIXED** | §14 Precision | default `eps` was missing ×4 ⇒ `eps2` 2× too small vs C++/iminuit; **resolved** in `feat/precision-eps-x4` (PR #19; now matches C++/iminuit; oracle agreement improved 2–4 orders) | done |
-| **MODERATE** (open) | §4 MnContours | missing `sca` direction-switch retry → fewer points on irregular contours | ~10 LOC |
+| **✓ RESOLVED** | §4 MnContours | `sca` direction-switch retry recovers full contour on non-convex level sets (5→24 pts measured); well-behaved byte-identical — `344a583` | done |
 | **✓ RESOLVED** | §5 MnSimplex | `minedm` 1e-5·up → C++ 0.1·up + initial edge 10×→≈errs; in-code citation fixed — PR #21 `2488fd9` | done |
 | **✓ RESOLVED** | §7 NegativeG2 (AD) | AD-path recovery wired through the numerical 2-point fallback (was a `@warn` stub) — PR #21 `c28ec98` | done |
 | **✓ RESOLVED** | §1 MnHesse | bounded-param step clamp (was `has_limits=false`; unbounded byte-identical) — PR #20 `153f41d` | done |

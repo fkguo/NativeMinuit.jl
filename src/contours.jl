@@ -210,32 +210,54 @@ function contour_exact(
         ymid = a1 * points[idist1][2] + a2 * points[idist2][2]
         xdir = points[idist2][2] - points[idist1][2]
         ydir = points[idist1][1] - points[idist2][1]
-        scalfac = max(abs(xdir * scalx), abs(ydir * scaly))
-        scalfac == 0 && break  # degenerate
-        xdircr = xdir / scalfac
-        ydircr = ydir / scalfac
+        basefac = max(abs(xdir * scalx), abs(ydir * scaly))
+        basefac == 0 && break  # degenerate geometry — no perpendicular ray
 
-        # Find the boundary along (xmid, ymid) + α · (xdircr, ydircr).
-        # Pass scratch_nm2 — ray-point inner MIGRAD fixes BOTH outer
-        # pars simultaneously (inner_dim = n - 2).
-        cross = function_cross_multi(
-            fmin, cf, par_idxs, [xmid, ymid], [xdircr, ydircr];
-            tlr = tlr, maxcalls = max(maxcalls - nfcn, 100),
-            strategy = strategy, prec = prec,
-            scratch = scratch_nm2,
-            threaded_gradient = threaded_gradient)
-        nfcn += cross.nfcn
+        # C++ MnContours.cxx:152-189 — `sca` direction-switch retry. The
+        # cross search runs along the perpendicular ray scaled by `sca`
+        # (init +1, the outward normal for the CCW point order). If the
+        # search FAILS, C++ flips `sca → −1` (reversing the ray via
+        # `scalfac = sca·max(...)`, MnContours.cxx:167/188) and retries the
+        # SAME point once (`goto L300`) before bailing ("unable to find
+        # point on Contour ... found only N points"). This recovers points
+        # on irregular / non-convex contours where the crossing lies along
+        # the −perpendicular direction. The `sca = +1` first attempt is
+        # byte-identical to the pre-retry code (`1.0·basefac === basefac`),
+        # so well-behaved contours are unchanged.
+        found = false
+        for sca in (1.0, -1.0)
+            scalfac = sca * basefac
+            xdircr = xdir / scalfac
+            ydircr = ydir / scalfac
 
-        if !cross.valid || nfcn > maxcalls
-            # Stop adding points; return what we have so far
-            break
+            # Find the boundary along (xmid, ymid) + α · (xdircr, ydircr).
+            # Pass scratch_nm2 — ray-point inner MIGRAD fixes BOTH outer
+            # pars simultaneously (inner_dim = n - 2).
+            cross = function_cross_multi(
+                fmin, cf, par_idxs, [xmid, ymid], [xdircr, ydircr];
+                tlr = tlr, maxcalls = max(maxcalls - nfcn, 100),
+                strategy = strategy, prec = prec,
+                scratch = scratch_nm2,
+                threaded_gradient = threaded_gradient)
+            nfcn += cross.nfcn
+
+            # Genuine call-limit exit (C++ re-checks nfcn>maxcalls at L300).
+            nfcn > maxcalls && break
+            if cross.valid
+                aopt = cross.aopt
+                new_x = xmid + aopt * xdircr
+                new_y = ymid + aopt * ydircr
+                # Insert at idist2 position so points stay in order
+                insert!(points, idist2 == 1 ? nn + 1 : idist2, (new_x, new_y))
+                found = true
+                break
+            end
+            # Search failed but budget remains → flip `sca` (loop continues
+            # to −1.0) and retry the same point along the reversed ray.
         end
-
-        aopt = cross.aopt
-        new_x = xmid + aopt * xdircr
-        new_y = ymid + aopt * ydircr
-        # Insert at idist2 position so points stay in order
-        insert!(points, idist2 == 1 ? nn + 1 : idist2, (new_x, new_y))
+        # Both ray directions failed, or the call limit was hit → stop
+        # adding points and return what we have (C++ "found only N points").
+        found || break
     end
 
     return ContoursError(Int(par_x), Int(par_y), points, mex, mey, nfcn, true)

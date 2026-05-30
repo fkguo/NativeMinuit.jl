@@ -386,4 +386,87 @@
             @test abs(cf.f([x, y]) - (fmin_v + cf.up)) < 0.01
         end
     end
+
+    # ─────────────────────────────────────────────────────────────────────
+    # §4 MnContours `sca` direction-switch retry (audit §4 / MnContours.cxx
+    # :152-189). When the perpendicular cross search fails, the C++ algorithm
+    # flips the ray direction (`sca = +1 → −1`) and retries the same point
+    # once before bailing. The three tests below cover the three branches:
+    #   (1) well-behaved  → `sca = +1` always succeeds, result byte-unchanged;
+    #   (2) non-convex    → `sca = +1` fails for some points, `sca = −1`
+    #                       recovers them (fewer points before, full set now);
+    #   (3) un-findable   → BOTH directions fail, retry-then-bail returns a
+    #                       valid ContoursError with the seed points (no crash).
+    # ─────────────────────────────────────────────────────────────────────
+    @testset "§4 sca-retry — well-behaved contour unchanged (byte-identical sca=+1)" begin
+        # The `sca = +1` first attempt is bit-identical to the pre-retry code
+        # (`scalfac = 1.0·basefac === basefac`), so on a convex (elliptical)
+        # contour — where every point is found on the first try — the fix
+        # changes nothing: the full point set comes back with no drops, and
+        # the result is deterministic. (C++ parity for this circle is also
+        # guarded by the quad_2d_shifted oracle in test_contour_oracle.jl.)
+        cf = CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
+        fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
+        @test fmin.is_valid
+        c1 = contour_exact(fmin, cf, 1, 2; npoints = 12)
+        @test c1.valid
+        # Convex contour: sca=+1 succeeds for every point → full set, no drops.
+        @test length(c1.points) == 12
+        for (x, y) in c1.points
+            @test sqrt((x - 1.0)^2 + (y - 2.0)^2) ≈ 1.0 atol = 0.15
+        end
+        # Deterministic: a second run yields bit-identical points.
+        c2 = contour_exact(fmin, cf, 1, 2; npoints = 12)
+        @test length(c2.points) == length(c1.points)
+        for (p, q) in zip(c1.points, c2.points)
+            @test p[1] == q[1]
+            @test p[2] == q[2]
+        end
+    end
+
+    @testset "§4 sca-retry — recovers points on a non-convex contour" begin
+        # f(x,y) = x² + y² + (x² − y²)²  — a single global minimum at the
+        # origin (Hessian = 2·I there) with a NON-CONVEX f = Up level set:
+        # the +(x²−y²)² term raises f faster along the axes than along the
+        # diagonals, so the contour bulges out along the diagonals and is
+        # concave near the axes. There the longest-gap chord's outward
+        # (sca=+1) perpendicular ray misses the boundary; the C++ sca=−1
+        # direction-switch retry reverses the ray and finds it.
+        #
+        # Measured (npoints=24, Up=4, Strategy(0)): the pre-retry
+        # `contour_exact` bailed after 5 points; with the sca=−1 retry it
+        # walks the full 24-point contour. The `≥ 20` assertion below fails
+        # hard if the retry is removed (the code drops back to 5 points).
+        f = x -> x[1]^2 + x[2]^2 + (x[1]^2 - x[2]^2)^2
+        cf = CostFunction(f, 4.0)
+        fmin = migrad(cf, [0.05, -0.05], [0.1, 0.1]; strategy = Strategy(0))
+        @test fmin.is_valid
+        ce = contour_exact(fmin, cf, 1, 2; npoints = 24, strategy = Strategy(0))
+        @test ce.valid
+        @test all(isfinite(p[1]) && isfinite(p[2]) for p in ce.points)
+        @test length(ce.points) >= 20   # sca=−1 retry recovers the full set
+        # Sanity: every recovered point sits on the expected level-set annulus
+        # (axis crossing r ≈ 1.25, diagonal corner r ≈ 2.0 for Up = 4).
+        for (x, y) in ce.points
+            r = sqrt(x^2 + y^2)
+            @test 1.0 < r < 2.5
+        end
+    end
+
+    @testset "§4 sca-retry — both directions fail → graceful bail (rosenbrock)" begin
+        # The Rosenbrock banana is so curved that the perpendicular cross
+        # search fails along BOTH the +sca and −sca rays for the first
+        # generated point, so the retry exhausts both directions and bails —
+        # matching C++ MnContours ("unable to find point on Contour … found
+        # only N points"; the C++ oracle likewise returned only 4/20, see
+        # test_contour_oracle.jl). The retry-then-bail path must still return
+        # a VALID ContoursError (the 4 axis seeds), not crash or hang.
+        cf = CostFunction(x -> (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2)
+        fmin = migrad(cf, [-1.2, 1.0], [0.1, 0.1]; strategy = Strategy(1))
+        @test fmin.is_valid
+        ce = contour_exact(fmin, cf, 1, 2; npoints = 20, strategy = Strategy(1))
+        @test ce.valid                  # graceful bail, not a crash
+        @test length(ce.points) >= 4    # at least the 4 axis seeds
+        @test all(isfinite(p[1]) && isfinite(p[2]) for p in ce.points)
+    end
 end
