@@ -12,8 +12,6 @@ type: software
 authors:
   - family-names: Guo
     given-names: Feng-Kun
-    # TODO (maintainer): add your ORCID and any co-authors, e.g.
-    #   orcid: "https://orcid.org/0000-0000-0000-0000"
 repository-code: "https://github.com/fkguo/JuMinuit.jl"
 url: "https://github.com/fkguo/JuMinuit.jl"
 license: LGPL-2.1-or-later
