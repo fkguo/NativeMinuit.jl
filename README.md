@@ -167,6 +167,18 @@ migrad!(m)
 Start Julia with `julia -t N` and pass `threaded_gradient=true`; the
 per-coordinate gradient loop runs in parallel. Works on **any thread-safe FCN**.
 
+`threaded_gradient` is a 3-way switch:
+
+| value | behaviour |
+|-------|-----------|
+| `false` *(default)* | serial gradient — always safe, zero overhead. |
+| `true` | force the threaded gradient; on the first call it auto-verifies thread-safety and raises `ThreadSafetyError` if the FCN is not thread-safe (see the contract below). |
+| `:auto` | probe thread-safety **once** (memoized on the fit); if safe, use the threaded gradient, otherwise emit a single `@warn` and fall back to the serial gradient. Never throws, never returns a racy result. On single-thread Julia (`-t 1`) it is silently serial (no probe); no-op for AD (`grad=`) fits. |
+
+The default stays `false` because threading only pays off for expensive
+FCNs at higher `n`; `:auto` is the opt-in "thread it safely without me
+checking" switch.
+
 ```julia
 m = Minuit(my_chi2, x0; error = errs, threaded_gradient = true)
 migrad!(m)             # threading propagates through MINOS / contours too

@@ -76,6 +76,15 @@ methods plus iminuit-style property access.
 - `fixed::Vector{Bool}=fill(false, n)`.
 - `up::Real=1.0` — ErrorDef. `1.0` for χ², `0.5` for NLL.
 - `prec::MachinePrecision`.
+- `threaded_gradient::Union{Bool,Symbol}=false` — parallelize the
+  per-coordinate numerical gradient (needs `julia -t N`). `false` (default) =
+  serial; `true` = force threaded, raising `ThreadSafetyError` if the FCN is
+  not thread-safe; `:auto` = thread when `nthreads()>1` and the FCN probes
+  thread-safe, else warn once and fall back to serial (never throws). The
+  `:auto` probe runs at most once and is memoized on the fit. No-op for AD
+  (`grad=`) fits.
+- `verify_threading::Bool` — for `threaded_gradient=true`, verify thread safety
+  on the first gradient call (default `true` when forcing threading).
 
 # Methods
 
@@ -121,8 +130,9 @@ mutable struct Minuit <: AbstractFit
     # Julia started with `julia -t N`. The user FCN must be thread-safe
     # (no hidden RNG / cache / file I/O state); cf_fixed splice buffers
     # are already per-thread via Phase G.1. Default `false` (single-threaded
-    # behavior identical to pre-Phase G).
-    threaded_gradient::Bool
+    # behavior identical to pre-Phase G). `:auto` adds a memoized one-shot
+    # thread-safety probe (warn + serial on failure); resolved by `_use_threads`.
+    threaded_gradient::Union{Bool,Symbol}
     # Phase H: when `true` AND `threaded_gradient=true`, JuMinuit runs
     # one extra sequential+threaded gradient comparison at the seed
     # point on the first migrad call. Throws `ThreadSafetyError` if the
@@ -145,6 +155,21 @@ mutable struct Minuit <: AbstractFit
     # bare closure with no associated dataset; auto-populated by `model_fit`
     # from `Data.ndata`, and settable directly via `m.ndata = N`.
     ndata::Union{Int,Nothing}
+    # Memoized `:auto` thread-safety probe result (`nothing` = not yet probed).
+    # Computed once on first use by `_use_threads(m)` and reused by every later
+    # gradient / MINOS / contour evaluation, so the probe never re-runs.
+    _auto_threads::Base.RefValue{Union{Nothing,Bool}}
+    # Inner constructor: defaults `_auto_threads` to an unprobed Ref so the
+    # 13-positional-arg construction used by the keyword constructors keeps
+    # working unchanged (defining any inner ctor suppresses the auto-generated
+    # all-field one).
+    function Minuit(fcn, params, fmin, minos_errors, prec, cfwg, strategy,
+                    tol, print_level, threaded_gradient, verify_threading,
+                    n_passes, ndata)
+        return new(fcn, params, fmin, minos_errors, prec, cfwg, strategy, tol,
+                   print_level, threaded_gradient, verify_threading, n_passes,
+                   ndata, Ref{Union{Nothing,Bool}}(nothing))
+    end
 end
 
 # IMinuit.jl drop-in aliases. In IMinuit.jl `Fit` (keyword/scalar-arg
@@ -154,6 +179,59 @@ end
 # they are aliases here, not separate types. See `AbstractFit` docs.
 const Fit = Minuit
 const ArrayFit = Minuit
+
+# ── threaded_gradient policy ────────────────────────────────────────────────
+# `threaded_gradient` is a 3-way switch resolved in ONE place by these helpers:
+#   false (default) → serial;  true → force threaded (errors if unsafe);
+#   :auto → thread iff the FCN probes thread-safe, else warn once + serial.
+# `_check_threaded_gradient` validates it at construction; `_use_threads`
+# resolves it to the concrete Bool handed to the numerical-gradient path.
+_check_threaded_gradient(tg::Bool) = tg
+function _check_threaded_gradient(tg::Symbol)
+    tg === :auto || throw(ArgumentError(
+        "threaded_gradient must be `true`, `false`, or `:auto`; got `:$tg`"))
+    return tg
+end
+_check_threaded_gradient(tg) = throw(ArgumentError(
+    "threaded_gradient must be `true`, `false`, or `:auto`; got `$(repr(tg))`"))
+
+# Resolve `m`'s threaded_gradient policy (or an explicit `mode` override) into
+# the concrete Bool passed downstream as `threaded_gradient`:
+#   false → false (serial).
+#   true  → true  (force threaded; the leaf numerical_gradient! still gates on
+#           nthreads()>1 and the strict ThreadSafetyError path is preserved).
+#   :auto → true iff nthreads()>1, the fit is numerical (not AD), and the FCN
+#           probes thread-safe; else false. The is_thread_safe probe runs at
+#           most once (memoized on m._auto_threads); the unsafe->serial
+#           fallback emits a single @warn. Never throws.
+# REVISIT: a future cost-aware :auto could thread by default based on per-FCN
+# cost x n; that needs benchmarks and is intentionally not implemented now (the
+# default stays false).
+function _use_threads(m::Minuit, mode::Union{Bool,Symbol} = m.threaded_gradient)
+    mode === false && return false
+    mode === true && return true
+    mode === :auto || _check_threaded_gradient(mode)   # throws on a bad Symbol
+    # :auto below. AD fits compute the gradient in one call (no per-coordinate
+    # loop), so threading is a no-op — skip the probe and the (misleading) warn.
+    m.cfwg === nothing || return false
+    # Single-threaded Julia: threading is impossible — no probe, no warning.
+    Threads.nthreads() == 1 && return false
+    cached = m._auto_threads[]
+    if cached === nothing
+        x0 = [p.value for p in m.params.pars]
+        # Probe a fresh CostFunction view (own nfcn Ref) so the safety check's
+        # FCN evaluations don't pollute the user's call counter.
+        cached = is_thread_safe(CostFunction(m.fcn.f, m.fcn.up), x0)
+        m._auto_threads[] = cached
+        cached || @warn(
+            "threaded_gradient=:auto: FCN is not thread-safe (its threaded " *
+            "gradient disagrees with the serial one at the seed) — falling " *
+            "back to the serial gradient. Fix the FCN's shared mutable state " *
+            "(see the README thread-safety contract), or pass " *
+            "threaded_gradient=true to get a ThreadSafetyError instead.")
+    end
+    return cached
+end
 
 function Minuit(
     fcn,
@@ -202,17 +280,22 @@ function Minuit(
     strategy::Union{Strategy,Integer} = Strategy(1),
     tol::Real = 0.1,
     print_level::Integer = 0,
-    # Phase G: parallel inner numerical-gradient. Requires `julia -t N`.
-    # Default `false` keeps the (single-threaded) reference behavior;
-    # opt-in when (a) FCN > 500 ns/call, (b) n ≥ 4, (c) FCN is thread-
-    # safe (no hidden mutable state).
-    threaded_gradient::Bool = false,
-    # Phase H: auto-verify FCN thread-safety on first gradient call when
-    # threading is enabled. Default `true` whenever `threaded_gradient=true`
-    # — costs ~2 extra gradient evaluations. Pass `false` to bypass once
-    # you've confirmed safety via `JuMinuit.is_thread_safe(cf, x0)` or
-    # otherwise.
-    verify_threading::Bool = threaded_gradient,
+    # Phase G/I: parallel inner numerical-gradient (requires `julia -t N`).
+    # `false` (default) = serial; `true` = force threaded (raises
+    # `ThreadSafetyError` if the FCN is not thread-safe); `:auto` = thread iff
+    # safe, else warn + serial (never throws). Default stays `false`: threading
+    # only pays off for expensive FCNs at higher n, so threading by default
+    # would slow the common cheap-FCN case and add probe overhead to every
+    # `julia -t N` fit. `:auto` is the opt-in "thread it safely without me
+    # checking" switch. Opt into `true`/`:auto` when (a) FCN > 500 ns/call,
+    # (b) n ≥ 4, (c) the FCN is thread-safe (no hidden mutable state).
+    threaded_gradient::Union{Bool,Symbol} = false,
+    # Phase H: for `threaded_gradient=true`, auto-verify FCN thread-safety on
+    # the first gradient call (default `true` when forcing threading; ~2 extra
+    # gradient evaluations). Pass `false` to bypass once you've confirmed
+    # safety via `JuMinuit.is_thread_safe(cf, x0)`. No-op for `:auto` (its own
+    # one-shot memoized probe) and for `false`.
+    verify_threading::Bool = (threaded_gradient === true),
     # Catch-all for per-parameter `error_<name>`, `fix_<name>`, `limit_<name>`
     # kwargs in the IMinuit.jl style.
     kwargs...,
@@ -301,7 +384,8 @@ function Minuit(
     strat = strategy isa Strategy ? strategy : Strategy(Int(strategy))
     return Minuit(cf, params, nothing, Dict{Int,MinosError}(), prec,
                   cfwg, strat, Float64(tol), Int(print_level),
-                  Bool(threaded_gradient), Bool(verify_threading), 0, nothing)
+                  _check_threaded_gradient(threaded_gradient),
+                  Bool(verify_threading), 0, nothing)
 end
 
 # IMinuit.jl-style: named-parameter constructor where each parameter
@@ -328,8 +412,8 @@ function Minuit(fcn;
                 strategy::Union{Strategy,Integer} = Strategy(1),
                 tol::Real = 0.1,
                 print_level::Integer = 0,
-                threaded_gradient::Bool = false,
-                verify_threading::Bool = threaded_gradient,
+                threaded_gradient::Union{Bool,Symbol} = false,
+                verify_threading::Bool = (threaded_gradient === true),
                 # Seed-time gradient-check toggle — see the Minuit(fcn, x0)
                 # constructor. Declared explicitly (not left to `kwargs...`)
                 # so a `check_gradient=false` is NOT mis-parsed as a
@@ -473,7 +557,7 @@ function migrad!(m::Minuit;
                   maxfcn::Union{Integer,Nothing} = nothing,
                   iterate::Integer = 5,
                   use_simplex::Bool = false,
-                  threaded_gradient::Bool = m.threaded_gradient,
+                  threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                   verify_threading::Bool = m.verify_threading,
                   print_level::Integer = m.print_level)
     # iminuit's `_robust_low_level_fit` requires iterate ≥ 1. iterate=1
@@ -482,6 +566,14 @@ function migrad!(m::Minuit;
     # entirely, so reject it to surface the user mistake.
     iterate >= 1 ||
         throw(ArgumentError("iterate must be ≥ 1, got $iterate"))
+
+    # Resolve the 3-way `threaded_gradient` policy ONCE for this fit (and all
+    # retry passes): `:auto` probes thread-safety here (memoized on `m`) and
+    # falls back to serial + warn if unsafe; `true`/`false` pass through. For
+    # `:auto` the strict `verify_threading` re-check is disabled (the probe is
+    # the single safety gate), so MIGRAD never re-verifies per pass.
+    _tg = _use_threads(m, threaded_gradient)
+    _vt = threaded_gradient === :auto ? false : verify_threading
 
     # Pass 1: user's stored Strategy, no prior_cov. Byte-identical to
     # the pre-retry-layer single-shot path — relies on `_migrad_into!`'s
@@ -496,8 +588,8 @@ function migrad!(m::Minuit;
     params_to_use = m.fmin === nothing ? m.params : _build_resume_params(m)
     bfm = _migrad_into!(m, params_to_use;
                          strategy = strategy, tol = tol, maxfcn = maxfcn,
-                         threaded_gradient = threaded_gradient,
-                         verify_threading = verify_threading,
+                         threaded_gradient = _tg,
+                         verify_threading = _vt,
                          print_level = print_level)
 
     # ── Robust retry loop ───────────────────────────────────────────────
@@ -567,8 +659,8 @@ function migrad!(m::Minuit;
         bfm = _migrad_into!(m, params_next;
                              strategy = pass_strategy, tol = tol,
                              maxfcn = maxfcn,
-                             threaded_gradient = threaded_gradient,
-                             verify_threading = verify_threading,
+                             threaded_gradient = _tg,
+                             verify_threading = _vt,
                              print_level = print_level,
                              prior_cov = prior_cov)
         npass += 1
@@ -811,7 +903,7 @@ Run MINOS for parameter `par` (integer index or String name). Updates
 first). Returns `m`.
 """
 function minos!(m::Minuit, par::Integer;
-                threaded_gradient::Bool = m.threaded_gradient,
+                threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                 print_level::Integer = m.print_level,
                 kwargs...)
     1 <= par <= n_pars(m.params) ||
@@ -842,7 +934,7 @@ _minos_default_maxcalls(nvar::Integer) =
 # iminuit / C++ MnMinos control-name kwargs to the internal
 # `function_cross` names, and dispatches to the bounded / unbounded path.
 function _minos_error(m::Minuit, par::Int;
-                       threaded_gradient::Bool = m.threaded_gradient,
+                       threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                        print_level::Integer = m.print_level,
                        maxcall::Integer = 0,
                        tol::Union{Real,Nothing} = nothing,
@@ -850,6 +942,8 @@ function _minos_error(m::Minuit, par::Int;
                        kwargs...)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad!(m)` before MINOS"))
+    # Resolve the 3-way threaded_gradient policy (`:auto` → memoized probe).
+    _tg = _use_threads(m, threaded_gradient)
     # MINOS derives sigma_i = sqrt(2·up·V[i,i]) from the inverse Hessian, so
     # it requires an actual covariance — not the identity placeholder that
     # simplex / scan leave behind. Force the user to call hesse(m) first
@@ -905,7 +999,7 @@ function _minos_error(m::Minuit, par::Int;
         ext_cf = m.cfwg === nothing ? m.fcn : m.cfwg
         return _minos_external_via_function_cross(
             m.fmin, ext_cf, par;
-            threaded_gradient = threaded_gradient,
+            threaded_gradient = _tg,
             print_level = print_level, fwd...)
     else
         # Unbounded scanned parameter — search in the INTERNAL frame
@@ -922,7 +1016,7 @@ function _minos_error(m::Minuit, par::Int;
         return minos(m.fmin.internal, m.fmin.internal_cf,
                      m.params.int_of_ext[par];
                      pars = m.params,
-                     threaded_gradient = threaded_gradient,
+                     threaded_gradient = _tg,
                      print_level = print_level, fwd...)
     end
 end
@@ -1183,10 +1277,11 @@ The `bins=...` kwarg is an IMinuit.jl-compatible alias for `npoints`
 function contour(m::Minuit, par_x::Integer, par_y::Integer;
                   npoints::Integer = 20,
                   bins::Union{Integer,Nothing} = nothing,
-                  threaded_gradient::Bool = m.threaded_gradient,
+                  threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                   kwargs...)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad!(m)` before `contour(m, ...)`"))
+    _tg = _use_threads(m, threaded_gradient)
     npts = bins === nothing ? Int(npoints) : Int(bins)
     ix = m.params.int_of_ext[par_x]
     iy = m.params.int_of_ext[par_y]
@@ -1194,7 +1289,7 @@ function contour(m::Minuit, par_x::Integer, par_y::Integer;
     # A7/B4 — see minos! for the rationale).
     return contour(m.fmin.internal, m.fmin.internal_cf, ix, iy;
                     npoints = npts,
-                    threaded_gradient = threaded_gradient, kwargs...)
+                    threaded_gradient = _tg, kwargs...)
 end
 
 function contour(m::Minuit, px::AbstractString, py::AbstractString;

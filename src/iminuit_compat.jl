@@ -504,10 +504,11 @@ function mncontour(m::Minuit, par1, par2;
                     size::Union{Integer,Nothing} = nothing,
                     sigma::Real = 1,
                     cl::Union{Real,Nothing} = nothing,
-                    threaded_gradient::Bool = m.threaded_gradient,
+                    threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                     kwargs...)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad(m)` before `mncontour(m, ...)`"))
+    _tg = _use_threads(m, threaded_gradient)
     npts = size === nothing ? numpoints : Int(size)
     σ    = cl === nothing ? sigma : Float64(cl)
     isapprox(σ, 1.0) ||
@@ -520,7 +521,7 @@ function mncontour(m::Minuit, par1, par2;
     iy_int = m.params.int_of_ext[iy]
     ce = contour_exact(m.fmin.internal, m.fmin.internal_cf,
                         ix_int, iy_int; npoints = npts,
-                        threaded_gradient = threaded_gradient, kwargs...)
+                        threaded_gradient = _tg, kwargs...)
     return ce.points
 end
 
