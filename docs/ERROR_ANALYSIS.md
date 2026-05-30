@@ -256,7 +256,8 @@ The motivating case is the X(3872) line shape in the `J/ψρ + DD̄*` coupled-ch
 fit (Baru, Guo, Hanhart, Nefediev, *Phys. Rev. D* **109**, L111501,
 [arXiv:2404.12003](https://arxiv.org/abs/2404.12003)). The published data admit
 **several physically distinct local minima** — different scattering-length
-combinations that each describe the line shape with comparable χ². A HESSE/MINOS
+combinations that **all reproduce the characteristic near-threshold dip** yet
+differ in the broader line shape, each fitting the data with comparable χ². A HESSE/MINOS
 error bar around whichever minimum MIGRAD happened to land in hides the others
 entirely. The distinct minima are different **physics conclusions**, not
 different points of one error ellipse, and must be enumerated and fit separately.
