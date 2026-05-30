@@ -207,6 +207,190 @@ for the *full nonlinear* joint structure use the bootstrap's `r.samples`. The
 likelihood-geometry counterparts are HESSE's covariance (Gaussian/elliptical) and
 MC-Δχ² (the true, possibly non-elliptical, joint region with the data held fixed).
 
+## Multi-modal solution detection
+
+### The phenomenon: an acceptable χ² is not a unique solution
+
+When you sample the parameter space and keep every point whose χ² is within Δχ²
+of the best fit (the "statistically acceptable" set — see the **MC-Δχ² region**
+method above),
+you get a cloud of accepted parameter vectors. The implicit assumption when you
+summarise that cloud with one mean ± one covariance is that the cloud is **one
+connected region**.
+
+**It often is not.** Widen the sampling range and the accepted set can break
+into a *main* cluster plus one or more *separated* regions — sometimes only a
+handful of points. Each separated region is a **distinct solution**: its χ² is
+within Δχ² of the global best (so it is statistically acceptable), but its
+parameters — and therefore its **physics** — are different.
+
+```
+  χ² surface (1-D cartoon)                       accepted set (Δχ² cut)
+                                                 ┌────────┐      ┌──┐
+   \                              /              │ main   │      │B │
+    \         ___                /               │ cluster│      │  │   ← separated
+     \   A   /   \   B   ___    /                └────────┘      └──┘     region =
+      \_____/     \_____/   \__/                  ←—— same χ² band ——→     distinct
+        ▲            ▲                                                     solution
+     global       another
+      min       acceptable min
+```
+
+Reporting a single error bar that spans both regions is **wrong**: it implies a
+continuum of solutions between them that the χ² actually rejects. The two
+regions must be reported and treated **independently**.
+
+iminuit and C++ Minuit2 have **no auto-detection** of this. `find_solution_modes`
+adds it.
+
+### Physics example: distinct solutions in the X(3872) coupled-channel fit
+
+The motivating case is the X(3872) line shape in the `J/ψρ + DD̄*` coupled-channel
+fit (Baru, Guo, Hanhart, Nefediev, *Phys. Rev. D* **109**, L111501,
+[arXiv:2404.12003](https://arxiv.org/abs/2404.12003)). The published data admit
+**several physically distinct local minima** — different scattering-length
+combinations that each describe the line shape with comparable χ². A HESSE/MINOS
+error bar around whichever minimum MIGRAD happened to land in hides the others
+entirely. The distinct minima are different **physics conclusions**, not
+different points of one error ellipse, and must be enumerated and fit separately.
+
+### Step 1 — cluster the accepted samples into modes
+
+```julia
+using JuMinuit
+m = Minuit(chi2, x0; names = pnames);  migrad!(m)
+
+samples = get_contours_samples(m; ...)        # MC-Δχ² accepted set, rows = vectors
+modes   = find_solution_modes(samples, m)     # cluster into distinct solutions
+
+if length(modes) > 1
+    @warn "multi-modal: $(length(modes)) statistically distinct solutions"
+end
+```
+
+`modes` pretty-prints a report:
+
+```
+SolutionModes: 2 distinct solution(s) from 500 accepted sample(s)
+  metric: whiten=:cov (Mahalanobis)  method=:components  threshold=1 σ  errordef(up)=1
+  [1] main  :   312 pts ( 62.4%)  χ²=18.42                  rep=[0.997, 2.01, …]
+  [2] mode 2:   188 pts ( 37.6%)  χ²=19.05      Δχ²=0.63     rep=[-1.4, 2.0, …]
+  ⚠ separated modes have comparable χ² but DIFFERENT physics — treat
+    them independently; do NOT merge into a single error bar.
+```
+
+Each [`SolutionMode`](../src/solution_modes.jl) carries: the minimum-χ²
+**representative** sample of its cluster, that χ² and its **Δχ²** versus the
+global best, the per-parameter **(min, max)** range over the cluster, the point
+count and **fraction**, and the member row indices. Modes are sorted by χ²
+(main = lowest first).
+
+### The error-normalized (whitened) distance is mandatory
+
+> **This is the single most important correctness point.** Clustering in raw
+> parameter coordinates is **wrong** and will silently merge distinct modes.
+
+Fit parameters span wildly different scales — a low-energy constant at `~1e-3`
+sits next to a coupling at `~1`. A naive Euclidean distance is **dominated by
+the largest-scale parameter**, so two modes that differ only in a *small-scale*
+parameter look identical: their separation in that parameter is swamped by the
+ordinary within-mode spread of the large-scale parameter. The clusterer then
+**merges them**.
+
+The fix is to cluster in **whitened** (error-normalized) coordinates, so that
+distance is measured in units of σ and is dimensionless and scale-invariant:
+
+- **`whiten = :cov`** (default) — full **Mahalanobis** distance using the fit's
+  free-parameter covariance Σ. With the Cholesky factor Σ = L·Lᵀ, the whitened
+  coordinate is `z = L⁻¹·x`, and the pairwise distance becomes
+
+  ```
+  d(xᵢ, xⱼ)² = (xᵢ − xⱼ)ᵀ Σ⁻¹ (xᵢ − xⱼ)
+  ```
+
+  This both **rescales** each parameter to σ units **and decorrelates** them —
+  the statistically correct metric.
+
+- **`whiten = :errors`** — per-parameter scaling only, `z_k = x_k / σ_k`. Ignores
+  correlations; cheaper and needs no matrix inversion. A robust fallback (and the
+  automatic fallback if the covariance is unavailable or not positive-definite).
+
+A naive unwhitened Euclidean metric is **deliberately not offered** as an option.
+The contrast is real and reproducible — two modes separated by 5σ in a `1e-3`-scale
+parameter but overlapping in a `~1`-scale parameter:
+
+| metric | result |
+|--------|--------|
+| raw Euclidean (threshold 1) | **1 cluster** — modes merged (wrong) |
+| `:errors` / `:cov` (threshold 1) | **2 clusters** — modes resolved (correct) |
+
+(See `test/test_solution_modes.jl`, testset *"WHITENED metric resolves tiny-scale
+separation"*.)
+
+### Step 2 (optional) — re-fit each mode: `refine = true`
+
+Clustering finds *where* the modes are; it does not move to their exact minima.
+`refine = true` runs a fresh MIGRAD from each cluster's representative — preserving
+the parent fit's cost function, gradient, parameter limits, fixed-parameter
+structure, `errordef`, strategy and tolerance — to recover that mode's **true
+local minimum and its own errors**:
+
+```julia
+modes = find_solution_modes(samples, m; refine = true)
+for s in modes
+    println("mode $(s.index): χ²=$(s.refined_fval)  x=$(s.refined_values)")
+end
+```
+
+The re-fit also flags a subtle, important case. If a separated cluster re-fits to
+a minimum **deeper than the global best**, the main fit **missed the better basin**
+— the cluster is the solution MIGRAD should have found. This is flagged
+prominently:
+
+```
+  [1] main  :    40 pts ( 40.0%)  χ²=-0.628                 rep=[2.93, 2.91]
+        ↳ re-fit: χ²=-0.629  (valid, 24 fcn)  ⚠ DEEPER than global best
+  ...
+  ⚠⚠ a refined mode reached a DEEPER minimum than the global best —
+     the main fit likely missed the better basin (see `new_min`).
+```
+
+The flag is exposed as `mode.new_min`. This connects directly to the IAM
+cold-start convergence gap (see [`IAM_CONVERGENCE_GAP.md`](IAM_CONVERGENCE_GAP.md)):
+a separated cluster can be exactly the basin a stiff cold-start fit failed to
+reach. Per-mode re-fits are parallelized across threads when the fit opts into
+threading (`m.threaded_gradient`, honoring the same FCN thread-safety contract as
+Phase G/H threaded gradients).
+
+### Clustering backends
+
+- **`method = :components`** (default, **zero dependencies**) — single-linkage
+  connected components in whitened space: link any two samples whose whitened
+  distance is ≤ `threshold`, then take connected components. `min_size` separates
+  genuine sparse modes from stray noise points. Cost is O(N²·d) in the number of
+  samples — fine for the hundreds-to-few-thousand a Δχ² scan produces.
+
+- **`method = :dbscan`** (optional) — density-based clustering for arbitrary
+  cluster shapes and explicit outlier handling, via the `Clustering.jl` package
+  extension (`ext/JuMinuitClusteringExt.jl`). Activates on `using Clustering`;
+  without it, requesting `:dbscan` raises an actionable error pointing at
+  `:components`. Uses a spatial tree, so ~O(N·log N) — prefer it for very large N.
+
+### Tuning and caveats
+
+- **`threshold`** (default `1.0`, in whitened σ units) sets the connection radius.
+  *Smaller* is stricter — it will not bridge distinct modes, but may split a
+  sparsely-sampled one. *Larger* risks single-linkage **chaining** across a gap.
+  Distinct physical modes are typically separated by many σ, so the default is a
+  safe starting point; sanity-check by reading the per-mode Δχ² and representative
+  separations in the report.
+- **`min_size`** (default `1`) keeps every separated region — the input is already
+  χ²-filtered, so even a few-point region is a candidate solution. Raise it to
+  suppress scatter; the report states how many points were dropped as noise.
+- **Not a global-optimization guarantee.** This detects multi-modality *in the
+  sampled set*; it cannot prove that every basin was sampled. It is a diagnostic
+  layer on top of MC-Δχ² sampling, not a global optimizer.
+
 ## A short decision guide
 
 1. **Default:** quote the **HESSE** error. If the fit is non-parabolic but valid,
