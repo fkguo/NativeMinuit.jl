@@ -233,11 +233,11 @@ Julia 1.12 / OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides)
 
 | Benchmark | Julia (μs) | C++ (μs) | Julia / C++ |
 |---|---|---|---|
-| `quad_4d` | 1.27 | 9.71 | **0.131×** |
-| `rosenbrock_2d` | 17.1 | 63.7 | **0.268×** |
-| `rosenbrock_10d` | 98.1 | 270.2 | **0.363×** |
-| `gauss_ll_10_1000` | 55.6 | 78.2 | **0.710×** |
-| `gauss_ll_2_100` | 34.8 | 39.2 | **0.887×** |
+| `quad_4d` | 0.81 | 5.50 | **0.147×** |
+| `rosenbrock_2d` | 9.50 | 37.62 | **0.252×** |
+| `rosenbrock_10d` | 58.11 | 156.62 | **0.371×** |
+| `gauss_ll_10_1000` | 32.26 | 44.96 | **0.718×** |
+| `gauss_ll_2_100` | 20.16 | 22.71 | **0.888×** |
 
 The objectives (the user FCN that MIGRAD minimizes — these are standard
 optimization test problems, not Minuit operations) are:
@@ -261,8 +261,9 @@ site at compile time, whereas C++ Minuit2 pays for `shared_ptr` ref-counting and
 On actual HEP fits (vs `iminuit` via PyCall, `julia -t 8`):
 
 - **X(3872) dip line shape** (3 params, J/ψρ + DD̄* coupled channels) — JuMinuit
-  with AD gradients runs migrad+HESSE **2.3× faster than iminuit** (3.3 ms vs
-  7.2 ms) and MINOS **2.1×** faster; even the numerical path is ~30% faster.
+  with AD gradients runs migrad+HESSE **1.5× faster than iminuit** (4.8 vs 7.3 ms)
+  and MINOS **2.2×** faster (73.5 vs 158.7 ms); the numerical path is ~1.2×
+  faster too. All schemes reach the published `fval = 0.0174`.
 
 (The IAM 2π form-factor fit — the thread-safety example above — is a stiff,
 ill-conditioned amplitude fit whose convergence is seed-sensitive; it is

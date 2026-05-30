@@ -9,10 +9,10 @@ julia -t 8 --project=scripts BenchmarkExamples/IAM_2Pformfactor/bench_full.jl
 ```
 
 Each script reports stage-by-stage median wall-time (3 rounds + warmup)
-and performs cross-checks on every stage (minimum, MINOS errors,
-mncontour centroid). The summary tables below reflect the latest run on
-macOS / Julia 1.12 / `julia -t 8` / `BLAS.set_num_threads(1)`. See the
-commit history for older runs.
+and cross-checks every stage (minimum, MINOS errors, mncontour
+centroid). The tables below are the **2026-05-30 run** on macOS /
+Julia 1.12 / `julia -t 8` / `BLAS.set_num_threads(1)`, on JuMinuit 0.3.0.
+See the commit history for older runs.
 
 ## Scheme legend
 
@@ -20,9 +20,9 @@ commit history for older runs.
 |-------------|----------------------------------------------------------|
 | `jm_num`    | JuMinuit numerical gradient, sequential                  |
 | `jm_ad`     | JuMinuit AD (ForwardDiff) — package extension            |
-| `jm_th_num` | JuMinuit threaded numerical (Phase G)                    |
+| `jm_th_num` | JuMinuit threaded numerical                              |
 | `jm_th_ad`  | JuMinuit threaded AD                                     |
-| `iminuit`   | Python `iminuit` via PyCall (IMinuit.jl `v0.2.1`)        |
+| `iminuit`   | Python `iminuit` via PyCall (IMinuit.jl)                 |
 
 ## X(3872) dip fit — 3 params, FCN ~ 38 μs/call, 4 data points
 
@@ -34,117 +34,76 @@ Published analysis: V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
 
 | scheme       | migrad+hesse | minos (3 params) | mncontour (20 pts) |
 |--------------|-------------:|-----------------:|-------------------:|
-| `jm_ad`      |  **3.3 ms**  |  **75 ms**       |  **35 ms**         |
-| `jm_th_ad`   |  3.5 ms      |  74 ms           |  35 ms             |
-| `jm_num`     |  5.3 ms      | 129 ms           |  90 ms             |
-| `jm_th_num`  |  5.9 ms      | 138 ms           |  97 ms             |
-| `iminuit`    |  7.2 ms      | 155 ms           |  50 ms             |
+| `jm_ad`      |  **4.8 ms**  |  **73.5 ms**     |  29.5 ms           |
+| `jm_th_ad`   |  4.8 ms      |  74.7 ms         |  28.0 ms           |
+| `jm_th_num`  |  5.8 ms      | 139.1 ms         |  84.6 ms           |
+| `jm_num`     |  6.3 ms      | 134.4 ms         |  78.1 ms           |
+| `iminuit`    |  7.3 ms      | 158.7 ms         |  51.2 ms           |
 
-(latest run on commit-tree post gap closure; within ±5 % of the
-pre-closure baseline — no regression from the 9 merged PRs M1–P5).
-
-**Headlines**
-
-- JuMinuit AD is **2× faster than JuMinuit numerical** on migrad, **1.7×** on minos.
-- JuMinuit numerical is **30 % faster than iminuit** on migrad, comparable on minos.
-- JuMinuit AD reaches **2.3× iminuit speed** on migrad and **2.1×** on minos.
-- 3-dim problem is too small for threading to help (`jm_th_*` ≈ sequential).
-
-**MNCONTOUR caveat for X(3872)**
-
-The X(3872) fit overfits 3 parameters on 4 points (χ²_min = 0.017), so
-the 1σ region collapses to near machine precision in some directions.
-Both libraries terminate early with "MnContours unable to find first
-two points" on every parameter pair tested; the wall-times above are
-the time spent until early termination, not the time of a successful
-contour generation.
-
-**Open issue (X3872)**
-
-JuMinuit's MINOS returns `(0, 0)` for par[2] (`r`) at a minimum where
-iminuit successfully returns `(-0.00214, +0.00431)`. Both backends
-converge to the same x, fval (Δx ≈ 9·10⁻⁶, Δfval ≈ 9·10⁻⁸), so this
-is a JuMinuit edge-case in `function_cross` for tight wells, not a
-fit-quality artifact. Tracked.
-
-## IAM 2π form-factor — 9 LECs, FCN ~ 10 ms/call, 85 data points
-
-| scheme       | migrad+hesse | minos (par 1)        | mncontour (8 pts) |
-|--------------|-------------:|---------------------:|------------------:|
-| `jm_num`     | **5.42 s**   | **16.2 s**           | **27.3 s**        |
-| `iminuit`    | 18.74 s      | REFUSED (invalid fmin) | REFUSED         |
-| `jm_ad`      | FAILED       | —                    | —                 |
-| `jm_th_*`    | SKIPPED (Phase H rejects) | —       | —                 |
-
-(latest run on commit-tree post gap closure; within ±2 % of the
-pre-closure baseline — no regression from the 9 merged PRs M1–P5).
+All schemes converge to the same minimum (`fval = 0.0174`, the published
+global minimum). The AD path differs by `Δx ≈ 0.015` on the flat
+degenerate valley — statistically negligible (a C++-faithful seed-`g2`
+detail; see [`../docs/dev/AD_OFFSET_X3872.md`](../docs/dev/AD_OFFSET_X3872.md)).
 
 **Headlines**
 
-- JuMinuit MIGRAD is **3.5× faster than iminuit** on the 9-LEC fit
-  (5.4 s vs 19.0 s) — **but lands at a SHALLOWER minimum** (fval=613.5
-  vs fval=409.9). The no-improvement early-termination check in
-  `src/migrad.jl` triggers too aggressively on this landscape. Both
-  fits report `is_valid=false` (above-max-edm). Tracked as follow-up.
-- iminuit hard-refuses MINOS / MNCONTOUR on an invalid fmin (Python
-  raises `RuntimeError("Function minimum is not valid")`). JuMinuit
-  runs both to completion on the same invalid fmin — MINOS returns
-  `(0, 0)` for this tight well, MNCONTOUR returns an empty point set.
-  Neither behavior is "correct"; both libraries struggle. The bench
-  wraps the iminuit calls in `try/catch` so the script still completes
-  end-to-end.
-- **Phase H pre-flight catches IAM thread-unsafety in milliseconds**:
-  `is_thread_safe(chi2_iam, paras0)` returns `false` because
-  `St4_00!` writes a module-level `const c_00_4` buffer. All `jm_th_*`
-  schemes are refused before any migrad work happens — this is the
-  silent-wrong-answer fix from commit `96513d7` demonstrated on a
-  real physics fit.
-- AD path FAILS: IAM's `src/amplitudes.jl` etc. carry `Float64`
-  annotations that block ForwardDiff `Dual` propagation. Genuine
-  limitation of the IAM source, not a JuMinuit issue.
+- JuMinuit **AD vs iminuit**: **1.5× faster** on migrad+HESSE (4.8 vs 7.3 ms)
+  and **2.2× faster** on MINOS (73.5 vs 158.7 ms).
+- JuMinuit **numerical vs iminuit**: ~1.2× faster on both.
+- AD is ~1.3× faster than JuMinuit-numerical on migrad, ~1.8× on MINOS.
+- The 3-parameter problem is too small for threading to help
+  (`jm_th_*` ≈ sequential).
+
+**MNCONTOUR caveat.** The fit overfits 3 parameters on 4 points
+(`χ²_min = 0.017`), so the 1σ region collapses to near machine precision.
+**Both** libraries terminate early ("MnContours unable to find first two
+points") on every parameter pair; the wall-times are time-to-early-exit,
+not a successful contour. Not a meaningful comparison for this fit.
+
+(MINOS for `par[2]` now returns `(-0.0043, +0.0043)` on both backends —
+an earlier JuMinuit `(0, 0)` edge case in `function_cross` for this tight
+well has been resolved.)
+
+## IAM 2π form-factor — 9 LECs, FCN ~ 9 ms/call, 85 data points
+
+| scheme       | migrad+hesse | fval        | minos (par 1) | mncontour (8 pts) |
+|--------------|-------------:|------------:|--------------:|------------------:|
+| `jm_num`     | **19.21 s**  | **404.15**  | 23.31 s       | 31.31 s           |
+| `iminuit`    | 21.98 s      | 409.89      | REFUSED       | REFUSED           |
+| `jm_ad`      | FAILED       | —           | —             | —                 |
+| `jm_th_*`    | SKIPPED (Phase H rejects) | — | —          | —                 |
+
+**Headlines**
+
+- JuMinuit MIGRAD reaches a **deeper minimum than iminuit** on this stiff
+  9-LEC fit — `fval = 404.15` vs `409.89` — at a comparable, slightly better
+  wall-time (~1.1× faster). **Both** report `is_valid = false`: the IAM
+  landscape is pathologically ill-conditioned and neither library's
+  cold-start fully converges (an even deeper ~325 basin is reachable only
+  with a more aggressive retry / `Strategy(2)`). This is a hard, honest
+  draw where JuMinuit edges ahead — **not** a clean speed showcase.
+  *(Historical note: a stale pre-0.3.0 run showed JuMinuit at the shallower
+  `613.5`; the Strategy(1)-default fix closed that gap.)*
+- iminuit hard-refuses MINOS / MNCONTOUR on an invalid `fmin`
+  (`RuntimeError("Function minimum is not valid")`); JuMinuit runs both to
+  completion. On this degenerate well its results are themselves marginal
+  (MINOS `≈ (-1.41, 1.41)`, an empty contour) — neither library produces a
+  trustworthy uncertainty here.
+- **Phase-H pre-flight catches the IAM thread-unsafety in milliseconds**:
+  `is_thread_safe(chi2_iam, paras0) == false` because `St4_00!` mutates a
+  module-level `const c_00_4` buffer, so all `jm_th_*` schemes are refused
+  before any work — the silent-wrong-answer guard demonstrated on a real fit.
+- The **AD path fails** here: the IAM source (`src/amplitudes.jl`, …) carries
+  `Float64` annotations that block ForwardDiff `Dual` propagation — a
+  limitation of the IAM code, not of JuMinuit.
 
 ## Methodology
 
-- **Wall-time**: 3 rounds (X3872: 5) + 1 warmup, take the median.
-  `GC.gc()` between rounds. `sleep(0.2–0.5 s)` between rounds.
-- **Cross-checks**: every stage compares all paths' results against
-  `jm_num` (the most-conservative reference). Mismatches are flagged
-  but do not abort the bench.
+- **Wall-time**: median of 3 rounds (X3872: 5) + 1 warmup; `GC.gc()` and a
+  short sleep between rounds.
+- **Cross-checks**: every stage compares all paths against `jm_num`
+  (the conservative reference); mismatches are flagged, not aborted.
 - **Phase H**: when `Threads.nthreads() > 1`, the bench probes
-  `is_thread_safe(cf, x0)` before launching threaded schemes.
-  Racey FCNs are refused upfront.
-- **FCN cost**: measured with `@benchmark` (`BenchmarkTools.jl`),
-  reported in the per-script header.
-
-## Closed follow-up work
-
-Both originally-flagged follow-ups were closed by a single PR:
-
-1. ✅ **MINOS early termination on tight wells** — X(3872) par[2] now
-   returns `(-0.00439, +0.00439)` instead of `(0, 0)`; IAM par1 returns
-   `(-0.000173, +0.000173)` instead of `(0, 0)`. Resolved by PR #6
-   (commit `a1fa015`): loosening the `_migrad_loop` seed-acceptance
-   gate to match C++ `BasicMinimumSeed::IsValid()` semantics (the C++
-   check only looks at the seed's own `fValid` flag, not state
-   validity), so a `MnHesseFailed`-status seed with structurally
-   valid params + gradient + diagonal V is no longer rejected.
-
-2. ✅ **IAM 9-LEC early-termination divergence** — at Strategy(2), IAM
-   MIGRAD now reaches **fval = 401.45** (was stuck at 613.49),
-   matching iminuit Strategy(0)'s **400.23** (same basin). At
-   Strategy(2), X(3872) drops from 1.30 to **0.017** (matches the
-   published [arXiv:2404.12003](https://arxiv.org/abs/2404.12003)
-   global minimum). Resolved by the same PR #6: dropping a C++
-   Minuit2 bug in `_hesse_diagonal_failure` — the second `eps2` clamp
-   on `1/g2` was inverting the truth (mapping `1/g2 = 1e-10`, i.e.
-   "very well determined", to `1.0`, i.e. "poorly determined"),
-   producing `V = I` whenever any parameter was FCN-flat. Verified
-   that iminuit Strategy(2) hits the same trap with the C++ formula,
-   so this is a real upstream bug that JuMinuit now fixes.
-
-Note: the default Strategy(1) IAM behavior is unchanged from the
-pre-PR-#6 numbers above (the fix is gated on the
-seed-time-MnHesse-bootstrap path that only Strategy(2) takes today —
-the `_migrad_loop` strategy-1 cold path doesn't go through MnHesse at
-the seed). The headline IAM 9-LEC fitter should now set
-`m.strategy = Strategy(2)` for the deeper minimum.
+  `is_thread_safe(cf, x0)` and refuses racey FCNs upfront.
+- **FCN cost**: measured with `BenchmarkTools.@benchmark`, reported in each
+  script's header.
