@@ -12,6 +12,8 @@ type: software
 authors:
   - family-names: Guo
     given-names: Feng-Kun
+    orcid: "https://orcid.org/0000-0002-2919-2064"
+    website: "https://inspirehep.net/authors/1027513"
 repository-code: "https://github.com/fkguo/JuMinuit.jl"
 url: "https://github.com/fkguo/JuMinuit.jl"
 license: LGPL-2.1-or-later

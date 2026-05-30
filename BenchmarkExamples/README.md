@@ -94,14 +94,21 @@ implements natively:
 - `simplex`, `scan`, `mncontour`, `profile`, `mnprofile`
 - `eigenvalues(m)`, `global_cc(m)`
 
-Not yet implemented (Monte-Carlo-based error analysis from contour.jl):
-- `get_contours`, `get_contours_all`, `contour_df`,
-  `get_contours_given_parameter`, `contour_df_given_parameter`,
-  `get_contours_samples`, `contour_df_samples`.
-- These rely on multiple constrained re-fits + DataFrame aggregation.
-  See the X3872 notebook for a hand-rolled version using
-  `MvNormal` sampling + `Mahalanobis-distance` filtering, which is
-  arguably more robust on non-quadratic posteriors.
+Error analysis — a from-scratch design, **implemented** (see the
+[error-analysis guide](../docs/src/error_analysis.md)):
+- **MC-Δχ² confidence regions** — `get_contours_samples` / `contour_df_samples`:
+  sample the **true** `Δχ² ≤ delta_chisq(cl, ndof)` region (the exact χ²
+  re-evaluated at every sample; over-coverage-aware via an inflation factor,
+  adaptive widening, and a covariance-free box proposal). This supersedes the
+  X3872 notebook's hand-rolled `MvNormal` + `Mahalanobis` sketch — Mahalanobis
+  is a *diagnostic*, not the acceptance cut (cutting on it merely reproduces the
+  HESSE ellipse).
+- **Bootstrap / jackknife** — `bootstrap`, `jackknife`: data-resampling errors
+  that don't trust the quoted `σ` (with full covariance + `correlation`).
+- **Multi-modal solution detection** — `find_solution_modes`: cluster the
+  accepted samples into statistically distinct solutions.
+- **Full contour parameter sets** — `contour_parameter_sets`: the native
+  analogue of IMinuit.jl's `get_contours`.
 
 ## What these examples drive
 

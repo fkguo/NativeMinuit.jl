@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# Copyright (C) 2026 fkguo and JuMinuit.jl contributors
+# Copyright (C) 2026 Feng-Kun Guo
 #
 # Derivative work of C++ Minuit2 (GooFit/Minuit2 @ v6.24.0); see LICENSE
 # and docs/UPSTREAM.md.

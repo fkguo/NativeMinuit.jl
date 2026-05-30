@@ -90,7 +90,7 @@ m.minos_errors  # asymmetric ±σ per parameter
 If you use JuMinuit.jl in a publication, please cite **both** JuMinuit.jl and
 the upstream Minuit algorithms it ports:
 
-> F.-K. Guo and contributors, *JuMinuit.jl: a native-Julia port of Minuit2*,
+> F.-K. Guo, *JuMinuit.jl: a native-Julia port of Minuit2*,
 > version 0.3.0, <https://github.com/fkguo/JuMinuit.jl> (2026). A
 > [`CITATION.cff`](https://github.com/fkguo/JuMinuit.jl/blob/main/CITATION.cff)
 > is provided (GitHub's "Cite this repository" → APA / BibTeX).
