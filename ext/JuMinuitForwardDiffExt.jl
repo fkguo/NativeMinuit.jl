@@ -77,4 +77,32 @@ function JuMinuit.CostFunctionAD(f, up::Real = 1.0;
                                              check_gradient = check_gradient)
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Precompile the AD gradient path end-to-end. With NO workload here the whole
+# ForwardDiff-backed flow (gradient factory, the analytical-gradient MIGRAD
+# branch, the CheckGradient seed validation, MINOS) cold-compiles on the user's
+# first AD fit. Runs when the extension is precompiled (Julia ≥1.10) — i.e. the
+# moment `using ForwardDiff` is loaded alongside JuMinuit. try/catch-wrapped so
+# a workload hiccup never breaks the extension's precompilation.
+# ─────────────────────────────────────────────────────────────────────────────
+using PrecompileTools
+
+PrecompileTools.@setup_workload begin
+    _wl_f = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
+    PrecompileTools.@compile_workload begin
+        try
+            # CostFunctionAD factory (this extension's own method) + MIGRAD.
+            _cf = JuMinuit.CostFunctionAD(_wl_f, 1.0)
+            JuMinuit.migrad(_cf, [0.0, 0.0], [0.1, 0.1])
+            # iminuit-style high-level entry: Minuit(f, x0; grad=AD) → MIGRAD/MINOS.
+            _g = x -> ForwardDiff.gradient(_wl_f, x)
+            _m = JuMinuit.Minuit(_wl_f, [0.0, 0.0]; grad = _g)
+            JuMinuit.migrad!(_m)
+            JuMinuit.minos!(_m, 1)
+        catch
+            # Don't fail precompile on transient issues
+        end
+    end
+end
+
 end # module JuMinuitForwardDiffExt

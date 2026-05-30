@@ -74,4 +74,24 @@ function JuMinuit._dbscan_labels(Z::Matrix{Float64}, radius::Float64,
     return out
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Precompile the DBSCAN backend on a tiny already-whitened matrix (two obvious
+# clusters), so the first `find_solution_modes(...; method=:dbscan)` after
+# `using Clustering` skips cold-compiling Clustering.dbscan + the label re-pack.
+# Cheap (a 2×6 matrix). try/catch-wrapped so a hiccup never breaks precompile.
+# ─────────────────────────────────────────────────────────────────────────────
+using PrecompileTools
+
+PrecompileTools.@setup_workload begin
+    _Z = [0.0 0.1 0.2 5.0 5.1 5.2;
+          0.0 0.1 0.0 5.0 4.9 5.1]
+    PrecompileTools.@compile_workload begin
+        try
+            JuMinuit._dbscan_labels(_Z, 1.0, 1, 1)
+        catch
+            # Don't fail precompile on transient issues
+        end
+    end
+end
+
 end # module JuMinuitClusteringExt
