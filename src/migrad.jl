@@ -131,7 +131,7 @@ end
 # corrupted gradients; MIGRAD then slides to a different local minimum
 # than the sequential run, SILENTLY giving a wrong answer.
 #
-# The IAM 2π form-factor fit (BenchmarkExamples/IAM_2Pformfactor/)
+# The inverse-amplitude-method (IAM) fit (BenchmarkExamples/IAM_2Pformfactor/)
 # exhibits this: `St4_00!` mutates `const c_00_4 = zeros(ComplexF64, 3, 3)`.
 # Single-thread converges to χ²≈614; threaded "converges" to χ²≈987.
 #

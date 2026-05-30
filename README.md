@@ -170,8 +170,8 @@ m = Minuit(my_chi2, x0; error = errs, threaded_gradient = true)
 migrad!(m)             # threading propagates through MINOS / contours too
 ```
 
-Speedup scales with FCN cost — e.g. a real IAM 2π form-factor fit (n=9,
-9.5 ms/call) reaches **~10× on `julia -t 8`**.
+Speedup scales with FCN cost — e.g. a real inverse-amplitude-method (IAM) fit
+(n=9, 9.5 ms/call) reaches **~10× on `julia -t 8`**.
 
 > **⚠ Thread-safety contract.** Your FCN must not share mutable state across
 > threads (module-level scratch buffers, RNG, file I/O). The classic HEP
