@@ -217,17 +217,21 @@ function dint2ext_value(p::Parameters, int_idx::Integer, int_val::Real)
 end
 
 """
-    int_to_ext_vector(p, int_vec) -> Vector{Float64}
+    int_to_ext_vector!(ext, p, int_vec) -> ext
 
-Map a free-parameter internal vector (length `n_free(p)`) to the full
-external vector (length `n_pars(p)`). Fixed-parameter entries take
-their static `pars[ext_idx].value`. Mirrors the C++
-`MnUserTransformation::operator()(const MnAlgebraicVector&)`.
+In-place form of [`int_to_ext_vector`](@ref): write the full external
+vector into the caller-supplied `ext` (length `n_pars(p)`) and return
+it. Lets hot-path callers — the MIGRAD internal→external FCN wrappers,
+invoked once per FCN evaluation — reuse a buffer instead of allocating
+a fresh `Vector` every call. The result is bit-identical to the
+allocating method.
 """
-function int_to_ext_vector(p::Parameters, int_vec::AbstractVector{<:Real})
+function int_to_ext_vector!(ext::AbstractVector{<:Real}, p::Parameters,
+                            int_vec::AbstractVector{<:Real})
     length(int_vec) == n_free(p) ||
         throw(DimensionMismatch("int_vec length $(length(int_vec)) != n_free $(n_free(p))"))
-    ext = Vector{Float64}(undef, n_pars(p))
+    length(ext) == n_pars(p) ||
+        throw(DimensionMismatch("ext length $(length(ext)) != n_pars $(n_pars(p))"))
     @inbounds for ext_idx in 1:n_pars(p)
         par = p.pars[ext_idx]
         if par.fixed
@@ -239,6 +243,20 @@ function int_to_ext_vector(p::Parameters, int_vec::AbstractVector{<:Real})
     end
     return ext
 end
+
+"""
+    int_to_ext_vector(p, int_vec) -> Vector{Float64}
+
+Map a free-parameter internal vector (length `n_free(p)`) to the full
+external vector (length `n_pars(p)`). Fixed-parameter entries take
+their static `pars[ext_idx].value`. Mirrors the C++
+`MnUserTransformation::operator()(const MnAlgebraicVector&)`.
+
+Allocates a fresh result; see [`int_to_ext_vector!`](@ref) for the
+in-place, buffer-reusing variant used on the per-FCN-call hot path.
+"""
+int_to_ext_vector(p::Parameters, int_vec::AbstractVector{<:Real}) =
+    int_to_ext_vector!(Vector{Float64}(undef, n_pars(p)), p, int_vec)
 
 """
     ext_to_int_vector(p, ext_vec) -> Vector{Float64}

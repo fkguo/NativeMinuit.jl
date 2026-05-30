@@ -128,6 +128,43 @@
         @test_throws DimensionMismatch ext_to_int_vector(P, [1.0])
     end
 
+    @testset "int_to_ext_vector! (in-place) matches allocating form" begin
+        # Mix every bound kind so the buffer-reusing hot-path variant is
+        # exercised across free / fixed / two-sided / lower-only /
+        # upper-only parameters.
+        pars = [
+            MinuitParameter("free", 1.0, 0.1),                            # ext 1, free
+            MinuitParameter("fix",  9.0, 0.1; fixed = true),              # ext 2, fixed
+            MinuitParameter("both", 0.5, 0.1; lower = -2.0, upper = 3.0), # ext 3, two-sided
+            MinuitParameter("lo",   4.0, 0.1; lower = 1.0),               # ext 4, lower-only
+            MinuitParameter("hi",  -4.0, 0.1; upper = 2.0),               # ext 5, upper-only
+        ]
+        P = Parameters(pars)
+        @test n_pars(P) == 5
+        @test n_free(P) == 4
+
+        for int_vec in ([0.3, 0.1, 1.7, -0.6], [-1.2, 2.0, 0.0, 3.3], zeros(4))
+            ref = int_to_ext_vector(P, int_vec)            # allocating reference
+            buf = fill(NaN, n_pars(P))
+            out = JuMinuit.int_to_ext_vector!(buf, P, int_vec)
+            @test out === buf                              # writes in place, returns buffer
+            @test out == ref                               # bit-identical to allocating form
+            @test out[2] == 9.0                            # fixed entry preserved
+        end
+
+        # ext-length guard (new in the in-place method) + int-length guard
+        @test_throws DimensionMismatch JuMinuit.int_to_ext_vector!(zeros(4), P, zeros(n_free(P)))
+        @test_throws DimensionMismatch JuMinuit.int_to_ext_vector!(zeros(n_pars(P)), P, [1.0])
+
+        # The in-place transform itself must allocate nothing after warm-up,
+        # otherwise the hot-path buffer reuse buys nothing.
+        _alloc_inplace(b, p, v) = @allocated JuMinuit.int_to_ext_vector!(b, p, v)
+        buf = Vector{Float64}(undef, n_pars(P))
+        iv = [0.3, 0.1, 1.7, -0.6]
+        _alloc_inplace(buf, P, iv)                         # compile
+        @test _alloc_inplace(buf, P, iv) == 0
+    end
+
     @testset "initial_int_values + initial_int_errors" begin
         # Mix of bounded, unbounded, fixed
         pars = [
