@@ -6,15 +6,18 @@ perspective.
 
 ## Why this fit is a good JuMinuit stress test
 
-- **~10–20 free parameters**: more than the toy benchmarks (≤10) yet
-  small enough to iterate quickly during JuMinuit optimization.
-- **Moderately expensive FCN**: each call runs `quadgk` integration
-  over the unitarity cut for multiple channels → tens of μs per
-  evaluation. Highlights JuMinuit's per-iteration overhead instead
-  of getting drowned out by FCN cost.
-- **Multi-channel coupling**: parameter correlations span ππ, KK̄,
-  πη amplitudes simultaneously. Tests MNCONTOUR on a covariance
-  with strong cross-block correlations.
+- **9 free parameters (8 NLO LECs + 1)**: comparable to the larger toy
+  benchmarks, but on a genuinely stiff physics landscape rather than a
+  synthetic quadratic — exercises JuMinuit on a realistic, ill-conditioned
+  Hessian.
+- **Expensive FCN (~9 ms/call)**: each call runs `quadgk` integration over
+  the unitarity cut for multiple channels. At ~9 ms the FCN dominates the
+  fit wall-time (as in most real fits), so this stresses JuMinuit's
+  convergence quality and iteration count on an ill-conditioned landscape
+  rather than raw per-iteration speed.
+- **Multi-wave coupling**: the fitted χ² combines three ππ partial waves
+  (I=0 S, I=1 P, I=2 S) through a shared set of LECs. Tests MNCONTOUR on a
+  covariance with strong cross-parameter correlations.
 - **IMinuit.jl-style call sites**: written against `Minuit(fcn,
   start; name=..., error=..., grad=...)` and `mncontour` / `mnprofile`
   — drop-in target for JuMinuit's compatibility layer.

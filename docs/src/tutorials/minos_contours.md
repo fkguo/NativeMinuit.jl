@@ -83,4 +83,5 @@ yerror from `errors(m)`) and pass through any `plot` kwargs.
 When parameters have bounds, `contour_exact` uses the same internal-
 coordinate MIGRAD-with-fixed machinery as `function_cross_multi`, then
 maps the profile points back to external coordinates via the bound
-transforms. The returned `xs`/`ys` are always in external (user) coords.
+transforms. The returned contour points (`c.points`) are always in external
+(user) coords.

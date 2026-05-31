@@ -37,7 +37,7 @@ y  = [2.1, 3.9, 6.2, 7.8, 10.1]
 cost = LeastSquares(x, y, σy, model; name = [:a, :b])
 m = Minuit(cost, [1.0, 0.0])           # up = 1 and the data count are read off the cost
 migrad!(m)
-m.values        # ≈ [2.0, 0.1]
+m.values        # ≈ [1.99, 0.05]
 ```
 
 `Minuit(cost, x0)` extracts `errordef` and the data count from the cost

@@ -273,8 +273,8 @@ site at compile time, whereas C++ Minuit2 pays for `shared_ptr` ref-counting and
 On actual HEP fits (vs `iminuit` via PyCall, `julia -t 8`):
 
 - **X(3872) dip line shape** (3 params, J/ψρ + DD̄* coupled channels) — JuMinuit
-  with AD gradients runs migrad+HESSE **1.5× faster than iminuit** (4.8 vs 7.3 ms)
-  and MINOS **2.2×** faster (73.5 vs 158.7 ms); the numerical path is ~1.2×
+  with AD gradients runs migrad+HESSE **1.6× faster than iminuit** (4.7 vs 7.4 ms)
+  and MINOS **2.1×** faster (72.8 vs 154.7 ms); the numerical path is ~1.2×
   faster too. All schemes reach the published `fval = 0.0174`.
 
 (The IAM 2π form-factor fit — the thread-safety example above — is a stiff,

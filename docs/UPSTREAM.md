@@ -21,7 +21,7 @@ cd Minuit2_cpp && git checkout 57dc936a2b74d0b4dda1254c3dd63e7c61a97c84
 
 The port pins to a specific upstream commit for two reasons:
 
-1. **Reproducible benchmarks.** Phase 0 exit gate compares Julia wall time to
+1. **Reproducible benchmarks.** The benchmark suite compares Julia wall time to
    the same C++ binary. Bumping upstream invalidates historical benchmarks.
 2. **Stable golden data.** Tests use C++-produced reference data (gradient,
    Hessian, MIGRAD iterations) as oracle. New upstream behavior would require
@@ -29,6 +29,6 @@ The port pins to a specific upstream commit for two reasons:
 
 Upstream bumps happen at major Julia version boundaries and require:
 
-1. A note in `docs/BENCHMARKS.md` showing pre-/post-bump deltas.
+1. A note recording pre-/post-bump benchmark deltas (see `BenchmarkExamples/RESULTS.md`).
 2. Regeneration of `test/golden/` artifacts.
 3. CI re-baseline.

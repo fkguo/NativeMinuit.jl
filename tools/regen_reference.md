@@ -3,15 +3,15 @@
 The JSON files under `test/reference_data/` are produced by
 `tools/cpp_trace_harness.cxx` running C++ Minuit2 MIGRAD on a fixed
 corpus of benchmark FCNs. JuMinuit's test suite loads these as the
-1e-10 numerical-equivalence oracle (Phase 0 §3.4 criterion 1).
+1e-10 numerical-equivalence oracle (the cross-platform parameter-value tolerance).
 
 ## When to regenerate
 
-- Upstream Minuit2 bump (ROADMAP § 9 / DR-002) — pin moves from
+- Upstream Minuit2 bump — pin moves from
   the current `57dc936` (v6.24.0) to a newer commit.
 - A benchmark case is added or modified in `tools/cpp_trace_harness.cxx`.
 - A platform/BLAS upgrade that exceeds the documented tolerance
-  hierarchy (see Risk #15 in ROADMAP).
+  hierarchy (see the tolerance hierarchy below).
 
 **Do not regenerate** for cosmetic reasons. The committed JSON is the
 contract; gratuitous regen invalidates the audit trail.
@@ -48,7 +48,7 @@ Run through this *before* `git add test/reference_data/*.json`:
       (if benchmarks didn't move) or a documented set of tolerance
       bumps in `test/test_migrad_*.jl`.
 
-## Tolerance hierarchy (ROADMAP Risk #15)
+## Tolerance hierarchy
 
 - **1e-10**: final parameter values, cross-platform.
 - **1e-6**: `inv_hessian` element-wise, same-platform.

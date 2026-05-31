@@ -18,7 +18,7 @@ scattering length `a22eff` is fixed from the published analysis). The
 model exhibits a *dip* in the cross-section near the DD̄*⁰ threshold
 for specific parameter regions, which serves as the discriminator.
 
-3–6 free parameters depending on the model variant:
+3 free parameters in the shipped benchmark (`model1`); the published notebook explores additional variants:
 - Effective coupling constants
 - Mass parameter (loosely centered at threshold)
 - Decay width parameter
@@ -28,9 +28,9 @@ for specific parameter regions, which serves as the discriminator.
 
 | Property | Value |
 |---|---|
-| n_free | 3–6 (depending on model variant) |
-| Data points | ~30 (`data.csv`) |
-| FCN cost | moderate — single complex amplitude eval per data point |
+| n_free | 3 (`model1`, the shipped benchmark) |
+| Data points | 4 (`data.csv`) |
+| FCN cost | ~38 µs/call (Gauss-convolved complex amplitude, 4 points) |
 | Covariance | strongly correlated (degeneracy along coupling combos) |
 | Posterior | non-Gaussian (banana-shape in some 2D projections) |
 

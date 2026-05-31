@@ -18,7 +18,7 @@ repository-code: "https://github.com/fkguo/JuMinuit.jl"
 url: "https://github.com/fkguo/JuMinuit.jl"
 license: LGPL-2.1-or-later
 version: 0.3.0
-date-released: "2026-05-30"
+date-released: "2026-05-31"
 keywords:
   - Julia
   - Minuit

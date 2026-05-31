@@ -50,12 +50,11 @@ is untouched. Status of the returned object:
 5. **Add `padd = 0.001·λ_max − λ_min`** to all diagonals of err, where
    λ_max here is `max(|λ_max|, 1)`. Mark `MnMadePosDef`.
 
-# Phase 0
+# Usage
 
-Used by `MnSeedGenerator` (via Phase-1 wiring) and by
-`VariableMetricBuilder` Strategy ≥ 1 (Phase 1). For Phase 0
-Strategy = 0 the seed doesn't always call this, but the algorithm
-must exist when seed.jl lands.
+Used by `MnSeedGenerator` and by `VariableMetricBuilder` at Strategy ≥ 1.
+At Strategy 0 the seed does not always call this, but the routine must
+exist for the seed path.
 """
 function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecision())
     M_in = parent(err.inv_hessian)

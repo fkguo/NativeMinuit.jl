@@ -15,6 +15,7 @@
 .idea/
 .vscode/
 *.swp
+.ipynb_checkpoints/
 
 # Local dev
 /.claude/
