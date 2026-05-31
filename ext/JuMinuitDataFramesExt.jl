@@ -103,4 +103,25 @@ function JuMinuit.contour_df_samples(m::JuMinuit.Minuit; kwargs...)
     return df
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Precompile the `Data(::DataFrame)` IMinuit.jl-compat constructor — the path
+# notebooks hit when they pass a DataFrame straight to a fit. A tiny 3-column
+# frame compiles the column-extraction + Data construction. The result→DataFrame
+# converters and `contour_df_samples` are left out on purpose: they would need a
+# full BootstrapResult / sampling run to exercise (not cheap). try/catch-wrapped.
+# ─────────────────────────────────────────────────────────────────────────────
+using PrecompileTools
+
+PrecompileTools.@setup_workload begin
+    PrecompileTools.@compile_workload begin
+        try
+            _df = DataFrame(x = [0.0, 1.0, 2.0], y = [1.0, 2.0, 3.0],
+                            e = [0.1, 0.1, 0.1])
+            JuMinuit.Data(_df)
+        catch
+            # Don't fail precompile on transient issues
+        end
+    end
+end
+
 end # module JuMinuitDataFramesExt
