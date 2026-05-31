@@ -166,6 +166,18 @@ scaling), not the raw error matrix.
 """
 sym_eigvals(S::Symmetric{Float64,Matrix{Float64}}) = eigvals(S)
 
+"""
+    sym_eigvals!(S) -> Vector{Float64}
+
+Like [`sym_eigvals`](@ref) but **destroys** `S` (the LAPACK driver
+overwrites `parent(S)`). Use only when `S` wraps caller-owned scratch
+that is not read after the call — e.g. the normalized-correlation
+matrix built inside [`make_posdef!`](@ref). Saves the input-matrix copy
+that the non-destructive `eigvals` makes (`eigvals(A) ≡ eigvals!(copy(A))`),
+so the returned eigenvalues are bit-identical to `sym_eigvals(S)`.
+"""
+sym_eigvals!(S::Symmetric{Float64,Matrix{Float64}}) = eigvals!(S)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Symmetric utilities used by the DFP update + EDM estimator
 # ─────────────────────────────────────────────────────────────────────────────

@@ -123,4 +123,55 @@
         @test (@inferred make_posdef(err)) isa MinimumError
         @test (@inferred is_posdef_enough(err)) isa Bool
     end
+
+    @testset "make_posdef! — bit-identical in-place variant" begin
+        # `make_posdef!` (hot path inside MnHesse) mutates the matrix in place
+        # and returns whether MnMadePosDef would apply. It MUST be bit-for-bit
+        # identical to the allocating `make_posdef` on every code path —
+        # otherwise the in-place hesse refactor would silently shift results.
+        upper(M) = [M[i, j] for j in 1:size(M, 1) for i in 1:j]
+        function parity(M::Matrix{Float64}; dcov = 0.3)
+            ref = make_posdef(MinimumError(Symmetric(copy(M), :U), dcov))
+            ref_made = is_made_pos_def(ref)
+            # default (self-allocated scratch)
+            M1 = copy(M); made1 = JuMinuit.make_posdef!(Symmetric(M1, :U))
+            # pooled scratch path
+            n = size(M, 1)
+            M2 = copy(M)
+            made2 = JuMinuit.make_posdef!(Symmetric(M2, :U);
+                                 p_buf = Matrix{Float64}(undef, n, n),
+                                 s_buf = Vector{Float64}(undef, n))
+            (ref = upper(parent(ref.inv_hessian)), ref_made = ref_made,
+             m1 = upper(M1), made1 = made1, m2 = upper(M2), made2 = made2)
+        end
+        cases = Dict(
+            "already-posdef" => Float64[4.0 1.0 0.0; 1.0 5.0 0.5; 0.0 0.5 6.0],
+            "negative-diag"  => Float64[-0.5 0.1; 0.1 2.0],
+            "indefinite"     => Float64[1.0 5.0; 5.0 1.0],
+            "n1-ok"          => fill(2.5, 1, 1),
+            "n1-clamp"       => fill(1e-20, 1, 1),
+        )
+        for (name, M) in cases
+            r = parity(M)
+            @test r.m1 == r.ref        # bit-identical matrix (self-scratch)
+            @test r.m2 == r.ref        # bit-identical matrix (pooled scratch)
+            @test r.made1 == r.ref_made
+            @test r.made2 == r.ref_made
+        end
+        # return value semantics + in-place mutation actually happened
+        Mneg = Float64[1.0 5.0; 5.0 1.0]
+        S = Symmetric(copy(Mneg), :U)
+        @test JuMinuit.make_posdef!(S) === true            # padd applied → MnMadePosDef
+        @test parent(S) != Mneg                   # mutated in place
+        Sok = Symmetric(Float64[4.0 1.0; 1.0 5.0], :U)
+        @test JuMinuit.make_posdef!(Sok) === false         # gate passed → not made-posdef
+        @test (@inferred JuMinuit.make_posdef!(Symmetric(Float64[2.0 0.0; 0.0 3.0], :U))) isa Bool
+
+        # caller-supplied scratch is size-validated before the @inbounds loop:
+        # an undersized buffer must raise, not silently corrupt the heap.
+        S3 = Symmetric(Float64[1.0 5.0; 5.0 1.0], :U)
+        @test_throws DimensionMismatch JuMinuit.make_posdef!(S3; p_buf = Matrix{Float64}(undef, 1, 1))
+        @test_throws DimensionMismatch JuMinuit.make_posdef!(S3; s_buf = Vector{Float64}(undef, 1))
+        @test parent(S3) == Float64[1.0 5.0; 5.0 1.0]   # untouched (threw pre-mutation)
+    end
 end

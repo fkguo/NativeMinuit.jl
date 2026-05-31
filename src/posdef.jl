@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    make_posdef!(err::MinimumError, prec=MachinePrecision()) -> MinimumError
+    make_posdef(err::MinimumError, prec=MachinePrecision()) -> MinimumError
 
 In-place: enforce positive-definiteness of `err.inv_hessian`. Mirrors
 `MnPosDef::operator()(const MinimumError&, ...)` from
@@ -146,6 +146,127 @@ function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecisio
     # edm·(1+3·dcovar) correction after the pos-def event (audit §11a). v1
     # passed the incoming err.dcovar, under-inflating the correction.
     return MinimumError(Symmetric(err_M, :U), 1.0, MnMadePosDef, true)
+end
+
+"""
+    make_posdef!(S::Symmetric{Float64,Matrix{Float64}}, prec=MachinePrecision();
+                 p_buf=nothing, s_buf=nothing) -> made_pos_def::Bool
+
+**In-place** variant of [`make_posdef`](@ref): enforces positive-
+definiteness by mutating `parent(S)` directly (the diagonal floor and
+the eigenvalue perturbation are written back into `S`'s own storage),
+and returns whether a perturbation/clamp was applied.
+
+Bit-identical to `make_posdef(MinimumError(S, dcov), prec)` on the
+resulting matrix, but allocation-light:
+- no `copy` of the input matrix (caller guarantees `S` is a transient
+  about to be overwritten — e.g. the `vhmat` Hessian inside `hesse`);
+- the normalized-correlation scratch (`p_buf`, `n×n`) and the
+  `1/√diag` scratch (`s_buf`, length-`n`) are reused if supplied,
+  else allocated once;
+- the eigenvalue gate uses [`sym_eigvals!`](@ref) on the owned `p_buf`,
+  skipping `eigvals`' internal input copy.
+
+Return value mirrors the status the allocating form would assign:
+`true` ⇔ `MnMadePosDef` — the eigenvalue-gate forcing term (`padd`) or the
+n=1 clamp was applied; `false` ⇔ `MnHesseValid` — the gate passed (the
+preliminary `dg` diagonal floor, applied before the gate, does NOT by itself
+set `true`), or n=1 was already `> eps` so `S` is left untouched. The caller
+owns the `dcovar`/`status` bookkeeping (see `hesse`).
+
+Only the `:U` (upper) triangle of `S` is read or written, matching the
+JuMinuit storage convention; the lower triangle of `p_buf` is never
+read, so a reused `p_buf` need not be zeroed.
+"""
+function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
+                      prec::MachinePrecision = MachinePrecision();
+                      p_buf::Union{Nothing,Matrix{Float64}} = nothing,
+                      s_buf::Union{Nothing,Vector{Float64}} = nothing)
+    M = parent(S)
+    n = LinearAlgebra.checksquare(M)
+
+    # Fail-closed precondition guards. `make_posdef!` mutates `M` and writes the
+    # correlation scratch through p_buf/s_buf under `@inbounds`; a layout, size,
+    # or aliasing violation would silently corrupt results (breaking the
+    # bit-identity HESSE relies on) rather than erroring. This is an internal
+    # primitive — its sole caller (hesse) satisfies all three — but the guards
+    # are cheap once-per-call insurance for any future buffer-pooling caller.
+    S.uplo == 'U' ||
+        throw(ArgumentError("make_posdef!: only the :U (upper) Symmetric layout is supported"))
+    if p_buf !== nothing
+        size(p_buf) == (n, n) ||
+            throw(DimensionMismatch("make_posdef!: p_buf size $(size(p_buf)) != ($n, $n)"))
+        Base.mightalias(p_buf, M) &&
+            throw(ArgumentError("make_posdef!: p_buf must not alias parent(S)"))
+    end
+    if s_buf !== nothing
+        length(s_buf) == n ||
+            throw(DimensionMismatch("make_posdef!: s_buf length $(length(s_buf)) != $n"))
+        Base.mightalias(s_buf, M) &&
+            throw(ArgumentError("make_posdef!: s_buf must not alias parent(S)"))
+    end
+
+    eps = prec.eps
+    eps2 = prec.eps2
+
+    # n=1 fast path (MnPosDef.cxx:37-43) — mutate in place.
+    if n == 1
+        if M[1, 1] < eps
+            M[1, 1] = 1.0          # clamp; C++ MnMadePosDef tag
+            return true
+        elseif M[1, 1] > eps
+            return false           # already valid (C++ MnPosDef.cxx:41); untouched
+        end
+        # M[1,1] == eps exactly: fall through to the general path (matches
+        # the allocating make_posdef, which forces valid+pos-def there).
+    end
+
+    # Diagonal floor (MnPosDef.cxx:46-65)
+    epspdf = max(1.0e-6, eps2)
+    dgmin = M[1, 1]
+    @inbounds for i in 1:n
+        if M[i, i] < dgmin
+            dgmin = M[i, i]
+        end
+    end
+
+    dg = 0.0
+    if dgmin <= 0
+        dg = 0.5 + epspdf - dgmin
+    end
+
+    # Normalized correlation matrix p and diagonal add (MnPosDef.cxx:67-77),
+    # written in place into M (diagonal) and the upper triangle of p_buf.
+    p_M = p_buf === nothing ? Matrix{Float64}(undef, n, n) : p_buf
+    s = s_buf === nothing ? Vector{Float64}(undef, n) : s_buf
+    @inbounds for i in 1:n
+        M[i, i] += dg
+        if M[i, i] < 0
+            M[i, i] = 1.0
+        end
+        s[i] = 1.0 / sqrt(M[i, i])
+        for j in 1:i
+            p_M[j, i] = M[j, i] * s[i] * s[j]
+        end
+    end
+    p_sym = Symmetric(p_M, :U)
+
+    # Eigenvalue gate (MnPosDef.cxx:80-86). `sym_eigvals!` destroys p_M
+    # (owned scratch) but yields eigenvalues bit-identical to `eigvals`.
+    eval_ = sym_eigvals!(p_sym)
+    pmin = eval_[1]
+    pmax = eval_[end]
+    pmax = max(abs(pmax), 1.0)
+    if pmin > epspdf * pmax
+        return false               # pos-def enough; M already carries dg
+    end
+
+    # Force pos-def: add (0.001·pmax − pmin) · diag (MnPosDef.cxx:88-91)
+    padd = 0.001 * pmax - pmin
+    @inbounds for i in 1:n
+        M[i, i] *= (1.0 + padd)
+    end
+    return true
 end
 
 """

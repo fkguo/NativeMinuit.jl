@@ -361,13 +361,23 @@ function hesse(
     # design choice perturbs H's diagonal which bounds V's eigenvalues
     # by `1/(λ_H + δ)` rather than perturbing V by `δ` directly — the
     # conservative choice for covariance reporting. Parallel-review #2 C6.
-    err_tmp = make_posdef(MinimumError(Symmetric(vhmat, :U), 1.0), prec)
-    vhmat_pd = copy(parent(err_tmp.inv_hessian))
+    # In-place pos-def enforcement: `vhmat` is a transient (its values are
+    # not read after this point except through the matrix `new_err` keeps),
+    # so `make_posdef!` perturbs it in place and reports whether the
+    # MnMadePosDef tag would apply — bit-identical to the allocating
+    # `make_posdef(MinimumError(Symmetric(vhmat,:U),1.))` it replaces, but
+    # without that call's input copy, p/s scratch, and result wrapper.
+    made_pd = make_posdef!(Symmetric(vhmat, :U), prec)
 
-    # ── Symmetric invert ──────────────────────────────────────────
+    # ── Symmetric invert (in place) ───────────────────────────────
+    # Invert `vhmat` in its own storage → it now holds V = H⁻¹. The
+    # pre-invert pos-def Hessian is not needed afterwards, which removes
+    # the previous `vhmat_pd = copy(...)` round-trip. On factorization
+    # failure the partial Bunch–Kaufman state in `vhmat` is discarded by
+    # the `_hesse_diagonal_failure` path (which rebuilds V from `g2`).
     inv_ok = true
     try
-        sym_invert!(Symmetric(vhmat_pd, :U))
+        sym_invert!(Symmetric(vhmat, :U))
     catch _
         inv_ok = false
     end
@@ -378,9 +388,9 @@ function hesse(
 
     # ── New EDM with the refined error ────────────────────────────
     refined_grad = FunctionGradient(grd, g2, gst)
-    new_err_status = is_made_pos_def(err_tmp) ? MnMadePosDef : MnHesseValid
-    new_dcov = is_made_pos_def(err_tmp) ? 1.0 : 0.0
-    new_err = MinimumError(Symmetric(vhmat_pd, :U), new_dcov, new_err_status, true)
+    new_err_status = made_pd ? MnMadePosDef : MnHesseValid
+    new_dcov = made_pd ? 1.0 : 0.0
+    new_err = MinimumError(Symmetric(vhmat, :U), new_dcov, new_err_status, true)
     # In-place EDM — reuse `yy` (already length n, contents no longer needed
     # after the off-diagonal pass completed above).
     new_edm = estimate_edm!(yy, refined_grad, new_err)
