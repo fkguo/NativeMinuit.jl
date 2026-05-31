@@ -14,9 +14,10 @@
 # MINOS, contour, Parameters, result construction) is cached once here — only
 # the thin FCN-calling wrappers recompile per user closure.
 #
-# Wrapped in a try/catch so workload failures during package precompilation
-# don't break installation. (Every call below is validated to run cleanly,
-# without warnings, so the catch never silently drops a path.)
+# Each path/section below is wrapped in its OWN try/catch so workload failures
+# during package precompilation (a) never break installation and (b) cannot let
+# one drifting path silently skip the others. (Every call is validated to run
+# cleanly, without warnings, so a catch never silently drops a path.)
 #
 # AD- and Optim-backed paths live in the package extensions, which carry their
 # own @compile_workload blocks (ext/JuMinuit*Ext.jl) — they precompile when the
@@ -77,7 +78,9 @@ PrecompileTools.@setup_workload begin
             to_dict(m_a)
             to_dict(m_b)
             to_dict(me_a)
+        catch; end
 
+        try
             # ── Path G: Julia-native cost-function family ──────────
             # construct → Minuit(cost, x0) → migrad! for each cost type.
             migrad!(Minuit(LeastSquares(_wl_x, _wl_y, _wl_ye, _wl_line), [1.0, 0.0]))
@@ -92,7 +95,9 @@ PrecompileTools.@setup_workload begin
             _lsa = LeastSquares(_wl_x, _wl_y, _wl_ye, _wl_line; name = [:a, :b])
             _lsb = LeastSquares(_wl_x, _wl_y, _wl_ye, _wl_line; name = [:a, :b])
             migrad!(Minuit(_lsa + _lsb, [1.0, 0.0]))
+        catch; end
 
+        try
             # ── Path H: iminuit-style algorithm wrappers ───────────
             mncontour(mw, 1, 2; numpoints = 6)
             profile(mw, 1; bins = 5)
@@ -101,7 +106,9 @@ PrecompileTools.@setup_workload begin
             _ms = Minuit(_wl_f, [0.0, 0.0]); migrad!(_ms)
             scan(_ms, 1; maxsteps = 5)
             simplex(Minuit(_wl_f, [0.0, 0.0]))
+        catch; end
 
+        try
             # ── Path I: error analysis (smallest settings) ─────────
             _data = Data(_wl_x, _wl_y, _wl_ye)
             bootstrap(_wl_line, _data, [1.0, 0.0]; nresample = 2, seed = 1)
@@ -110,7 +117,9 @@ PrecompileTools.@setup_workload begin
                                  seed = 1, warn = false)
             _S = [0.98 1.99; 1.02 2.01; 1.00 2.00; 0.99 2.02; 1.01 1.98; 1.00 1.99]
             find_solution_modes(_S, mw)
+        catch; end
 
+        try
             # ── Path J: result plot recipes (RecipesBase; Plots-agnostic) ──
             RecipesBase.apply_recipe(Dict{Symbol,Any}(), ce_a)
             RecipesBase.apply_recipe(Dict{Symbol,Any}(), me_a)
