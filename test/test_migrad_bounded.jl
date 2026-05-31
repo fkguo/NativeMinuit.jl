@@ -151,4 +151,50 @@
         @test occursin("FIXED", s)
         @test occursin("[-5.0, 5.0]", s)
     end
+
+    @testset "FCN wrapper reuses ext buffer (no per-call alloc)" begin
+        # Regression lock for the in-place int_to_ext_vector! hot-path
+        # change: the internal→external wrapper closures must not allocate
+        # a fresh ext vector on every FCN evaluation. Mix bound kinds so
+        # the buffered transform is exercised on a realistic Parameters.
+        params = Parameters([
+            MinuitParameter("x", 0.3, 0.1; lower = 0.0, upper = 1.0),  # bounded
+            MinuitParameter("y", 0.5, 0.1; fixed = true),              # fixed
+            MinuitParameter("z", 0.0, 0.1),                            # free
+            MinuitParameter("w", 2.0, 0.1; lower = -1.0),              # lower-only
+        ])
+        n_free_p = n_free(params)
+        int_vec = [0.2, -0.3, 1.1]            # length n_free (x, z, w)
+        @test length(int_vec) == n_free_p
+
+        # Function barriers so the measurement reflects the closure body,
+        # not dynamic-dispatch boxing of a non-const test binding.
+        _alloc(f, x) = @allocated f(x)
+        _alloc_vec(n) = @allocated Vector{Float64}(undef, n)
+
+        # Numerical-gradient path: plain CostFunction wrapper is fully
+        # zero-alloc once warmed up.
+        cf = CostFunction(x -> sum(abs2, x))
+        wrapped = JuMinuit._wrap_fcn_internal_to_external(cf, params).f
+        _alloc(wrapped, int_vec)              # warm up / compile
+        @test _alloc(wrapped, int_vec) == 0
+
+        # Analytic-gradient path. Use a non-allocating user gradient
+        # (writes into a captured scratch) so the only residual alloc in
+        # wrapped_g is its g_int result (intentionally out of scope here) —
+        # the ext-transform alloc is gone, so wrapped_g allocates at most a
+        # single n_free result vector, and wrapped_f is fully zero-alloc.
+        gscratch = zeros(n_pars(params))
+        cfg = CostFunctionWithGradient(
+            x -> sum(abs2, x),
+            let gscratch = gscratch
+                x -> (gscratch .= 2 .* x; gscratch)
+            end,
+        )
+        wcfg = JuMinuit._wrap_fcn_internal_to_external(cfg, params)
+        wf, wg = wcfg.f, wcfg.g
+        _alloc(wf, int_vec); _alloc(wg, int_vec); _alloc_vec(n_free_p)  # warm up
+        @test _alloc(wf, int_vec) == 0
+        @test _alloc(wg, int_vec) <= _alloc_vec(n_free_p)
+    end
 end
