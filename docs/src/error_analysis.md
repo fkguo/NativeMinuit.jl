@@ -399,6 +399,39 @@ JuMinuit's threaded gradient).
   sampled set*; it cannot prove that every basin was sampled. It is a diagnostic
   layer on top of MC-Δχ² sampling, not a global optimizer.
 
+## Visualizing the results
+
+Every error-analysis output above ships a [RecipesBase](https://github.com/JuliaPlots/RecipesBase.jl)
+recipe, so `plot(...)` works from either Plots.jl or Makie.jl with no extra glue
+(JuMinuit itself depends on neither). A parameter pair is chosen with `vars`
+(indices or names; default the first two free parameters) and a single parameter
+with `par`.
+
+```julia
+using JuMinuit, Plots
+
+# MC-Δχ² sample cloud — a 2D scatter of the accepted set, coloured by Δχ².
+r = get_contours_samples(m; nsamples = 20_000, cl = 1, seed = 1)
+plot(r)                          # first two free parameters
+plot(r; vars = ("mass", "g"))    # pick the pair by name
+
+# Bootstrap / jackknife — histogram of a parameter's resampled distribution
+# (estimate and percentile-CI / mean drawn as reference lines). Its asymmetry
+# about the estimate is exactly what a symmetric error bar cannot show.
+plot(bootstrap(model, data, m; nresample = 2000, seed = 1))   # first free parameter
+plot(jackknife(model, data, m); par = "k")
+
+# Multi-modal solutions — colour one series per mode, mark each representative.
+# Pass the same sample matrix used for clustering to scatter the point cloud:
+S = r.samples
+modes = find_solution_modes(S, m)
+plot(modes, S)                   # cluster cloud, one colour per mode
+plot(modes)                      # no samples → per-mode bounding boxes + reps
+```
+
+The recipes are backend-agnostic; pick a backend (`gr()`, `plotlyjs()`, …) as
+usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/plot_recipes.jl).
+
 ## A short decision guide
 
 1. **Default:** quote the **HESSE** error. If the fit is non-parabolic but valid,

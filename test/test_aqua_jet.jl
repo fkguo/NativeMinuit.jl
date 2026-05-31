@@ -13,10 +13,21 @@
 #   only covered one entry point; external dep maintenance).
 
 using Aqua
+using RecipesBase
 
 @testset "Aqua + type-stability (§3.4 Criterion 4)" begin
     @testset "Aqua quality checks" begin
-        Aqua.test_all(JuMinuit; ambiguities = false)
+        # `treat_as_own = [RecipesBase.apply_recipe]`: our `plot_recipes.jl`
+        # recipe for the `get_contours_samples` return — a Base `NamedTuple`
+        # (kept as the documented public return) — is an intentional, reviewed
+        # extension of `RecipesBase.apply_recipe`. Aqua's piracy heuristic
+        # exempts a Symbol *value* type-param (so `Val{:sym}` recipes pass) but
+        # not a `NamedTuple`'s tuple-of-symbols param, so it would otherwise
+        # flag this one recipe. The recipes on our own result types
+        # (BootstrapResult, JackknifeResult, SolutionModes/SolutionMode) are
+        # non-pirating and need no exemption.
+        Aqua.test_all(JuMinuit; ambiguities = false,
+                      piracies = (treat_as_own = [RecipesBase.apply_recipe],))
     end
 
     @testset "@inferred on public entry points" begin
