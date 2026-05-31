@@ -277,7 +277,7 @@ On actual HEP fits (vs `iminuit` via PyCall, `julia -t 8`):
   and MINOS **2.1×** faster (72.8 vs 154.7 ms); the numerical path is ~1.2×
   faster too. All schemes reach the published `fval = 0.0174`.
 
-(The IAM 2π form-factor fit — the thread-safety example above — is a stiff,
+(The IAM fit — the thread-safety example above — is a stiff,
 ill-conditioned amplitude fit whose convergence is seed-sensitive; it is
 documented in [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)
 rather than cited as a speed comparison.)
