@@ -334,36 +334,66 @@ RecipesBase.@recipe function f(modes::SolutionModes, samples::AbstractMatrix)
     np = length(pnames)
     ncol = size(samples, 2)
     fullwidth = ncol == np
-    i, j = _resolve_pair(vars, fullwidth ? pnames : String[])
-    (1 <= i <= ncol && 1 <= j <= ncol) ||
-        throw(ArgumentError("vars=$(vars) selects columns ($i,$j) outside samples width $ncol"))
-
-    xguide --> (fullwidth ? _name_or_idx(pnames, i) : "parameter $i")
-    yguide --> (fullwidth ? _name_or_idx(pnames, j) : "parameter $j")
     legend --> true
 
-    for (k, mode) in enumerate(modes)
-        rows = mode.member_indices
-        @series begin
-            seriestype := :scatter
-            seriescolor := k
-            markersize --> 2
-            markeralpha --> 0.35
-            markerstrokewidth --> 0
-            label := _mode_label(k)
-            view(samples, rows, i), view(samples, rows, j)
+    if ncol == 1
+        # One free parameter: no pair to scatter — lay each mode's 1-D cluster
+        # along x, separated vertically by mode index, with the representative
+        # (full width) or centroid (free width) starred.
+        xguide --> (fullwidth ? _name_or_idx(pnames, 1) : "parameter 1")
+        yguide --> "mode"
+        for (k, mode) in enumerate(modes)
+            rows = mode.member_indices
+            @series begin
+                seriestype := :scatter
+                seriescolor := k
+                markersize --> 2
+                markeralpha --> 0.35
+                markerstrokewidth --> 0
+                label := _mode_label(k)
+                view(samples, rows, 1), fill(float(k), length(rows))
+            end
+            rx = fullwidth ? mode.representative[1] : _centroid(samples, rows, 1)
+            @series begin
+                seriestype := :scatter
+                seriescolor := k
+                markershape := :star5
+                markersize --> 8
+                markerstrokewidth --> 1
+                label := ""
+                primary := false
+                [rx], [float(k)]
+            end
         end
-        rx = fullwidth ? mode.representative[i] : _centroid(samples, rows, i)
-        ry = fullwidth ? mode.representative[j] : _centroid(samples, rows, j)
-        @series begin
-            seriestype := :scatter
-            seriescolor := k
-            markershape := :star5
-            markersize --> 8
-            markerstrokewidth --> 1
-            label := ""
-            primary := false
-            [rx], [ry]
+    else
+        i, j = _resolve_pair(vars, fullwidth ? pnames : String[])
+        (1 <= i <= ncol && 1 <= j <= ncol) ||
+            throw(ArgumentError("vars=$(vars) selects columns ($i,$j) outside samples width $ncol"))
+        xguide --> (fullwidth ? _name_or_idx(pnames, i) : "parameter $i")
+        yguide --> (fullwidth ? _name_or_idx(pnames, j) : "parameter $j")
+        for (k, mode) in enumerate(modes)
+            rows = mode.member_indices
+            @series begin
+                seriestype := :scatter
+                seriescolor := k
+                markersize --> 2
+                markeralpha --> 0.35
+                markerstrokewidth --> 0
+                label := _mode_label(k)
+                view(samples, rows, i), view(samples, rows, j)
+            end
+            rx = fullwidth ? mode.representative[i] : _centroid(samples, rows, i)
+            ry = fullwidth ? mode.representative[j] : _centroid(samples, rows, j)
+            @series begin
+                seriestype := :scatter
+                seriescolor := k
+                markershape := :star5
+                markersize --> 8
+                markerstrokewidth --> 1
+                label := ""
+                primary := false
+                [rx], [ry]
+            end
         end
     end
     nothing
@@ -377,31 +407,57 @@ RecipesBase.@recipe function f(modes::SolutionModes)
     vars = pop!(plotattributes, :vars, (1, 2))
     pnames = modes.param_names
     np = length(pnames)
-    i, j = _resolve_pair(vars, pnames)
-    (1 <= i <= np && 1 <= j <= np) ||
-        throw(ArgumentError("vars=$(vars) out of range for $np parameters"))
-
-    xguide --> _name_or_idx(pnames, i)
-    yguide --> _name_or_idx(pnames, j)
     legend --> true
 
-    for (k, mode) in enumerate(modes)
-        @series begin
-            seriestype := :shape
-            seriescolor := k
-            fillalpha --> 0.15
-            linealpha --> 0.7
-            label := _mode_label(k)
-            _rect_xy(mode.param_ranges[i], mode.param_ranges[j])
+    if np == 1
+        # One parameter: draw each mode's 1-D range as a horizontal segment at
+        # y = mode index, with its representative starred.
+        xguide --> _name_or_idx(pnames, 1)
+        yguide --> "mode"
+        for (k, mode) in enumerate(modes)
+            lo, hi = mode.param_ranges[1]
+            @series begin
+                seriestype := :path
+                seriescolor := k
+                linewidth --> 6
+                linealpha --> 0.5
+                label := _mode_label(k)
+                [lo, hi], [float(k), float(k)]
+            end
+            @series begin
+                seriestype := :scatter
+                seriescolor := k
+                markershape := :star5
+                markersize --> 8
+                label := ""
+                primary := false
+                [mode.representative[1]], [float(k)]
+            end
         end
-        @series begin
-            seriestype := :scatter
-            seriescolor := k
-            markershape := :star5
-            markersize --> 8
-            label := ""
-            primary := false
-            [mode.representative[i]], [mode.representative[j]]
+    else
+        i, j = _resolve_pair(vars, pnames)
+        (1 <= i <= np && 1 <= j <= np) ||
+            throw(ArgumentError("vars=$(vars) out of range for $np parameters"))
+        xguide --> _name_or_idx(pnames, i)
+        yguide --> _name_or_idx(pnames, j)
+        for (k, mode) in enumerate(modes)
+            @series begin
+                seriestype := :shape
+                seriescolor := k
+                fillalpha --> 0.15
+                linealpha --> 0.7
+                label := _mode_label(k)
+                _rect_xy(mode.param_ranges[i], mode.param_ranges[j])
+            end
+            @series begin
+                seriestype := :scatter
+                seriescolor := k
+                markershape := :star5
+                markersize --> 8
+                label := ""
+                primary := false
+                [mode.representative[i]], [mode.representative[j]]
+            end
         end
     end
     nothing
@@ -412,25 +468,43 @@ end
 RecipesBase.@recipe function f(mode::SolutionMode)
     vars = pop!(plotattributes, :vars, (1, 2))
     nd = length(mode.representative)
-    i, j = _resolve_pair(vars, String[])
-    (1 <= i <= nd && 1 <= j <= nd) ||
-        throw(ArgumentError("vars=$(vars) out of range for $nd parameters"))
 
-    xguide --> "par[$i]"
-    yguide --> "par[$j]"
-
-    @series begin
-        seriestype := :shape
-        fillalpha --> 0.15
-        linealpha --> 0.7
-        label := _mode_label(mode.index)
-        _rect_xy(mode.param_ranges[i], mode.param_ranges[j])
+    if nd == 1
+        # One parameter: the mode's 1-D range as a horizontal segment at y=0,
+        # with its representative starred.
+        xguide --> "par[1]"
+        lo, hi = mode.param_ranges[1]
+        @series begin
+            seriestype := :path
+            linewidth --> 6
+            linealpha --> 0.5
+            label := _mode_label(mode.index)
+            [lo, hi], [0.0, 0.0]
+        end
+        seriestype := :scatter
+        markershape --> :star5
+        markersize --> 8
+        label := ""
+        primary := false
+        [mode.representative[1]], [0.0]
+    else
+        i, j = _resolve_pair(vars, String[])
+        (1 <= i <= nd && 1 <= j <= nd) ||
+            throw(ArgumentError("vars=$(vars) out of range for $nd parameters"))
+        xguide --> "par[$i]"
+        yguide --> "par[$j]"
+        @series begin
+            seriestype := :shape
+            fillalpha --> 0.15
+            linealpha --> 0.7
+            label := _mode_label(mode.index)
+            _rect_xy(mode.param_ranges[i], mode.param_ranges[j])
+        end
+        seriestype := :scatter
+        markershape --> :star5
+        markersize --> 8
+        label := ""
+        primary := false
+        [mode.representative[i]], [mode.representative[j]]
     end
-
-    seriestype := :scatter
-    markershape --> :star5
-    markersize --> 8
-    label := ""
-    primary := false
-    [mode.representative[i]], [mode.representative[j]]
 end

@@ -311,4 +311,45 @@ end
         cx = sum(view(Sfree, modes[1].member_indices, 1)) / modes[1].n_points
         @test stars[1].args[1][1] ≈ cx
     end
+
+    @testset "SolutionModes → 1-free-parameter degradation" begin
+        # A 1-free-parameter fit yields width-1 samples; find_solution_modes
+        # accepts them (ncol == ndim == 1), so the modes recipes must degrade to
+        # a 1-D layout rather than erroring on a missing 2nd column (a crash the
+        # default vars=(1,2) would otherwise cause).
+        f1(x) = (x[1] - 1.0)^2
+        m = Minuit(f1, [0.0]; names = ["a"], error = [0.1])
+        migrad!(m)
+        S = reshape(vcat(fill(1.0, 50), fill(5.0, 50)) .+ 0.01 .* sin.(1:100), 100, 1)
+        @test size(S, 2) == 1                          # single free parameter
+        modes = find_solution_modes(S, m)
+        @test length(modes) >= 1
+        nm = length(modes)
+
+        # with samples: 1-D clusters along x, separated on y by mode index.
+        recs  = RecipesBase.apply_recipe(Dict{Symbol,Any}(), modes, S)
+        @test length(recs) == 2 * nm                   # per mode: cluster scatter + rep star
+        scs   = filter(rd -> get(rd.plotattributes, :markershape, nothing) !== :star5, recs)
+        stars = filter(rd -> get(rd.plotattributes, :markershape, nothing) === :star5, recs)
+        @test length(scs) == nm && length(stars) == nm
+        @test scs[1].args[1] == view(S, modes[1].member_indices, 1)
+        @test all(==(1.0), scs[1].args[2])             # mode 1 drawn at y = 1
+        @test scs[1].plotattributes[:yguide] == "mode"
+        @test stars[1].args == ([modes[1].representative[1]], [1.0])
+
+        # modes alone: 1-D range segments at y = mode index + rep stars.
+        only_m = RecipesBase.apply_recipe(Dict{Symbol,Any}(), modes)
+        @test length(only_m) == 2 * nm
+        segs = filter(rd -> get(rd.plotattributes, :seriestype, nothing) === :path, only_m)
+        @test length(segs) == nm
+        lo, hi = modes[1].param_ranges[1]
+        @test segs[1].args == ([lo, hi], [1.0, 1.0])
+
+        # single SolutionMode: 1-D range segment at y = 0 + rep star.
+        sm  = RecipesBase.apply_recipe(Dict{Symbol,Any}(), modes[1])
+        seg = sm[findfirst(rd -> get(rd.plotattributes, :seriestype, nothing) === :path, sm)]
+        @test seg.args[2] == [0.0, 0.0]
+        star = sm[findfirst(rd -> get(rd.plotattributes, :markershape, nothing) === :star5, sm)]
+        @test star.args == ([modes[1].representative[1]], [0.0])
+    end
 end
