@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    make_posdef!(err::MinimumError, prec=MachinePrecision()) -> MinimumError
+    make_posdef(err::MinimumError, prec=MachinePrecision()) -> MinimumError
 
 In-place: enforce positive-definiteness of `err.inv_hessian`. Mirrors
 `MnPosDef::operator()(const MinimumError&, ...)` from
@@ -183,6 +183,15 @@ function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
                       s_buf::Union{Nothing,Vector{Float64}} = nothing)
     M = parent(S)
     n = LinearAlgebra.checksquare(M)
+
+    # Validate caller-supplied scratch up front: the correlation loop writes
+    # p_buf/s_buf under `@inbounds`, so an undersized buffer would be silent
+    # heap corruption rather than a BoundsError. Cheap (once per call), and
+    # make_posdef! is exported, so external callers can supply buffers too.
+    p_buf === nothing || size(p_buf) == (n, n) ||
+        throw(DimensionMismatch("make_posdef!: p_buf size $(size(p_buf)) != ($n, $n)"))
+    s_buf === nothing || length(s_buf) == n ||
+        throw(DimensionMismatch("make_posdef!: s_buf length $(length(s_buf)) != $n"))
 
     eps = prec.eps
     eps2 = prec.eps2

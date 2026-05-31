@@ -166,5 +166,12 @@
         Sok = Symmetric(Float64[4.0 1.0; 1.0 5.0], :U)
         @test make_posdef!(Sok) === false         # gate passed → not made-posdef
         @test (@inferred make_posdef!(Symmetric(Float64[2.0 0.0; 0.0 3.0], :U))) isa Bool
+
+        # caller-supplied scratch is size-validated before the @inbounds loop:
+        # an undersized buffer must raise, not silently corrupt the heap.
+        S3 = Symmetric(Float64[1.0 5.0; 5.0 1.0], :U)
+        @test_throws DimensionMismatch make_posdef!(S3; p_buf = Matrix{Float64}(undef, 1, 1))
+        @test_throws DimensionMismatch make_posdef!(S3; s_buf = Vector{Float64}(undef, 1))
+        @test parent(S3) == Float64[1.0 5.0; 5.0 1.0]   # untouched (threw pre-mutation)
     end
 end
