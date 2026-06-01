@@ -65,46 +65,51 @@ not a successful contour. Not a meaningful comparison for this fit.
 an earlier JuMinuit `(0, 0)` edge case in `function_cross` for this tight
 well has been resolved.)
 
-## IAM 2π form-factor — 9 LECs, FCN ~ 9 ms/call, 85 data points
+## IAM ππ phase-shift fit — paper-faithful 7 free LECs (L6 fixed)
 
-| scheme       | migrad+hesse | fval        | minos (par 1) | mncontour (8 pts) |
-|--------------|-------------:|------------:|--------------:|------------------:|
-| `jm_num`     | **17.78 s**  | **404.15**  | 20.61 s       | 27.57 s           |
-| `iminuit`    | 18.52 s      | 409.89      | REFUSED       | REFUSED           |
-| `jm_ad`      | FAILED       | —           | —             | —                 |
-| `jm_th_*`    | SKIPPED (Phase H rejects) | — | —          | —                 |
+> Free LECs **L1, L2, L3, L4, L5, L7, L8** (7); **L6 fixed** = 0.07×10⁻³ — in
+> ππ/Kπ/KK̄ only `2L6+L8` enters, so the paper
+> ([arXiv:2011.00921](https://arxiv.org/abs/2011.00921)) fixes L6; the πη
+> normalization `c` is **not** a ππ-fit parameter and is dropped (it was the
+> vestigial flat 9th param). FCN ~9 ms/call, ππ I=0/1/2 phase shifts. This is a
+> deliberately **ill-conditioned stress-test**: the IAM unitarization is nonlinear
+> with resonance poles, so the χ² surface is multi-basin (`gvg ≤ 0` DFP warnings =
+> non-positive curvature) — *not* a clean fval/speed showcase. (The paper's actual
+> fit — global multi-channel data + error inflation — is well-behaved; this strips
+> it to ππ-only with a generic seed.)
+
+**Cold-start MIGRAD `fval`** (same seed; lower = deeper; reproduce with
+[`iam_strategy_sweep.jl`](IAM_2Pformfactor/iam_strategy_sweep.jl); iminuit 2.18.0):
+
+| `Strategy`    | JuMinuit (1-shot / +retry) | iminuit (1-shot / +retry) |
+|---------------|---------------------------:|--------------------------:|
+| 0             | 358.78 ✓ / 358.78 ✓        | 350.09 ✗ / 350.09 ✗       |
+| 1 *(default)* | 502.24 ✗ / **360.10 ✓**    | 456.53 ✗ / 456.53 ✗       |
+| 2             | 337.66 ✗ / 337.66 ✗        | 376.76 ✗ / 376.76 ✗       |
+
+✓/✗ = MIGRAD valid/invalid. Default-config wall-time (S=1 + retry, migrad+hesse,
+min of 3): **JuMinuit 16.2 s → 360.10 (valid)**; iminuit 10.7 s → 456.53 (invalid —
+it gives up earlier). `jm_ad` still FAILS (IAM source non-generic) and `jm_th_*` is
+SKIPPED (Phase-H rejects the thread-unsafe FCN).
 
 **Headlines**
 
-- **JuMinuit reaches a deeper minimum than iminuit at every matched strategy** on
-  this pathologically ill-conditioned 9-LEC fit, at ≈ equal wall-time (17.78 vs
-  18.52 s; ~1.04×). Cold-start MIGRAD `fval`, same seed (lower = deeper; reproduce
-  with [`iam_strategy_sweep.jl`](IAM_2Pformfactor/iam_strategy_sweep.jl); current
-  code, iminuit 2.18.0):
-
-  | `Strategy`    | JuMinuit (1-shot / +retry) | iminuit (1-shot / +retry) |
-  |---------------|---------------------------:|--------------------------:|
-  | 0             | 402.81 / **361.12** ✓      | 476.15 / 400.23 ✓         |
-  | 1 *(default)* | 525.57 / 404.15 ✓          | 614.95 / 409.89 ✓         |
-  | 2             | 1268.65 (stalls) †         | 1268.65 (stalls) †        |
-
-  ✓ = MIGRAD converged. The default (S=1 + each library's default retry,
-  `iterate=5`) gives the **404.15 vs 409.89** headline of the `migrad+hesse` table
-  above — HESSE then flags the covariance singular on this degenerate well, so the
-  benchmark's *post-HESSE* `is_valid` is `false` for both. With retry, S=0 goes
-  deeper still (361 vs 404); single-shot (`iterate=1`) is shallower and a *higher*
-  strategy is *worse*. † **Strategy 2 stalls at the cold seed (χ²≈1268.65) for both
-  libraries**: the FCN uses only `pars[1:8]` but the fit has 9 free parameters, so
-  the unused/flat 9th makes the start-up Hessian singular (it also drives the
-  post-HESSE `is_valid=false`). The pre-0.3.0 "gap" was simply JuMinuit then
-  *defaulting* to `Strategy(0)` while iminuit defaults to `Strategy(1)`; both now
-  default to 1 (see
-  [`docs/dev/IAM_CONVERGENCE_GAP.md`](../docs/dev/IAM_CONVERGENCE_GAP.md)).
-- iminuit hard-refuses MINOS / MNCONTOUR on an invalid `fmin`
-  (`RuntimeError("Function minimum is not valid")`); JuMinuit runs both to
-  completion. On this degenerate well its results are themselves marginal
-  (MINOS `≈ (-1.41, 1.41)`, an empty contour) — neither library produces a
-  trustworthy uncertainty here.
+- **JuMinuit and iminuit are the *same* optimizer numerically.** Seeded near any
+  minimum (locally well-conditioned), they converge to the same point to **~10⁻⁹**
+  ([`iam_localmin_check.jl`](IAM_2Pformfactor/iam_localmin_check.jl)); a +0.5σ nudge
+  drops *both* into a deeper shared basin at **≈322**. So the cold-start splits in
+  the table above are **not** a fidelity difference — on this multi-basin surface a
+  far-enough start lets ULP-level Julia-vs-C++ arithmetic decide which basin (a
+  butterfly effect). The C++ oracle tests and the M2 fit show the same: identical
+  minima whenever the surface is well-conditioned.
+- **On a cold start JuMinuit is the more robust here**: it reaches a *valid* minimum
+  at S=0 and at its default S=1 (360.10), while iminuit fails to validate at *any*
+  strategy and — being invalid — hard-refuses MINOS/MNCONTOUR. That is path-luck on
+  a chaotic surface, not a systematic edge (in the over-parameterized 9-free variant
+  the luck ran the other way). On this degenerate well neither library's
+  uncertainties are trustworthy regardless. The Strategy-2 *stall* seen with the old
+  9-free setup is gone — that was the vestigial flat parameter; see
+  [`docs/dev/IAM_CONVERGENCE_GAP.md`](../docs/dev/IAM_CONVERGENCE_GAP.md).
 - **Phase-H pre-flight catches the IAM thread-unsafety in milliseconds**:
   `is_thread_safe(chi2_iam, paras0) == false` because `St4_00!` mutates a
   module-level `const c_00_4` buffer, so all `jm_th_*` schemes are refused

@@ -14,34 +14,36 @@
 > for the authoritative current numbers; the analysis below is kept as the
 > investigation record.
 
-## Authoritative current-code sweep (2026-06-01)
+## Authoritative current-code sweep (2026-06-01, paper-faithful 7-free)
 
-Fresh full sweep on current `main`
+The benchmark was switched to the **paper-faithful 7-free** setup (free
+L1,L2,L3,L4,L5,L7,L8; **L6 fixed**; πη `c` dropped — arXiv:2011.00921; see
+`RESULTS.md`). The old 9-free setup (8 LECs + the vestigial flat `c`) was
+over-parameterized: the exactly-flat 9th made Strategy 2's start-up Hessian
+singular → **S=2 stalled at the seed**. With 7-free that stall is gone. Sweep
 ([`iam_strategy_sweep.jl`](../../BenchmarkExamples/IAM_2Pformfactor/iam_strategy_sweep.jl);
-iminuit 2.18.0; same FCN/seed). **These supersede every per-config fval below**
-(which are from the 2026-05-29 investigation). χ²(seed) = 1268.65.
+iminuit 2.18.0; cold seed; 1-shot / +retry):
 
-| `Strategy`    | JuMinuit 1-shot | iminuit 1-shot | JuMinuit +retry | iminuit +retry |
-|---------------|----------------:|---------------:|----------------:|---------------:|
-| 0             | 402.81 (inv)    | 476.15 (inv)   | **361.12** ✓    | 400.23 ✓       |
-| 1 *(default)* | 525.57 (inv)    | 614.95 (inv)   | 404.15 ✓        | 409.89 ✓       |
-| 2             | 1268.65 †       | 1268.65 †      | 1268.65 †       | 1268.65 †      |
+| `Strategy`    | JuMinuit (1-shot / +retry) | iminuit (1-shot / +retry) |
+|---------------|---------------------------:|--------------------------:|
+| 0             | 358.78 ✓ / 358.78 ✓        | 350.09 ✗ / 350.09 ✗       |
+| 1 *(default)* | 502.24 ✗ / 360.10 ✓        | 456.53 ✗ / 456.53 ✗       |
+| 2             | 337.66 ✗ / 337.66 ✗        | 376.76 ✗ / 376.76 ✗       |
 
-✓ = MIGRAD converged (`is_valid`, pre-HESSE). 1-shot = `iterate=1`; +retry =
-default `iterate=5`. Findings:
+✓/✗ = MIGRAD valid/invalid. **These supersede every per-config fval below** (the
+2026-05-29 9-free / over-parameterized figures — 404/409/613/325/330 — are stale).
 
-- **JuMinuit reaches a deeper minimum than iminuit at every matched (strategy,
-  retry) setting.** Default S=1 +retry → 404.15 vs 409.89 (matches `RESULTS.md`);
-  S=0 +retry goes deeper still (361.12 vs 400.23).
-- † **Strategy 2 stalls at the seed for both libraries** — the FCN uses only
-  `pars[1:8]` but the fit floats 9 params, so the unused/flat 9th makes the
-  start-up MnHesse Hessian singular (this also gives the benchmark's post-HESSE
-  `is_valid=false`).
-- Single-shot is shallower and a *higher* strategy is *worse*; the retry is what
-  rescues convergence at S=0/S=1.
-- iminuit's 1-shot fvals (476.15 / 614.95) are **unchanged** from the 2026-05-29
-  table below (stable C++ Minuit2); JuMinuit's shifted as its code evolved — which
-  is why the old `330.75` / `613` / `325` JuMinuit figures are stale.
+**The two libraries are the SAME optimizer**
+([`iam_localmin_check.jl`](../../BenchmarkExamples/IAM_2Pformfactor/iam_localmin_check.jl)):
+seeded near a minimum they agree to **max|Δparam| ≈ 1.4e-9** (Δfval 1.6e-6); a +0.5σ
+nudge drops both into a deeper shared basin at **≈322**; only a +2σ kick splits them
+into different basins. So the cold-start fval splits above are **pure multi-basin
+path-sensitivity** (ULP-level Julia-vs-C++ arithmetic decides the basin), not a
+fidelity difference — consistent with the C++ oracle tests and the M2 fit. On the
+cold start JuMinuit is the more robust here (it validates at S=0/S=1; iminuit at no
+strategy), but that is path-luck on a chaotic, intrinsically multi-basin / ill-
+conditioned surface (`gvg ≤ 0` = non-positive curvature). The analysis below is the
+2026-05-29 investigation record.
 
 ## Symptom (as reported)
 
