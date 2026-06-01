@@ -61,8 +61,8 @@ include(joinpath(IAM_DIR, "src", "unitarity_modification.jl"))
 include(joinpath(IAM_DIR, "src", "phaseshifts.jl"))
 
 const lecr0 = [0.56e-3, 1.21e-3, -2.79e-3, -0.36e-3, 1.4e-3, 0.07e-3, -0.44e-3, 0.78e-3]
-const paras0 = [lecr0..., 1e-4]
-println("\nIAM setup loaded. n_pars = $(length(paras0))")
+const paras0 = collect(lecr0)   # 8 LECs; πη normalization c dropped (paper-faithful, arXiv:2011.00921)
+println("\nIAM setup loaded. n_pars = $(length(paras0))  (L6 fixed in each build → 7 free)")
 
 data_GKPRY_ππ00_df = DataFrame(CSV.File("./datajl/pipi/pipi00_Roy-GKPY_PRD83_074004.dat",
     header = [:w, :δ, :err], delim=' ', ignorerepeated=true))
@@ -98,7 +98,7 @@ println("\nχ²(par0) = ", chi2_iam(paras0))
 b0 = @benchmark chi2_iam($paras0) samples=10 evals=1
 println("FCN per call: ", round(median(b0).time/1e6; digits=2), " ms (allocs=", b0.allocs, ")")
 
-const errs0 = fill(1e-6, 9)
+const errs0 = fill(1e-6, 8)
 
 # ─────────────────────────────────────────────────────────────────────
 function time_runs(factory; n_rounds=3, warmup=true)
@@ -138,6 +138,7 @@ fits = Dict{String, Any}()
 # (a) JuMinuit numerical sequential
 function build_jm_num()
     m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0)
+    JuMinuit.fix!(m, 6)            # L6 fixed (2L6+L8 degeneracy; paper)
     JuMinuit.migrad!(m)
     JuMinuit.hesse(m)
     return m
@@ -152,6 +153,7 @@ println("│  jm_num     migrad+hesse: med=", fmt_ms(r.med),
 # (b) IMinuit
 function build_iminuit()
     m = IMinuit.Minuit(chi2_iam, paras0; error=errs0)
+    m.fixed["x5"] = true          # L6 fixed (0-based index 5; matches JuMinuit fix!(m,6))
     IMinuit.migrad(m)
     IMinuit.hesse(m)
     return m
