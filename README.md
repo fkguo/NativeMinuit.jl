@@ -277,15 +277,16 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   and MINOS **2.1×** faster (72.8 vs 154.7 ms); the numerical path is ~1.2×
   faster too. All schemes reach the published `fval = 0.0174`.
 - **Large coupled-channel amplitude fit** — 57 free parameters, from an
-  independent unpublished analysis; single-threaded, with a heavy ~1 s/call FCN.
-  Dropping JuMinuit in for the iminuit/PyCall backend reaches the **same
-  minimum** (Δχ² ≈ 2×10⁻⁵; 55 of 57 free parameters agree to <1%, the other two
+  independent unpublished analysis (single-threaded; a heavy multi-second-per-call
+  FCN). JuMinuit reaches the **same minimum** as the iminuit/PyCall backend
+  (Δχ² ≈ 2×10⁻⁵; 55 of 57 free parameters agree to <1%, the other two
   weakly-constrained flat directions) in essentially the **same number of MIGRAD
-  evaluations** (within 2%). At this scale JuMinuit is **~1.5× slower** in wall
-  time (237 vs 154 min): the minimizer keeps pace (equal evaluation count), but
-  each evaluation of this allocation-heavy FCN costs more on the native-Julia
-  path, so the cheap-FCN call-site advantage above does not carry over — a
-  non-allocating, in-place FCN would likely close most of the gap.
+  evaluations** (within 2%), at **comparable per-evaluation cost**: at this FCN
+  weight the wall time is almost entirely the user function (a controlled
+  re-measurement puts the PyCall round-trip at <0.01% of a call and GC at ~0%,
+  the two backends allocating within 0.1% of each other), so neither has a
+  structural per-eval edge. The takeaway for heavy fits: the optimizer is not the
+  bottleneck — the FCN is.
 
 (The IAM fit — the thread-safety example above — is a stiff,
 ill-conditioned amplitude fit whose convergence is seed-sensitive; it is
