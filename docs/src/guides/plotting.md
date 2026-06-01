@@ -183,8 +183,12 @@ A second method renders a single [`MinosError`](@ref) as inline math
 (`\num{value}^{+hi}_{-lo}`, no surrounding `$…$`) for dropping into running text:
 
 ```julia
-to_latex(minos(m, 1))            # e.g. "\\num{1.23}^{+0.05}_{-0.04}"
+minos!(m, 1)                     # run MINOS so the asymmetric error exists
+to_latex(m.merrors["a"])         # a MinosError → e.g. "\\num{1.23}^{+0.05}_{-0.04}"
 ```
+
+(`minos(m, 1)` / `minos!(m, 1)` return the mutated `Minuit`, not a `MinosError`
+— fetch the error from `m.merrors[name]` or `m.minos_errors[index]`.)
 
 ### ASCII plot — `mn_plot_text`
 
