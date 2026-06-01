@@ -280,10 +280,10 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   FCN). The FCN is the **same Julia code** for both backends, so it cancels from
   the comparison — only the optimizer differs. By the metric that reflects that,
   JuMinuit lands on the **same minimum** (Δχ² ≈ 2×10⁻⁵; 55 of 57 free parameters
-  agree to <1%, the rest weakly-constrained flat directions) in the **same number
-  of MIGRAD evaluations** (7562 vs 7446, within 2%): its MIGRAD is as
-  call-efficient as C++ Minuit2's, which is what matters when each evaluation is
-  expensive. Wall time is then just `nfcn × (shared FCN cost)` — the optimizer's
+  agree to <1%, the rest weakly-constrained flat directions) in **nearly the same
+  number of MIGRAD evaluations** (7562 vs 7446 — a 1.6% difference): its MIGRAD is
+  about as call-efficient as C++ Minuit2's, which is what matters when each
+  evaluation is expensive. Wall time is then just `nfcn × (shared FCN cost)` — the optimizer's
   own per-call overhead is negligible against a multi-second FCN, so here the FCN,
   not the optimizer, sets the clock. (The cheap-FCN benchmarks above are where
   that optimizer overhead — and JuMinuit's call-site advantage — actually shows.)
