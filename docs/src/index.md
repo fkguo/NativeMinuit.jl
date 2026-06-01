@@ -12,7 +12,7 @@ the same lead author) in turn wraps `iminuit` through PyCall — so it carries b
 a Python and a C++ dependency. **JuMinuit.jl is a clean-room Julia port** of the
 same algorithms, with **no C++ or Python dependency and no PyCall / FFI** — plus
 full access to Julia tooling (ForwardDiff, threads, broadcasted FCN evaluation).
-On the benchmark corpus it runs in the **0.13–0.89× C++ wall-time** range, i.e.
+On the benchmark corpus it runs in the **0.15–0.89× C++ wall-time** range, i.e.
 comparable to or faster than C++ Minuit2 — see
 [`benchmark/`](https://github.com/fkguo/JuMinuit.jl/tree/main/benchmark).
 

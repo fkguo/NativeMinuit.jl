@@ -96,7 +96,7 @@ available. Other iminuit aliases are present too: `m.is_valid`, `m.ncalls`,
 IMinuit.jl's small functional accessors are exported unchanged:
 [`args`](@ref)`(m)` (a `Vector{Float64}` of the current values, `≡ m.values`)
 and [`matrix`](@ref)`(m; correlation=false)` (the covariance or correlation
-matrix). [`reset`](@ref)`(m)` drops cached MIGRAD/MINOS results and
+matrix). `reset(m)` drops cached MIGRAD/MINOS results and
 [`set_precision`](@ref)`(m, p)` overrides the machine precision.
 
 ## Contours and profiles: `m.mncontour(a,b)` → `mncontour(m, a, b)`

@@ -76,11 +76,10 @@ plot(ce; xlabel = "a", ylabel = "b", title = "1σ contour")
 
 # ## 6. Strategy
 #
-# `Strategy(1)` is the default for numerical FCNs (matching iminuit's
-# `Minuit`-class default) and runs an inner-HESSE refinement for a tighter
-# covariance. `Strategy(0)` is faster/looser — and the default when a
-# `grad=` is supplied, since the AD seed implements level 0 only.
-# `Strategy(2)` adds a seed-time MnHesse bootstrap.
+# `Strategy(1)` is the default (matching iminuit's `Minuit`-class default) for
+# BOTH numerical and analytical/AD (`grad=`) FCNs — the AD seed supports every
+# strategy level — and runs an inner-HESSE refinement for a tighter covariance.
+# `Strategy(0)` is faster/looser; `Strategy(2)` adds a seed-time MnHesse bootstrap.
 
 m_s2 = Minuit(x -> sum(abs2, x .- [1.0, 2.0, 3.0]), [0.0, 0.0, 0.0])
 migrad(m_s2; strategy = Strategy(2))

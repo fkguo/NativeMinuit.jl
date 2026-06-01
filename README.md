@@ -172,7 +172,7 @@ per-coordinate gradient loop runs in parallel. Works on **any thread-safe FCN**.
 |-------|-----------|
 | `false` *(default)* | serial gradient — always safe, zero overhead. |
 | `true` | force the threaded gradient; on the first call it auto-verifies thread-safety and raises `ThreadSafetyError` if the FCN is not thread-safe (see the contract below). |
-| `:auto` | probe thread-safety **once** (memoized on the fit); if safe, use the threaded gradient, otherwise emit a single `@warn` and fall back to the serial gradient. Never throws, never returns a racy result. On single-thread Julia (`-t 1`) it is silently serial (no probe); no-op for AD (`grad=`) fits. |
+| `:auto` | probe thread-safety **once** at the seed (memoized on the fit); if the probe passes, use the threaded gradient, otherwise emit a single `@warn` and fall back to the serial gradient. Never throws. The probe is a best-effort single-point check — it reliably catches the common shared-buffer race, but a race that only manifests away from the seed can slip through (use `threaded_gradient=true` for the strict per-call check). On single-thread Julia (`-t 1`) it is silently serial (no probe); no-op for AD (`grad=`) fits. |
 
 The default stays `false` because threading only pays off for expensive
 FCNs at higher `n`; `:auto` is the opt-in "thread it safely without me
@@ -216,8 +216,10 @@ end
 ```
 
 Simpler and always correct (any schedule): **allocate the scratch per call**
-inside the FCN — `c = zeros(ComplexF64, 3, 3)`, or `similar(par, ComplexF64, 3, 3)`
-to stay AD-generic. For a millisecond-scale FCN that allocation is negligible.
+inside the FCN — `c = zeros(ComplexF64, 3, 3)`, or
+`Matrix{Complex{eltype(par)}}(undef, 3, 3)` to stay AD-generic (a hard-coded
+`ComplexF64` buffer can't hold the `Complex{Dual}` values ForwardDiff produces).
+For a millisecond-scale FCN that allocation is negligible.
 Either way, confirm the fix with `JuMinuit.is_thread_safe(cf, x0)` (or just let
 `threaded_gradient=true` auto-verify on the first call).
 
@@ -245,7 +247,7 @@ Julia 1.12 / OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides)
 | Benchmark | Julia (μs) | C++ (μs) | Julia / C++ |
 |---|---|---|---|
 | `quad_4d` | 0.81 | 5.50 | **0.147×** |
-| `rosenbrock_2d` | 9.50 | 37.62 | **0.252×** |
+| `rosenbrock_2d` | 9.50 | 37.62 | **0.253×** |
 | `rosenbrock_10d` | 58.11 | 156.62 | **0.371×** |
 | `gauss_ll_10_1000` | 32.26 | 44.96 | **0.718×** |
 | `gauss_ll_2_100` | 20.16 | 22.71 | **0.888×** |

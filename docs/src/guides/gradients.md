@@ -137,7 +137,7 @@ migrad!(m)
 |---|---|
 | `false` *(default)* | serial gradient — always safe, zero overhead. |
 | `true` | force the threaded gradient. On the first gradient call it auto-verifies thread-safety and raises [`ThreadSafetyError`](@ref) if the FCN races (the thread-safety contract below). |
-| `:auto` | probe thread-safety **once** (memoized on the fit). If safe, thread; otherwise emit a single `@warn` and fall back to serial. Never throws, never returns a racy result. |
+| `:auto` | probe thread-safety **once** at the seed (memoized on the fit). If the probe passes, thread; otherwise emit a single `@warn` and fall back to serial. Never throws. Best-effort single-point probe — catches the common shared-buffer race but not one that only appears away from the seed (use `true` for the strict per-call check). |
 
 The two safe-by-construction modes differ in what happens to an *unsafe* FCN:
 `true` **refuses** it (throws), `:auto` **demotes** it (warns + serial). Use
@@ -254,7 +254,7 @@ Either way, confirm the fix with `is_thread_safe(cf, x0)` (or just let
   [`src/gradient.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/gradient.jl);
   the thread-safety verification lives in
   [`src/migrad.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/migrad.jl)
-- [Cost functions](cost_functions.md) — AD works with generic FCNs and the
+- [Cost functions](../cost_functions.md) — AD works with generic FCNs and the
   `LeastSquares` / `UnbinnedNLL` / `ExtendedUnbinnedNLL` costs; the binned costs
   (`BinnedNLL` / `ExtendedBinnedNLL`) push their CDF values through `Float64`
   buffers and are **not** currently AD-generic. The threaded numerical gradient

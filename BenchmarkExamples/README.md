@@ -57,7 +57,7 @@ Files:
   form-factor measurements (with source paper refs in filenames).
 - `Project.toml` — original env (will need updating for current Julia).
 
-Free parameters: ~10–20 (low-energy constants + subtraction constants).
+Free parameters: 7 (paper-faithful: NLO LECs L1–L5, L7, L8; L6 fixed — see RESULTS.md).
 FCN is moderately expensive (per-call quadgk integration over the
 unitarity cut). Realistic stress test for MIGRAD wall-time on a
 medium-dimensional non-trivial χ²-fit.
@@ -81,7 +81,7 @@ fit = Minuit(my_chisq, [1.0, 2.0]; name = ["a", "b"], error = [0.1, 0.1])
 migrad(fit)
 ```
 
-The names / API match — see `docs/migration_from_iminuit.md` (TBD) for
+The names / API match — see [`docs/src/guides/migration.md`](../docs/src/guides/migration.md) for
 the full mapping. Functions / macros from IMinuit.jl that JuMinuit
 implements natively:
 

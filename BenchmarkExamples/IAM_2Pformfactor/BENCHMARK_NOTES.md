@@ -6,7 +6,7 @@ perspective.
 
 ## Why this fit is a good JuMinuit stress test
 
-- **9 free parameters (8 NLO LECs + 1)**: comparable to the larger toy
+- **7 free parameters (L1–L5, L7, L8; L6 fixed)**: comparable to the larger toy
   benchmarks, but on a genuinely stiff physics landscape rather than a
   synthetic quadratic — exercises JuMinuit on a realistic, ill-conditioned
   Hessian.
