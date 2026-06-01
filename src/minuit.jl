@@ -1279,6 +1279,15 @@ minos_upper(m::Minuit, par::AbstractString; kwargs...) =
 minos_upper(m::Minuit, par::Symbol; kwargs...) =
     minos_upper(m, String(par); kwargs...)
 
+"""
+    minos_lower(m::Minuit, par; kwargs...) -> Float64
+
+The lower (≤ 0) side of the asymmetric MINOS error for parameter `par`
+(Integer index or String name) — a **pure query** that does not mutate `m`.
+See [`minos_upper`](@ref) for the full description, sign convention, and the
+shared control keyword arguments (`maxcall`, `tol`/`toler`, `sigma`, `strategy`,
+`print_level`).
+"""
 function minos_lower(m::Minuit, par::Integer; kwargs...)
     return _minos_error(m, Int(par); kwargs...).lower
 end
