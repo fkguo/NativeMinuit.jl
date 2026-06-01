@@ -275,6 +275,12 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   with AD gradients runs migrad+HESSE **1.6× faster than iminuit** (4.7 vs 7.4 ms)
   and MINOS **2.1×** faster (72.8 vs 154.7 ms); the numerical path is ~1.2×
   faster too. All schemes reach the published `fval = 0.0174`.
+- **The IAM fit** ([fkguo/IAMfit](https://github.com/fkguo/IAMfit)) — a stiff,
+  ill-conditioned Inverse-Amplitude-Method fit (9 LECs) whose convergence is
+  seed-sensitive; it is the worked **thread-safety** case study above (the
+  shared-buffer race). JuMinuit reproduces the published fit at speed on par with
+  iminuit — the point here is robustness on a hard surface, not a headline ratio
+  (details in [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)).
 - **Large coupled-channel amplitude fit** — 57 free parameters, from an
   independent unpublished analysis (single-threaded; a heavy, multi-second-per-call
   FCN). The FCN is the **same Julia code** for both backends, so it cancels from
@@ -287,11 +293,6 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   own per-call overhead is negligible against a multi-second FCN, so here the FCN,
   not the optimizer, sets the clock. (The cheap-FCN benchmarks above are where
   that optimizer overhead — and JuMinuit's call-site advantage — actually shows.)
-
-(The IAM fit — the thread-safety example above — is a stiff,
-ill-conditioned amplitude fit whose convergence is seed-sensitive; it is
-documented in [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)
-rather than cited as a speed comparison.)
 
 ## Reliability
 
