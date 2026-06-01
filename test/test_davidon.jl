@@ -126,20 +126,15 @@ using LinearAlgebra
         vg_work = zeros(n)
         vUpd_work = Symmetric(zeros(n, n), :U)
 
-        # Warmup
-        JuMinuit.davidon_update!(V, dx, dg, 0.0, vg_work, vUpd_work)
-
-        # Reset V to a fresh known matrix (the warmup mutated it)
+        # Measure through a function barrier: at @testset scope the non-const
+        # bindings dispatch dynamically on Julia 1.11 (a spurious box the old
+        # "BLAS-syr! temporary" comment mis-attributed — verified 0 through a
+        # barrier on 1.11). The real in-function alloc is 0 on both 1.11/1.12.
+        _a6(f, a, b, c, d, e, g) = @allocated f(a, b, c, d, e, g)
+        # Warmup the barrier (mutates V), then reset to a fresh known matrix.
+        _a6(JuMinuit.davidon_update!, V, dx, dg, 0.0, vg_work, vUpd_work)
         copyto!(parent(V), Matrix{Float64}(I, n, n))
-
-        # Measure (hopefully no @warn fires, since random dx · random
-        # dg should be nonzero generically). Julia 1.10 leaves a small
-        # BLAS-syr! temporary; 1.12 elides it.
-        if VERSION >= v"1.12"
-            @test (@allocated JuMinuit.davidon_update!(V, dx, dg, 0.0, vg_work, vUpd_work)) == 0
-        else
-            @test_broken (@allocated JuMinuit.davidon_update!(V, dx, dg, 0.0, vg_work, vUpd_work)) == 0
-        end
+        @test _a6(JuMinuit.davidon_update!, V, dx, dg, 0.0, vg_work, vUpd_work) == 0
     end
 
     # ─────────────────────────────────────────────────────────

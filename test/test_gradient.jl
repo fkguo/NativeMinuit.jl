@@ -178,22 +178,21 @@
         out = FunctionGradient(zeros(3), zeros(3), zeros(3))
         strat = Strategy(0)
 
+        # Measure through function barriers: a bare `@allocated f(...)` at
+        # @testset scope routes the non-const test bindings through dynamic
+        # dispatch on Julia 1.11 (a spurious box the old "closure allocations"
+        # comment mis-attributed); through a barrier both kernels are
+        # allocation-free on 1.11 and 1.12.
+        _a4(f, a, b, c, d) = @allocated f(a, b, c, d)
+        _a6(f, a, b, c, d, e, g) = @allocated f(a, b, c, d, e, g)
         # Warmup
         initial_gradient!(out, par, errs, cf.up)
         numerical_gradient!(out, x_work, par, prev, cf, strat)
-
-        # Julia 1.10's optimizer leaves small closure allocations that
-        # 1.12+ elides; mark broken on 1.10 to keep 1.12 strictness.
-        if VERSION >= v"1.12"
-            # initial_gradient! is allocation-free.
-            @test (@allocated initial_gradient!(out, par, errs, cf.up)) == 0
-            # numerical_gradient! allocates only what the user FCN does.
-            @test (@allocated numerical_gradient!(
-                out, x_work, par, prev, cf, strat)) == 0
-        else
-            @test_broken (@allocated initial_gradient!(out, par, errs, cf.up)) == 0
-            @test_broken (@allocated numerical_gradient!(
-                out, x_work, par, prev, cf, strat)) == 0
-        end
+        _a4(initial_gradient!, out, par, errs, cf.up)
+        _a6(numerical_gradient!, out, x_work, par, prev, cf, strat)
+        # initial_gradient! is allocation-free; numerical_gradient! allocates
+        # only what the user FCN does (here: none).
+        @test _a4(initial_gradient!, out, par, errs, cf.up) == 0
+        @test _a6(numerical_gradient!, out, x_work, par, prev, cf, strat) == 0
     end
 end

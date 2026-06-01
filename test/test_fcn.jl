@@ -64,16 +64,14 @@
         # The Ref{Int} increment + closure call should not heap-allocate
         # when the user FCN itself doesn't. This is a soft canary, not a
         # contract gate (Phase 0 §3.4 gate measures the full MIGRAD iter).
-        # NB: Julia 1.10's optimizer leaves a small (~16-byte) closure
-        # allocation that 1.12+ elides; marked broken on 1.10 so CI passes
-        # while the 1.12 strictness is preserved.
+        # Measure through a function barrier: a bare `@allocated cf(x)` at
+        # @testset scope boxes the returned Float64 on Julia 1.11 (non-const
+        # binding → a spurious ~16 B result box) that 1.12 elides; the real
+        # per-call alloc in MIGRAD's compiled inner loop is 0 on both versions.
+        _alloc(f, y) = @allocated f(y)
         cf = CostFunction(x -> sum(abs2, x))
         x = [1.0, 2.0, 3.0]
-        cf(x); cf(x)  # warmup
-        if VERSION >= v"1.12"
-            @test (@allocated cf(x)) == 0
-        else
-            @test_broken (@allocated cf(x)) == 0
-        end
+        cf(x); _alloc(cf, x)  # warmup
+        @test _alloc(cf, x) == 0
     end
 end
