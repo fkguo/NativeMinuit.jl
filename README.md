@@ -3,7 +3,6 @@
 [![Dev docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://fkguo.github.io/JuMinuit.jl/dev)
 [![License: LGPL v2.1+](https://img.shields.io/badge/License-LGPL%20v2.1%2B-blue.svg)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fv1%2Fmonthly_downloads%2FJuMinuit&query=total_requests&suffix=%2Fmonth&label=downloads&color=brightgreen)](https://juliapkgstats.com/pkg/JuMinuit)
-[![GitHub stars](https://img.shields.io/github/stars/fkguo/JuMinuit.jl?style=flat&logo=github)](https://github.com/fkguo/JuMinuit.jl/stargazers)
 
 Native-Julia port of the C++ [Minuit2](https://root.cern.ch/doc/master/Minuit2Page.html)
 function-minimization library — the workhorse of every HEP fit. JuMinuit is a
