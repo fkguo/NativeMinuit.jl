@@ -1,4 +1,4 @@
-# IAM cold-start convergence gap: JuMinuit vs iminuit (default 613 → 325; + S=0 retry gap closed)
+# IAM cold-start convergence gap: JuMinuit vs iminuit (a fixed default-strategy mismatch)
 
 **Date**: 2026-05-29
 **Branch**: `feat/iam-convergence-gap`
@@ -13,6 +13,35 @@
 > See [`../../BenchmarkExamples/RESULTS.md`](../../BenchmarkExamples/RESULTS.md)
 > for the authoritative current numbers; the analysis below is kept as the
 > investigation record.
+
+## Authoritative current-code sweep (2026-06-01)
+
+Fresh full sweep on current `main`
+([`iam_strategy_sweep.jl`](../../BenchmarkExamples/IAM_2Pformfactor/iam_strategy_sweep.jl);
+iminuit 2.18.0; same FCN/seed). **These supersede every per-config fval below**
+(which are from the 2026-05-29 investigation). χ²(seed) = 1268.65.
+
+| `Strategy`    | JuMinuit 1-shot | iminuit 1-shot | JuMinuit +retry | iminuit +retry |
+|---------------|----------------:|---------------:|----------------:|---------------:|
+| 0             | 402.81 (inv)    | 476.15 (inv)   | **361.12** ✓    | 400.23 ✓       |
+| 1 *(default)* | 525.57 (inv)    | 614.95 (inv)   | 404.15 ✓        | 409.89 ✓       |
+| 2             | 1268.65 †       | 1268.65 †      | 1268.65 †       | 1268.65 †      |
+
+✓ = MIGRAD converged (`is_valid`, pre-HESSE). 1-shot = `iterate=1`; +retry =
+default `iterate=5`. Findings:
+
+- **JuMinuit reaches a deeper minimum than iminuit at every matched (strategy,
+  retry) setting.** Default S=1 +retry → 404.15 vs 409.89 (matches `RESULTS.md`);
+  S=0 +retry goes deeper still (361.12 vs 400.23).
+- † **Strategy 2 stalls at the seed for both libraries** — the FCN uses only
+  `pars[1:8]` but the fit floats 9 params, so the unused/flat 9th makes the
+  start-up MnHesse Hessian singular (this also gives the benchmark's post-HESSE
+  `is_valid=false`).
+- Single-shot is shallower and a *higher* strategy is *worse*; the retry is what
+  rescues convergence at S=0/S=1.
+- iminuit's 1-shot fvals (476.15 / 614.95) are **unchanged** from the 2026-05-29
+  table below (stable C++ Minuit2); JuMinuit's shifted as its code evolved — which
+  is why the old `330.75` / `613` / `325` JuMinuit figures are stale.
 
 ## Symptom (as reported)
 

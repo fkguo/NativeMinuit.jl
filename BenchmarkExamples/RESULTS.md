@@ -76,16 +76,30 @@ well has been resolved.)
 
 **Headlines**
 
-- JuMinuit MIGRAD reaches a **deeper minimum than iminuit** on this ill-conditioned
-  9-LEC fit — `fval = 404.15` vs `409.89` — at an essentially equal
-  wall-time (17.78 vs 18.52 s; ~1.04×). **Both** report `is_valid = false`: the IAM
-  landscape is pathologically ill-conditioned and neither library's cold start
-  fully converges. A hard, honest draw where JuMinuit edges ahead — **not** a clean
-  speed showcase. *(The old `Strategy(0)`-default cold-start gap is **closed** —
-  JuMinuit now defaults to `Strategy(1)`, matching iminuit. The per-strategy
-  behaviour here is non-monotonic and library-specific; see
-  [`docs/dev/IAM_CONVERGENCE_GAP.md`](../docs/dev/IAM_CONVERGENCE_GAP.md) for that
-  analysis.)*
+- **JuMinuit reaches a deeper minimum than iminuit at every matched strategy** on
+  this pathologically ill-conditioned 9-LEC fit, at ≈ equal wall-time (17.78 vs
+  18.52 s; ~1.04×). Cold-start MIGRAD `fval`, same seed (lower = deeper; reproduce
+  with [`iam_strategy_sweep.jl`](IAM_2Pformfactor/iam_strategy_sweep.jl); current
+  code, iminuit 2.18.0):
+
+  | `Strategy`    | JuMinuit (1-shot / +retry) | iminuit (1-shot / +retry) |
+  |---------------|---------------------------:|--------------------------:|
+  | 0             | 402.81 / **361.12** ✓      | 476.15 / 400.23 ✓         |
+  | 1 *(default)* | 525.57 / 404.15 ✓          | 614.95 / 409.89 ✓         |
+  | 2             | 1268.65 (stalls) †         | 1268.65 (stalls) †        |
+
+  ✓ = MIGRAD converged. The default (S=1 + each library's default retry,
+  `iterate=5`) gives the **404.15 vs 409.89** headline of the `migrad+hesse` table
+  above — HESSE then flags the covariance singular on this degenerate well, so the
+  benchmark's *post-HESSE* `is_valid` is `false` for both. With retry, S=0 goes
+  deeper still (361 vs 404); single-shot (`iterate=1`) is shallower and a *higher*
+  strategy is *worse*. † **Strategy 2 stalls at the cold seed (χ²≈1268.65) for both
+  libraries**: the FCN uses only `pars[1:8]` but the fit has 9 free parameters, so
+  the unused/flat 9th makes the start-up Hessian singular (it also drives the
+  post-HESSE `is_valid=false`). The pre-0.3.0 "gap" was simply JuMinuit then
+  *defaulting* to `Strategy(0)` while iminuit defaults to `Strategy(1)`; both now
+  default to 1 (see
+  [`docs/dev/IAM_CONVERGENCE_GAP.md`](../docs/dev/IAM_CONVERGENCE_GAP.md)).
 - iminuit hard-refuses MINOS / MNCONTOUR on an invalid `fmin`
   (`RuntimeError("Function minimum is not valid")`); JuMinuit runs both to
   completion. On this degenerate well its results are themselves marginal
