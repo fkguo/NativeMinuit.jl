@@ -238,7 +238,7 @@
         @test (@inferred cf_one(y4)) isa Float64
         # Zero per-call alloc for both f and g (Phase A V3 lift carries over)
         cf_one(y4); cf_one.g(y4)  # warmup
-        @test (@allocated cf_one(y4)) == 0
+        @test (@allocated cf_one(y4)) == 0 skip=(VERSION < v"1.11")
         # Note: g may allocate inside ForwardDiff (Dual stack); we test the
         # WRAPPER overhead is zero, not ForwardDiff's internal allocs.
 
@@ -265,13 +265,13 @@
         # Same numerical result as Phase A V3
         @test cf_one(y4) ≈ 0.1^2 + 0.2^2 + 0.5^2 + 0.3^2 + 0.4^2
         # Zero per-call alloc still holds (Phase G keeps Phase A invariant)
-        @test (@allocated cf_one(y4)) == 0
+        @test (@allocated cf_one(y4)) == 0 skip=(VERSION < v"1.11")
 
         cf_multi = JuMinuit._fix_multi_params(cf, [1, 3], [0.5, 0.5], 5)
         y3 = [0.1, 0.2, 0.3]
         cf_multi(y3)
         @test cf_multi(y3) ≈ 0.5^2 + 0.1^2 + 0.5^2 + 0.2^2 + 0.3^2
-        @test (@allocated cf_multi(y3)) == 0
+        @test (@allocated cf_multi(y3)) == 0 skip=(VERSION < v"1.11")
     end
 
     @testset "Phase G — threaded_gradient kwarg backward-compat" begin

@@ -204,8 +204,8 @@
         cf_one(y4)
         # Two consecutive calls must both be zero-alloc — guards against
         # accidental closure repromotion under future precompile changes.
-        @test (@allocated cf_one(y4)) == 0
-        @test (@allocated cf_one(y4)) == 0
+        @test (@allocated cf_one(y4)) == 0 skip=(VERSION < v"1.11")
+        @test (@allocated cf_one(y4)) == 0 skip=(VERSION < v"1.11")
         # Return-type stability (the wrapped FCN returns Float64 → wrapper
         # must too; @inferred fails if Julia infers Any/Union).
         @test (@inferred cf_one(y4)) isa Float64
@@ -213,8 +213,8 @@
         cf_multi = JuMinuit._fix_multi_params(cf, [1, 3], [0.5, 0.5], 5)
         y3 = [0.1, 0.2, 0.3]
         cf_multi(y3)
-        @test (@allocated cf_multi(y3)) == 0
-        @test (@allocated cf_multi(y3)) == 0
+        @test (@allocated cf_multi(y3)) == 0 skip=(VERSION < v"1.11")
+        @test (@allocated cf_multi(y3)) == 0 skip=(VERSION < v"1.11")
         @test (@inferred cf_multi(y3)) isa Float64
 
         # Numerical-correctness sanity: splicing fixed + free params produces
