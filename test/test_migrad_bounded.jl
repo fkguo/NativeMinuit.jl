@@ -195,6 +195,11 @@
         wf, wg = wcfg.f, wcfg.g
         _alloc(wf, int_vec); _alloc(wg, int_vec); _alloc_vec(n_free_p)  # warm up
         @test _alloc(wf, int_vec) == 0
-        @test _alloc(wg, int_vec) <= _alloc_vec(n_free_p)
+        # `wg` allocates its single n_free result vector. On Julia 1.11 the
+        # bounded analytic-gradient wrapper also retains a small (~32 B) boxed
+        # temporary in the chain-rule path that 1.12 elides; allow a small
+        # constant margin (< one extra result vector, so a genuine per-call
+        # temporary-VECTOR regression — the bug this guards — is still caught).
+        @test _alloc(wg, int_vec) <= _alloc_vec(n_free_p) + 40
     end
 end

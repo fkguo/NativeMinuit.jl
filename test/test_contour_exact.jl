@@ -236,9 +236,13 @@
         @test cf_one.g(y4) ≈ [0.2, 0.8, 3.2, 6.0]
         # Type stability of the wrapped call
         @test (@inferred cf_one(y4)) isa Float64
-        # Zero per-call alloc for both f and g (Phase A V3 lift carries over)
-        cf_one(y4); cf_one.g(y4)  # warmup
-        @test (@allocated cf_one(y4)) == 0
+        # Zero per-call alloc for both f and g (Phase A V3 lift carries over).
+        # Function barrier `_alloc` so the measurement is the closure's real
+        # per-call alloc (0 on 1.11/1.12), not the @testset-scope Float64 result
+        # box Julia 1.11 adds for a non-const binding. See test_minos.jl.
+        _alloc(f, x) = @allocated f(x)
+        cf_one(y4); cf_one.g(y4); _alloc(cf_one, y4)  # warmup
+        @test _alloc(cf_one, y4) == 0
         # Note: g may allocate inside ForwardDiff (Dual stack); we test the
         # WRAPPER overhead is zero, not ForwardDiff's internal allocs.
 
@@ -258,20 +262,24 @@
         # Verify the per-thread buffer pool doesn't break single-threaded
         # use. Allocations should be ~maxthreadid()×n bytes upfront but
         # zero per-call (just like Phase A V3).
+        # Function barrier `_alloc` (see test_minos.jl): a bare @allocated at
+        # @testset scope boxes the Float64 result on Julia 1.11; the barrier
+        # measures the real per-call alloc (0 on 1.11/1.12).
+        _alloc(f, x) = @allocated f(x)
         cf = CostFunction(x -> sum(abs2, x), 1.0)
         cf_one = JuMinuit._fix_one_param(cf, 3, 0.5, 5)
         y4 = [0.1, 0.2, 0.3, 0.4]
-        cf_one(y4)  # warmup
+        cf_one(y4); _alloc(cf_one, y4)  # warmup
         # Same numerical result as Phase A V3
         @test cf_one(y4) ≈ 0.1^2 + 0.2^2 + 0.5^2 + 0.3^2 + 0.4^2
         # Zero per-call alloc still holds (Phase G keeps Phase A invariant)
-        @test (@allocated cf_one(y4)) == 0
+        @test _alloc(cf_one, y4) == 0
 
         cf_multi = JuMinuit._fix_multi_params(cf, [1, 3], [0.5, 0.5], 5)
         y3 = [0.1, 0.2, 0.3]
-        cf_multi(y3)
+        cf_multi(y3); _alloc(cf_multi, y3)
         @test cf_multi(y3) ≈ 0.5^2 + 0.1^2 + 0.5^2 + 0.2^2 + 0.3^2
-        @test (@allocated cf_multi(y3)) == 0
+        @test _alloc(cf_multi, y3) == 0
     end
 
     @testset "Phase G — threaded_gradient kwarg backward-compat" begin
