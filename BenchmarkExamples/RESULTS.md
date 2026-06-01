@@ -74,26 +74,18 @@ well has been resolved.)
 | `jm_ad`      | FAILED       | —           | —             | —                 |
 | `jm_th_*`    | SKIPPED (Phase H rejects) | — | —          | —                 |
 
-**Strategy ladder** (same cold seed, JuMinuit numerical) — on this ill-conditioned
-surface the depth reached tracks `Strategy` **monotonically**. `Strategy` is *not* a
-basin-selector; a more accurate / more-often-refreshed Hessian simply lets the local
-descent travel further down the pathological valley before it stalls.
-
-| `Strategy`            | JuMinuit `fval` | note                                                            |
-|-----------------------|----------------:|-----------------------------------------------------------------|
-| `Strategy(0)`         | 613.5           | pre-0.3.0 default — the cold-start "gap"                         |
-| `Strategy(1)`         | **404.15**      | current default (table above); iminuit at `strategy=1` → 409.89 |
-| `Strategy(2)` / retry | ~325            | deepest basin reached                                           |
-
 **Headlines**
 
 - JuMinuit MIGRAD reaches a **deeper minimum than iminuit** on this ill-conditioned
   9-LEC fit — `fval = 404.15` vs `409.89` — at an essentially equal
   wall-time (17.78 vs 18.52 s; ~1.04×). **Both** report `is_valid = false`: the IAM
   landscape is pathologically ill-conditioned and neither library's cold start
-  fully converges — the deeper basins need more `Strategy` / retry (see the ladder
-  above). A hard, honest draw where JuMinuit edges ahead — **not** a clean speed
-  showcase.
+  fully converges. A hard, honest draw where JuMinuit edges ahead — **not** a clean
+  speed showcase. *(The old `Strategy(0)`-default cold-start gap is **closed** —
+  JuMinuit now defaults to `Strategy(1)`, matching iminuit. The per-strategy
+  behaviour here is non-monotonic and library-specific; see
+  [`docs/dev/IAM_CONVERGENCE_GAP.md`](../docs/dev/IAM_CONVERGENCE_GAP.md) for that
+  analysis.)*
 - iminuit hard-refuses MINOS / MNCONTOUR on an invalid `fmin`
   (`RuntimeError("Function minimum is not valid")`); JuMinuit runs both to
   completion. On this degenerate well its results are themselves marginal
