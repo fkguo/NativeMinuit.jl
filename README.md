@@ -276,15 +276,14 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   and MINOS **2.1×** faster (72.8 vs 154.7 ms); the numerical path is ~1.2×
   faster too. All schemes reach the published `fval = 0.0174`.
 - **The IAM fit** ([fkguo/IAMfit](https://github.com/fkguo/IAMfit)) — an
-  **ill-conditioned** 9-LEC amplitude fit (a long, narrow, strongly-correlated χ²
-  valley), and the worked **thread-safety** case study above (the shared-buffer
-  race). On this hard surface a cold start reaches only a shallow basin in *both*
-  libraries (`is_valid = false`); JuMinuit lands in a slightly **deeper** one than
-  iminuit (fval 404.15 vs 409.89) at essentially equal wall-time (17.78 vs
-  18.52 s — JuMinuit ~4% faster), and runs MINOS/contours where iminuit refuses
-  the invalid minimum. An honest draw where JuMinuit edges ahead, not a clean
-  speed showcase (details in
-  [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)).
+  **ill-conditioned**, multi-basin Inverse-Amplitude-Method fit (7 free LECs,
+  paper-faithful) and the worked **thread-safety** case study above (the
+  shared-buffer race). A **robustness stress-test**, not a speed/fval showcase:
+  JuMinuit and iminuit are numerically *identical* near a minimum (agree to
+  ~10⁻⁹), but on a cold start which basin each reaches is path-sensitive on this
+  chaotic surface. Here JuMinuit happens to converge to a *valid* minimum at its
+  default (and runs MINOS/contours, which iminuit refuses on its invalid one)
+  (details in [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)).
 - **Large coupled-channel amplitude fit** — 57 free parameters, from an
   independent unpublished analysis (single-threaded; a heavy, multi-second-per-call
   FCN). The FCN is the **same Julia code** for both backends, so it cancels from
