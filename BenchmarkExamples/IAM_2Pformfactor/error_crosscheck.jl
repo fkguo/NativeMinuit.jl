@@ -181,7 +181,7 @@ n_basins = count(_vrows) >= 2 ? length(find_solution_modes(bs.samples[_vrows, :]
 
 println("  MINOS: ", SKIP_MINOS ? "skipped" : "$n_minos_valid/8 valid",
         " | MC: $(mc.n_accepted) accepted, under_coverage=$(mc.under_coverage)",
-        " | bootstrap: $(bs.n_valid)/$NBOOT valid, scattered over $n_basins basin(s)",
+        " | bootstrap: $(bs.n_valid)/$NBOOT valid, scattered over $n_basins candidate basin(s)",
         " | jackknife: $(jk.n_valid)/$ndata valid\n")
 
 # ── table: LOCAL methods (trustworthy) vs RAW resampling (inflated) ──────────
@@ -205,10 +205,18 @@ end
 println("""
 Reading (see the ratio lines above): at the true minimum the LOCAL methods track
 each other — MC-Δχ²/HESSE median ≈ 1 — and MINOS, when it validates here, adds the
-asymmetric 1σ. The RAW bootstrap and jackknife sit well ABOVE HESSE (the jackknife
-especially) because their re-fits scatter across $(n_basins) basin(s): that spread
-is the distance BETWEEN basins, not the 1σ error. On a multi-basin surface there
-is no clean resampling 1σ — basin-selecting and taking the std of the survivors
-selects on the σ you're measuring → biased low. Defensible recipe: find the true
-minimum first (PHASE 1 / `find_deeper_minimum`), then trust the LOCAL error
-methods (HESSE / MINOS / MC-Δχ²).""")
+asymmetric 1σ. The RAW resampling does NOT measure a 1σ on this multi-basin surface,
+and the two methods fail DIFFERENTLY:
+  • bootstrap (~few× HESSE) is a BASIN MIXTURE, √(within-basin² + between-basin²):
+    inflated by re-fits landing in other basins, but still the same order as HESSE.
+  • jackknife (often ~10²× HESSE) is CATEGORICALLY invalid here. Delete-1 assumes a
+    SMOOTH estimator, but a multi-basin argmin is not — deleting one point can flip
+    the basin, and the jackknife's √(g−1)≈$(round(Int, sqrt(ndata-1)))× scaling turns
+    those few jumps into orders of magnitude. It is a variance of basin LABELS, not
+    a standard error.
+There is no clean resampling 1σ on a multi-basin surface (basin-selecting then
+taking the survivors' std selects on the σ you are measuring → biased low). The
+DEFENSIBLE recipe: (1) find the true minimum first (PHASE 1 / `find_deeper_minimum`);
+(2) trust the LOCAL methods (HESSE / MINOS / MC-Δχ²); and where genuinely distinct
+solutions exist, report PER-MODE local errors — `find_solution_modes(…; refine=true)`
+gives each mode its own HESSE/MINOS — rather than one merged resampled σ.""")
