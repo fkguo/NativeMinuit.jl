@@ -6,14 +6,20 @@
 #   piracy, persistent tasks). Ambiguities check disabled by default —
 #   known to flag stdlib false positives.
 # - `@inferred` on every public entry point: the Julia-stdlib way of
-#   asserting type-stability. Each call must have a concretely
-#   inferrable return type for the closure type the user supplied.
-#   Replaced the earlier JET dependency (issue: noisy cross-version
-#   false positives like Julia 1.10's BLAS.hemv! signature drift;
-#   only covered one entry point; external dep maintenance).
+#   asserting type-stability — each call must have a concretely inferrable
+#   return type for the closure type the user supplied.
+# - JET `@report_opt` (below): a NARROW optimization-analysis guard on the
+#   low-level `migrad` entry points, scoped via `target_modules=(JuMinuit,)`.
+#   `@inferred` only checks the top-level return type; this walks the call
+#   graph and catches a silent FCN-call-site dispatch regression the perf
+#   claim can't afford (ROADMAP risk #4). The narrow, JuMinuit-scoped target
+#   avoids the noisy cross-version false positives (e.g. Julia 1.10's
+#   BLAS.hemv! drift) that forced the earlier broad JET scan's removal — and
+#   1.10, the worst offender, is no longer supported.
 
 using Aqua
 using RecipesBase
+using JET
 
 @testset "Aqua + type-stability (§3.4 Criterion 4)" begin
     @testset "Aqua quality checks" begin
@@ -83,5 +89,28 @@ using RecipesBase
         m = Minuit(f, x0; name = ["a", "b"], errors = errs)
         @test (@inferred migrad!(m)) isa Minuit
         @test (@inferred minos!(m, 1)) isa Minuit
+    end
+
+    @testset "JET opt-analysis — hot-path devirtualization (regression guard)" begin
+        # The "C++-comparable performance" claim rests on the FCN call site
+        # being devirtualized: a user closure must specialize into
+        # `CostFunction{F}` so every FCN call in MIGRAD's inner loop is a
+        # static call, not a runtime dispatch. `@inferred` (above) only checks
+        # the top-level return type; JET's optimization analysis walks the
+        # whole call graph and flags ANY runtime dispatch — catching a SILENT
+        # perf regression (numerically identical, just slow) that the rest of
+        # the suite cannot see (ROADMAP risk #4). `target_modules=(JuMinuit,)`
+        # scopes the check to our own code (ignoring LinearAlgebra/Base
+        # internals), which is what keeps it false-positive-free across Julia
+        # versions. On failure, run e.g.
+        #   JET.@report_opt target_modules=(JuMinuit,) migrad(g, gx0, gerrs)
+        # to see the offending dispatch site(s).
+        g(x) = (x[1] - 1.0)^2 + 100.0 * (x[2] - x[1]^2)^2   # a raw user closure
+        gx0 = [0.0, 0.0]
+        gerrs = [0.1, 0.1]
+        @test isempty(JET.get_reports(
+            @report_opt target_modules = (JuMinuit,) migrad(g, gx0, gerrs)))
+        @test isempty(JET.get_reports(
+            @report_opt target_modules = (JuMinuit,) migrad(CostFunction(g), gx0, gerrs)))
     end
 end
