@@ -224,6 +224,15 @@ For long fits this is a per-iteration allocation Julia must control:
 
 ## 3. Phase 0 — Proof of concept
 
+> **[as-built — COMPLETE]** Phase 0 met its gate, and Phases 1–3 shipped on top
+> of it; JuMinuit is released (v0.3.0). Everything in §3 — the mandate, scope,
+> the §3.1 file layout, the §3.2/§3.3 test + benchmark lists, and the §3.5
+> day-by-day schedule — is the **original Phase-0 plan**, kept as a record of
+> intent, **not** a description of the current code. For what actually shipped
+> see the §7 module-mapping table, `CHANGELOG.md`, and `src/`. Some specifics
+> drifted (e.g. §3.1's "packed behind a feature flag" — packed storage was
+> ultimately **abandoned** in favour of dense `Symmetric`; see `DEFERRED.md`).
+
 **Mandate**: prove the Julia port can reach C++-Minuit2 performance on
 simple MIGRAD-only fits, within numerical equivalence, before any large
 code surface is written.
@@ -258,7 +267,7 @@ artifact contract satisfied** (see §3.4.1). If the gate fails, the
 architectural assumptions in §2 are wrong and must be revisited before
 Phase 1 starts.
 
-### 3.1 Files to create under `src/`
+### 3.1 Planned `src/` file layout (Phase 0 — see §7 for the as-built map)
 
 ```
 src/
@@ -481,7 +490,10 @@ local `julia-perf` skill's Level-2 evidence-gate contract
 The §3.4 "Performance" criterion is **unverifiable** without these
 artifacts. A `@time ratio = 1.4` log line does not constitute evidence.
 
-### 3.5 Implementation order
+### 3.5 Implementation order (original Phase-0 schedule — historical)
+
+> **[as-built]** The day-by-day plan below is preserved as a record of the
+> intended build order; it is **not** a live schedule. Phase 0 (and 1–3) are done.
 
 Within Phase 0, the order minimizes integration risk. Note: cluster sizes
 are widened vs. v1 to account for the depth of correctness work in DFP
@@ -515,6 +527,12 @@ Any slip past day 35 triggers a design review of §2.2 idioms.
 ---
 
 ## 4. Phase 1 — Core port (goal + exit only)
+
+> **[as-built — COMPLETE]** Phase 1 shipped: parameter bounds (sin/√ transforms),
+> fixed & named parameters, MINOS asymmetric errors, `MnContours`,
+> HESSE-after-MIGRAD, and Strategy 0/1/2 are all in v0.3.0. The goal and exit
+> criteria below are the **original plan**; see §7, `CHANGELOG.md`, and the test
+> suite for what shipped.
 
 **Goal**: feature-complete equivalence with `MnMigrad + MnHesse + MnMinos +
 MnSimplex + MnContours` for the cases iminuit covers. Bounds, fixed
@@ -562,6 +580,15 @@ What we learn from achieving 1.5× will reshape the Phase 1 plan.
 ---
 
 ## 5. Phase 2 — Julia-native extras
+
+> **[as-built — COMPLETE]** The Phase-2 extras shipped: AD-backed gradients via
+> the **ForwardDiff** package extension (Enzyme was *not* pursued), the
+> threads-parallel numerical gradient, plot recipes + the `mn_plot_text` ASCII
+> fallback, the precompile workload, and result serialization (`src/serialize.jl`,
+> `to_dict`/`from_dict`). The shipped extension set is actually *broader* than
+> this plan — there are also **Optim**, **Clustering**, and **DataFrames**
+> extensions. Descriptions below are the original plan; a few specifics drifted
+> (e.g. the `mn_plot_text` signature — see `DEFERRED.md`).
 
 Each extra ships as an independent feature, gated behind its own
 milestone. Order is by user demand (the IMinuit.jl user base) rather
@@ -618,6 +645,12 @@ than dependency.
 ---
 
 ## 6. Phase 3 — API parity with IMinuit.jl / iminuit
+
+> **[as-built — COMPLETE]** The iminuit-style front end shipped: the `Minuit`
+> constructor, the `m.migrad()/.hesse()/.minos()/.contour()` methods, both
+> property- and function-style result accessors, iminuit-style pretty-printing,
+> and the reproduced tutorials under `docs/src/`. The parity targets below are
+> the **original plan**; see the user manual and `CHANGELOG.md` for the shipped API.
 
 The user-facing entry point should let a user copy-paste from iminuit
 (Python) or IMinuit.jl with at most renaming. Parity targets:
@@ -891,10 +924,14 @@ ends.
 
 ---
 
-## 11. Critical files for Phase 0 implementation
+## 11. Critical files — the correctness/performance-critical core
 
-The four Julia files and two C++ files that together define the Phase 0
-surface and the oracle against which everything is measured:
+> **[as-built]** Originally written as the Phase-0 worklist; these remain the
+> load-bearing core of the **completed** port (the full `src/` is much larger —
+> see §7). The C++ files stay the line-by-line oracle for the MIGRAD/DFP core.
+
+The Julia files and C++ oracles that carry the most correctness/performance
+risk, against which the core is measured:
 
 - `src/migrad.jl` — the MIGRAD loop (outer + inner)
 - `src/davidon.jl` — the DFP update (correctness-critical; additive

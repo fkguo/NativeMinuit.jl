@@ -3,8 +3,8 @@
 Architectural decisions, written down as they're made so the *why* is
 preserved. Each entry is small (1–10 lines).
 
-This is a living document. Phase 0 will populate the early sections;
-later phases append.
+This is a living document, populated across Phases 0–3 (all complete as of
+the v0.3.0 release). New decisions still append here.
 
 > Format: `## DR-NNN: short title — DECIDED YYYY-MM-DD`
 > Then: **Context** | **Decision** | **Consequences** | **Revisit when**.
@@ -217,15 +217,16 @@ Criteria status at the v0.0.1-DEV PoC tag:
 | 4. Aqua + 类型稳定性 clean                  | **PASS** | `test_aqua_jet.jl`: Aqua project-quality 检查 + 11 个 `@inferred` 断言覆盖所有公共入口 (`migrad`, `hesse`, `minos`, `contour`, `contour_exact`, `function_cross`, `function_cross_multi`, `estimate_edm`, `Minuit`, `migrad!`, `minos!`). 类型稳定靠两层:`@inferred`(stdlib 内置、零跨版本差异)覆盖上述 11 个公共入口的返回类型;**外加** v0.3.0 把 JET 以**窄目标** `JET.@report_opt target_modules=(JuMinuit,)` 守卫加回,守 `migrad` 低层入口的 FCN-call-site 去虚化(`@inferred` 看不到调用图内部的 runtime dispatch,`@report_opt` 能)。JET 曾在 Phase 1.x 因旧 Julia(1.10 `BLAS.hemv!`)的误报噪音被移除;窄 `target_modules` 作用域 + 砍掉 1.10 后该噪音消除,在 1.11/1.12 上均干净。 |
 | §3.4.1 julia-perf Level-2 artifacts        | **PASS** | `manifest.json`, `benchmarks.json`, `summary.json`, `diagnostics.md` emitted under `benchmark/.julia-perf/runs/<ts>/`. |
 
-## Future decisions (placeholders — to be made in Phase 1)
+## Future decisions — RESOLVED (were Phase-1 placeholders)
 
-- DR-013: Minimum Julia version + `[compat]` policy (open)
-- DR-014: AD backend primary (ForwardDiff vs Enzyme) — Phase 2.1 lock
-- DR-015: SVector/MVector small-n specialization — measured deferred
-- DR-016: Bounded-Hessian integration shape (does `hesse(cf, ...)`
-  take an extra `Parameters` arg, or wrap user FCN in a Parameters-
-  aware closure?) — Phase 1 mid-batch follow-up
-- DR-013: Minimum Julia version + `[compat]` policy
-- DR-014: AD backend primary (ForwardDiff vs Enzyme) — Phase 2.1 lock
-- DR-015: SVector/MVector small-n specialization — Phase 0 day-26
-  decision
+> **[as-built]** All of the placeholders below were decided as the project
+> matured to v0.3.0:
+
+- DR-013: Minimum Julia version + `[compat]` policy — **DECIDED**: `julia =
+  "1.11"` (1.10 LTS dropped); optional deps ship as weak-dep package extensions.
+- DR-014: AD backend primary (ForwardDiff vs Enzyme) — **DECIDED**: ForwardDiff,
+  shipped as the `JuMinuitForwardDiffExt` extension; Enzyme was not pursued.
+- DR-015: SVector/MVector small-n specialization — **DECIDED**: deferred (no
+  StaticArrays dependency; see `DEFERRED.md`).
+- DR-016: Bounded-Hessian integration shape — **DECIDED**: a standalone
+  `hesse(f, x0, errs)` (plus the `Parameters`-aware path) ships; see `GAP_AUDIT.md`.
