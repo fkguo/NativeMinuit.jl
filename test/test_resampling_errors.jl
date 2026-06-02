@@ -286,4 +286,55 @@ using Test
         @test all(isfinite, jp.std)
     end
 
+    @testset "parametric bootstrap 1σ ≈ MINOS asymmetric errors; jackknife consistent" begin
+        # Cross-validate the resampling estimators against the ANALYTIC error
+        # suite (HESSE symmetric + MINOS asymmetric). Exponential decay
+        # y = A·exp(-k·x): MINOS returns slightly asymmetric ±, and a PARAMETRIC
+        # bootstrap (regenerates y from the same model + σ, so it shares MINOS's
+        # likelihood assumptions) should reproduce EACH SIDE of the MINOS
+        # interval — the apples-to-apples cross-check. (Nonparametric bootstrap
+        # resamples the empirical residuals and is looser; covered above.)
+        A_true, k_true, σm, Nm = 5.0, 0.9, 0.20, 60
+        xm = collect(range(0.0, 4.0; length = Nm))
+        zm = randn(Xoshiro(4242), Nm)
+        zm = (zm .- mean(zm)) ./ std(zm)
+        ym = A_true .* exp.(-k_true .* xm) .+ σm .* zm
+        dm = Data(xm, ym, fill(σm, Nm))
+        expmodel(xi, p) = p[1] * exp(-p[2] * xi)
+        mm = model_fit(expmodel, dm, [4.0, 1.0]; name = ["A", "k"])
+        migrad!(mm)
+        hesse(mm)
+        minos!(mm)
+
+        hesse_err = [mm.errors[1], mm.errors[2]]
+        eA, ek = mm.merrors["A"], mm.merrors["k"]
+        @test JuMinuit.is_valid(eA) && JuMinuit.is_valid(ek)
+        # near-Gaussian here ⇒ the MINOS half-width ≈ the symmetric HESSE error
+        @test 0.5 * (eA.upper - eA.lower) ≈ hesse_err[1] rtol = 0.06
+        @test 0.5 * (ek.upper - ek.lower) ≈ hesse_err[2] rtol = 0.06
+
+        # parametric bootstrap at the ±1σ (ci_level = 0.68) percentile level
+        bp = bootstrap(expmodel, dm, mm; nresample = 4000, seed = 9,
+                       kind = :parametric, ci_level = 0.68)
+        @test bp.n_valid == 4000
+        # (a) bootstrap standard error ≈ HESSE
+        @test bp.std[1] ≈ hesse_err[1] rtol = 0.12
+        @test bp.std[2] ≈ hesse_err[2] rtol = 0.12
+        # (b) headline: each side of the bootstrap percentile interval matches
+        #     the corresponding MINOS half-width (so the asymmetry agrees too)
+        boot_up = bp.ci_upper .- bp.estimate
+        boot_lo = bp.estimate .- bp.ci_lower
+        @test boot_up[1] ≈ eA.upper  rtol = 0.15
+        @test boot_lo[1] ≈ -eA.lower rtol = 0.15
+        @test boot_up[2] ≈ ek.upper  rtol = 0.15
+        @test boot_lo[2] ≈ -ek.lower rtol = 0.15
+
+        # jackknife: the decay-rate std tracks the MINOS half-width. (A is
+        # strongly correlated with k, so its delete-1 jackknife std runs wider
+        # than the analytic error — expected; only finiteness is asserted.)
+        jk = jackknife(expmodel, dm, mm)
+        @test jk.std[2] ≈ 0.5 * (ek.upper - ek.lower) rtol = 0.20
+        @test isfinite(jk.std[1])
+    end
+
 end
