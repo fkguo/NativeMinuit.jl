@@ -65,6 +65,14 @@ step `−V·g ≈ 1e-8` per coord is essentially zero. The line search finds tin
 α, fval barely changes, edm drops, the inner DFP loop exits without exploring,
 and MIGRAD terminates back at 325.8.
 
+> **[as-built]** The `abs(...)` snippet above is the **PR #6** state — the bug
+> under audit — **not** current code. Per **§ Resolution** below, PR #6 was
+> reverted: today's `_hesse_diagonal_failure` (hesse.jl ~492) uses the
+> C++-exact raw double-clamp *with* the second clamp and *no* `abs()`
+> (`g2[j] < eps2 ? 1 : 1/g2[j]; tmp < eps2 ? 1 : tmp`). A later pass also
+> dropped the residual `abs()` the revert had left in place — it returned a
+> *negative* diagonal for negative `g2`. See `CPP_FIDELITY_AUDIT.md`.
+
 ## The tension
 
 PR #6's design doc (hesse.jl:405–422) argues that C++'s second clamp is a bug
@@ -176,7 +184,9 @@ hybrid) across three commits on this branch:
 
 paras0+S=2 trap: real regression vs PR #6, **but exact parity with iminuit
 S=2**. Mitigated by the standard HEP workflow `S=0/1 from cold → polish at
-S=2 after entering a basin`. See README "S=2 cold-seed pathology" note.
+S=2 after entering a basin`. The user-facing framing of this multi-basin
+cold-start path-sensitivity lives in the README "Real-world physics fits"
+section and `IAM_CONVERGENCE_GAP.md`.
 
 ### Branches involved
 

@@ -4,6 +4,17 @@ A native-Julia port of the C++ Minuit2 function minimization library
 (GooFit/Minuit2; ROOT::Math::Minuit2), targeting drop-in replacement of
 the iminuit/IMinuit.jl stack with C++-comparable performance.
 
+> **Status (2026-06 · v0.3.0 shipped, public).** All four phases below (0–3)
+> are **COMPLETE** — JuMinuit.jl is released. This file is preserved as the
+> original design/porting plan and reference; the **§7 module-mapping table**
+> and **§2 performance philosophy** are the live design record (and are cited
+> by `src/` comments as `ROADMAP §x`). The forward-looking sections — the phase
+> schedules (§3–6), the risk register (§8), and the open questions (§10) — are
+> the *original plan*; where something shipped differently or a question was
+> decided, an inline **[as-built]** note records what actually happened. For
+> the current, code-accurate feature/gap status see
+> [`GAP_AUDIT.md`](GAP_AUDIT.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 > **Compass**: this document is read side-by-side with the C++ reference at
 > `reference/Minuit2_cpp/` (pinned to GooFit/Minuit2 @ `57dc936`, v6.24.0 —
 > see `docs/UPSTREAM.md`). Filenames cited without a path live under that
@@ -425,9 +436,16 @@ A merge to `main` enabling Phase 1 requires *all* of:
    (FCN transform + numerical gradient + line search + DFP update + EDM +
    state/history append), not just the linear algebra primitive.
 4. **Clean run**: no warnings, no failed asserts, `Aqua.jl` clean, and
-   `JET.@report_call` clean on the **public** API
+   JET clean on the **public** API
    `migrad(::Function, ::Vector{Float64}, ::Vector{Float64})` from the
    top-level entry point (not just internal builder functions).
+   **[as-built]** SATISFIED — `test/test_aqua_jet.jl` runs
+   `JET.@report_opt target_modules=(JuMinuit,)` on this exact entry (and on
+   `migrad(::CostFunction, …)`), asserting zero JuMinuit-scoped runtime
+   dispatch. `@report_opt` (optimization analysis) is used rather than
+   `@report_call` (error analysis): it's the one that catches FCN-call-site
+   devirtualization loss, and the `target_modules` scope keeps it
+   false-positive-free across Julia 1.11/1.12.
 5. **Evidence-gate compliance** (§3.4.1).
 
 #### 3.4.1 julia-perf Level-2 evidence-gate compliance
@@ -712,7 +730,7 @@ reference-data harness).
 | 1 | **DFP Hessian update numerical drift** vs C++. The C++ formula at `DavidonErrorUpdator.cxx:60–65` computes the rank-2 base **always** and **adds** a rank-1 correction when `delgam > gvg` (a rank-3 BFGS hybrid, not an either/or branch). Implementing it as an if/else picking rank-2 *or* rank-1 silently diverges from C++ after one update. Even bit-identical math through Julia BLAS vs reference BLAS will then diverge over many iterations due to FLOP-order differences. | High | High — breaks the 1e-10 acceptance criterion on long fits. | (a) Compare iteration-by-iteration `inv_hessian` to a captured C++ trace on Rosenbrock-10 for ≤ 50 iter; flag the first iteration where any element diverges past 1e-12 and root-cause. (b) Accept that final answers agree to 1e-10 even if iteration counts drift by ±5 (gate NFcn tolerance widened from ±2 in v1). (c) Implement the matrix updates in **exactly the same FLOP order** as `DavidonErrorUpdator.cxx:58–69`: compute base rank-2, test `delgam > gvg`, then `vUpd += gvg * Outer_product(dx/delgam − vg/gvg)` *additively*. |
 | 2 | **BLAS thread interaction** when a user wires multi-threaded likelihoods (Phase 2). Nested OpenMP-in-OpenBLAS deadlocks or wastes cycles. Also a **Phase 0 benchmark hygiene** issue: OpenBLAS spinning up multiple threads at small n slows DSYMV via thread-spawn overhead. | Medium | Medium | Default `BLAS.set_num_threads(1)` when `Threads.nthreads() > 1`; document; provide a `with_blas_threads` helper. Gate script (`scripts/run_perf.jl`) sets it explicitly and records in `manifest.json`. |
 | 3 | **Intermediate-buffer allocation in arithmetic expressions** (was "ABObj substitute under-performs" in v1; rephrased per Opus review). Writing `vUpd = (dx*dx')/delgam - (vg*vg')/gvg` in idiomatic Julia allocates **three** intermediate `Matrix` temporaries per iteration. The risk is not "missed BLAS fusion" — Julia + LAPACK saturate BLAS — but heap allocation that breaks the §3.4 zero-alloc gate. | Medium | High at Phase 0 gate | Replace arithmetic-style code with explicit `BLAS.syr!`/`BLAS.spr!`/`mul!`/`axpy!` into pre-allocated workspace buffers. Verified by `@allocated` per the §3.4 exit gate (criterion 3). |
-| 4 | **Closure non-specialization** at the public API boundary. If `migrad(fcn::Function, x0, errors)` doesn't immediately wrap `fcn` into `CostFunction{typeof(fcn)}`, every FCN call goes through dynamic dispatch. iminuit users may pass closures from notebooks. | Medium | High | Wrap on entry. Use `JET.@report_call` on `migrad(::Function, ::Vector{Float64}, ::Vector{Float64})` at the *top-level* entry point in CI, not just internal builders (§3.4 criterion 4). |
+| 4 | **Closure non-specialization** at the public API boundary. If `migrad(fcn::Function, x0, errors)` doesn't immediately wrap `fcn` into `CostFunction{typeof(fcn)}`, every FCN call goes through dynamic dispatch. iminuit users may pass closures from notebooks. | Medium | High | Wrap on entry. **[as-built]** SATISFIED: `migrad` wraps the FCN into `CostFunction{F}` on entry (fcn.jl) and `test/test_aqua_jet.jl` guards the top-level `migrad(::Function, x0, errs)` entry with `JET.@report_opt target_modules=(JuMinuit,)` (not `@report_call` — the narrow `target_modules` scope avoids cross-version stdlib false positives; see §3.4 criterion 4). |
 | 5 | **Numerical instabilities with bounded parameters**. The sin transform (`SinParameterTransformation.cxx:38`) clamps internal values to `[-π/2, π/2)` minus a margin. Float64 vs C++ may handle the boundary case slightly differently, drifting MIGRAD iteration counts on bounded fits. The C++ chain rule sign for upper-only bounds is **negative** (`SqrtUpParameterTransformation.cxx:40–45`), so off-diagonal covariance signs must be tested explicitly. | Medium | Medium | Phase 1 scope; dedicated stress test fitting a Gaussian where the parameter starts at the bound. Use the same `prec.Eps2()` formula as C++ (`MnMachinePrecision.h:41`). |
 | 6 | **Reference data generation cost**. Building the C++ benchmark/reference binaries is itself a multi-hour task (CMake + Minuit2 standalone). | Medium | Low | Commit JSON reference dumps under `test/reference_data/`; CI does not require the C++ build. Document the regen procedure under `tools/regen_reference.md`. Cap at 10 reference cases. **Pin to `57dc936` (v6.24.0)** — Decision Q8 locked. |
 | 7 | **MnPosDef eigenvalue path divergence**. When the Hessian goes non-pos-def, `MnPosDef.cxx:80` calls `eigenvalues` on the *normalized correlation matrix* then adds to the diagonal of the original. Different eigenvalue routines (LAPACK `spev` vs Julia's default) may pick a different perturbation. | Low-Medium | Medium | Use `LAPACK.spev!` directly to match C++'s eigensolver choice. If still divergent, port the C++ Jacobi (`mnteigen.cxx`) verbatim for the pos-def branch only. |
@@ -722,7 +740,7 @@ reference-data harness).
 | 11 | **GC latency in long cheap-FCN fits** dominates wall time even if `@allocated` for one isolated iteration is 0. The user's closure may allocate. | Medium | Medium | Phase 2.x ships a `gc_time_pct` diagnostic + advisory hint when `@allocated migrad(...)` > 0. The §3.4 gate measures the internal-only allocation; benchmark `bench_long_fit.jl` reports GC time separately. |
 | 12 | **Benchmark drift** from compiler flags, libm, BLAS vendor/thread count, CPU governor invalidates the ≤ 1.5× claim across machines. | Medium | High | All of these go into `manifest.json` per §3.4.1. Pin to a designated reference machine (Open Question 10); cross-machine ratios are advisory not blocking. |
 | 13 | **Result-history allocation regression**. C++ default `storage_level=1` appends a `MinimumState` per iteration. If Julia mirrors the default without policy, the zero-alloc gate quietly fails on real fits. | Medium | Medium | Phase 0 defaults `storage_level=0`. Phase 1 documents the per-iter alloc when `storage_level=1`. Test `test_zero_alloc.jl` runs with `storage_level=0` explicitly. |
-| 14 | **BLAS implementation drift**. Julia 1.10 (OpenBLAS 0.3.21) vs 1.11+ (newer OpenBLAS) can shift DSYMV/DSYR result bits by 1 ULP, breaking 1e-12 reference traces. | Low-Medium | Low | Pin Julia version in `Project.toml`'s `[compat]`. Record tested OpenBLAS in `manifest.json`. Document the regen workflow when bumping. |
+| 14 | **BLAS implementation drift**. Julia 1.10 (OpenBLAS 0.3.21) vs 1.11+ (newer OpenBLAS) can shift DSYMV/DSYR result bits by 1 ULP, breaking 1e-12 reference traces. | Low-Medium | Low | Pin the supported range in `Project.toml`'s `[compat]`. **[as-built]** Julia **1.10 (LTS) was dropped** — minimum is now `julia = "1.11"` (the 1.10 alloc-elision/BLAS divergence was the trigger); supported = 1.11 + 1.12. The oracle tolerances (Risk #15) absorb the residual 1.11-vs-1.12 ULP drift. |
 | 15 | **Cross-platform IEEE drift** in reference data: x86_64-built JSON dumped, Apple-Silicon CI loads, BLAS reduction order differs at the 1e-13 ULP, test fails on a "right answer". | Medium | Medium | Tolerance hierarchy: 1e-10 on final params (cross-platform), 1e-6 on `inv_hessian` element-wise (same-platform), 1e-3 on trace-element divergence after iteration 5 (any platform). Document the hierarchy in `tools/regen_reference.md`. |
 | 16 | **MnHesse-inside-MIGRAD missing in Phase 0 with Strategy ≥ 1**. C++ `VariableMetricBuilder.cxx:138–173` calls `MnHesse` internally when `Strategy ≥ 1 && Dcovar > 0.05` (or Strategy == 2 unconditionally). iminuit default is Strategy 1. If a Phase 0 user runs with Strategy 1, they hit a missing code path. | High (if not locked) | High | **Lock Phase 0 to Strategy = 0** (now in §3 Scope). The full Strategy-0/1/2 trio is Phase 1 (§4 exit). |
 | 17 | **`AbstractVector` type stability at the API boundary**. A user passing `x0::Vector{Real}` (heterogeneous) or `Vector{Float32}` derails workspace type stability. | Low | Medium | Enforce `Float64` at the API boundary: `x0 = convert(Vector{Float64}, x0)` at `migrad(...)` entry; document; defer arbitrary-precision to a Phase 2.x extension. |
@@ -775,8 +793,10 @@ forgotten. Cross-referenced in `DEFERRED.md`.
   `mndspr`, `mndasum`, `mnlsame`, `mnxerbla`) — use
   `LinearAlgebra.BLAS.*` directly.
 - **`MnPlot` text plotting** (`MnPlot.cxx`, `mntplot.cxx`,
-  `mnbins.cxx`) — Julia users get RecipesBase recipes in Phase 2.3
-  plus an `mn_plot_text` helper for terminal use.
+  `mnbins.cxx`) — Julia users get RecipesBase recipes plus an
+  `mn_plot_text` helper for terminal use. **[as-built]** SHIPPED: the
+  RecipesBase recipes (`src/plot_recipes.jl`) and the exported
+  `mn_plot_text` ASCII renderer (`src/plot_text.jl`) are both in.
 - **ParametricFunction integration** (`ParametricFunction.h/.cxx`) —
   ROOT function-object integration.
 
@@ -812,7 +832,12 @@ ends.
   Document regen in `tools/regen_reference.md`. Address upstream bumps
   in v2.0.
 
-### Still open
+### Still open (at the time of writing)
+
+> **[as-built]** Phase 0 is long complete and JuMinuit shipped as v0.3.0, so
+> none of these are open anymore — they were resolved as the project matured.
+> The notable resolutions are recorded inline below; see `DESIGN.md`,
+> `GAP_AUDIT.md`, and `CHANGELOG.md` for the rest.
 
 - **Q1 Internal vs external covariance**. Should the public Julia API
   return covariance / errors in *external* coordinates only (mirroring
@@ -849,15 +874,20 @@ ends.
 - **Q13 Public `ErrorDef`/`up` mutation API**. iminuit exposes
   `m.errordef = X`; should JuMinuit allow post-construction mutation
   of `up`? Defaults: 1.0 (χ²) / 0.5 (NLL).
-- **Q14 Minimum Julia version + dependency policy**. Pin in
-  `[compat]`: `julia = "1.10"`? `StaticArrays`, `ForwardDiff`, `Enzyme`
-  — runtime deps or weak deps via Requires.jl / package extensions?
+- **Q14 Minimum Julia version + dependency policy — [DECIDED]**. Pin in
+  `[compat]`: **`julia = "1.11"`** (1.10 LTS was dropped — see Risk #14).
+  Optional deps (`ForwardDiff`, `Optim`, `Plots`, `Clustering`, `DataFrames`)
+  are **weak deps via Julia 1.9+ package extensions**, not Requires.jl; only
+  `LinearAlgebra`/`Printf`/`Random`/`Statistics`/`RecipesBase`/`PrecompileTools`/`Logging`
+  are hard deps.
 - **Q15 Meaning of "v0.1 ready"**. Phase 0 exit = "MIGRAD + numerical
   gradient demo only" or "MIGRAD + HESSE + bounds + named parameters"
   (effectively Phase 1)?
-- **Q16 GitHub repo public/private flip**. Currently private; when
-  does it go public? Recommend: after Phase 0 gate passes (avoids
-  attracting early users to an incomplete API).
+- **Q16 GitHub repo public/private flip — [DECIDED]**. Now **PUBLIC** —
+  released as v0.3.0 once the full MIGRAD/HESSE/MINOS/MnContours/Simplex/Scan
+  surface, the iminuit-style front end, the cost-function family, the
+  error-analysis suite, and the extensions were all in and the suite was green
+  on Julia 1.11 + 1.12.
 
 ---
 

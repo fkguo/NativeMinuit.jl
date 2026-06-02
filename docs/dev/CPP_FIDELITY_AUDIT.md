@@ -66,7 +66,7 @@ code, ignored.
 | `Invert`; fail → diagonal fallback `MnInvertFailed` (283–296) | 348–355 | ✓ |
 | `IsMadePosDef` → `MnMadePosDef` state (302–306) | 359–364 | ✓ |
 | accurate → `dcovar=0` state (309–315) | 358–375 | ✓ |
-| double-clamp `g2<eps2?1:1/g2; <eps2?1` ×3 fallbacks (177–180/216–219/289–292) | `_hesse_diagonal_failure` 462–463 | ✓ (abs-variant, identical result) |
+| double-clamp `g2<eps2?1:1/g2; <eps2?1` ×3 fallbacks (177–180/216–219/289–292) | `_hesse_diagonal_failure` (hesse.jl ~492) | ✓ (raw comparison, byte-identical to C++) |
 | MPI off-diagonal partitioning (240–271) | — | intentionally not ported (MPI deferred) |
 
 ### Findings
@@ -97,8 +97,11 @@ code, ignored.
     `state.gradient` vs C++'s fresh per-parameter user errors
     (`InitialGradientCalculator`); converges identically for smooth FCNs, can
     differ for pathological ones (GAP_AUDIT P2 follow-up).
-  - *`abs()` in the double-clamp*: same result as C++'s raw comparisons
-    (negative g2 → 1.0 both ways).
+  - *Diagonal-fallback double-clamp*: a **raw** comparison
+    `g2[j] < eps2 ? 1 : 1/g2[j]; tmp < eps2 ? 1 : tmp` (hesse.jl ~492),
+    byte-identical to C++ `MnHesse.cxx:288–291`. (An earlier `abs()`-wrapped
+    variant was **removed** — it returned a *negative* diagonal for negative
+    `g2` instead of C++'s `1.0`; see `DAVIDON_CXX_AUDIT.md`.)
   - *Off-diagonal loop*: simple nested `i<j` vs C++'s MPI-flattened index
     arithmetic — mathematically identical (it *is* C++'s own non-MPI form,
     lines 400–410 of the commented block).

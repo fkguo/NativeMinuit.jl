@@ -68,20 +68,24 @@
     end
 
     # ─────────────────────────────────────────────────────────────────
-    # Regression: `_hesse_diagonal_failure` must NOT clamp `1/g2` to 1.0
-    # when `g2` is well-defined (even if `1/g2` is below `eps2`).
+    # Regression: `_hesse_diagonal_failure` mirrors C++ MnHesse's SECOND
+    # clamp — when `1/g2` is below `eps2` (i.e. `g2` is huge) the diagonal
+    # falls back to `V[j,j] = 1.0`, NOT `1/g2`.
     #
-    # See `BenchmarkExamples/IAM_2Pformfactor` failure mode discussion
-    # in the `_hesse_diagonal_failure` docstring. The C++ reference
-    # has a double-`eps2` check that produces `V = I` everywhere when
-    # one parameter is locally FCN-flat (sag=0 bail) AND all other
-    # parameters have huge `g2` (steep FCN). The resulting Newton step
-    # `−V·g ≈ −g` blows up under line search.
-    #
-    # We intentionally diverge from C++: use `1/g2` whenever `g2` itself
-    # is well-defined. The principle matches `MnSeedGenerator.cxx:69-70`.
+    # History: PR #6 had this routine *diverge* from C++ — keep `1/g2`
+    # whenever `g2` is well-defined (the `MnSeedGenerator.cxx:69-70`
+    # convention) — on the theory the C++ double-`eps2` check was a bug,
+    # since it produces `V ≈ I` when one parameter is locally FCN-flat
+    # (sag=0 bail) while the others have huge `g2`, and the Newton step
+    # `−V·g ≈ −g` then blows up the line search. The
+    # `feat/davidon-cxx-audit` **option-1 revert** restored the C++ clamp:
+    # that `V ≈ I` is exactly what lets the IAM x_jm warm start take a large
+    # Newton step across basins to χ²=322.59 (matching iminuit). The
+    # cold-start blowup regime is handled by the retry+Simplex layer
+    # instead. See docs/dev/DAVIDON_CXX_AUDIT.md and the
+    # `_hesse_diagonal_failure` docstring.
     # ─────────────────────────────────────────────────────────────────
-    @testset "Regression: _hesse_diagonal_failure preserves 1/g2 for huge g2" begin
+    @testset "Regression: _hesse_diagonal_failure applies C++ second clamp (V=1 for huge g2)" begin
         # 2-param FCN: steep in x[1], FLAT in x[2]. At x=[0,0]:
         #   f = 1e9 · x[1]² + 0·x[2]
         #   g  = [2e9·x[1], 0]

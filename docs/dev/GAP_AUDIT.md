@@ -34,7 +34,17 @@ All gaps surfaced by the **first** audit (M1–M6, P1–P5) have been closed in 
 ## Re-audit (2026-05-29, post-bfd6e30)
 
 A fresh full-surface re-audit after PRs #1–#12 found 1 BLOCKING + 4 NICE
-gaps the M/P-focused first pass had missed (plus cosmetic items). In flight:
+gaps the M/P-focused first pass had missed (plus cosmetic items).
+
+> **[as-built]** All of the BLOCKING + NICE items below are now **merged**
+> (shipped in v0.3.0): indexed param assignment (`m.fixed["x"]=true` via
+> `Base.setindex!(::ParameterView, …)`, minuit.jl:1431/1437), one-sided limit
+> setters `set_upper_limit!`/`set_lower_limit!`, standalone `hesse(f, x0, errs)`,
+> single-side MINOS `minos_lower`/`minos_upper` (`toler`/`maxcall` honoured),
+> and `scan` best-value retention (scan.jl). The COSMETIC C++-name-wrapper row
+> remains deferred.
+
+Originally in flight:
 
 | gap | severity | fix chip / branch |
 |---|---|---|
@@ -227,6 +237,13 @@ follows iminuit, NOT C++. If so, this is documented behavior, not a
 gap; promote to "✓ Verified API parity with iminuit" instead.
 
 Recommended: verify and document, no functional change.
+
+> **[as-built]** The ellipse-vs-exact naming is confirmed iminuit-compatible
+> (no change there). However, a later pre-release review found a *separate*,
+> real functional bug this P3 pass missed: the high-level `contour(m, …)` /
+> `mncontour(m, …)` returned **internal** (sin/√-transformed) coordinates for
+> **bounded** parameters instead of physical ones — fixed by externalizing the
+> returned points (`_externalize_contour`, contours.jl; minuit.jl, iminuit_compat.jl).
 
 ### P4 · `MnUserCovariance` packed-storage layout (COSMETIC, no action)
 

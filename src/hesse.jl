@@ -417,10 +417,10 @@ end
 Build the failure-mode `MinimumState` with a diagonal inverse-Hessian
 of `1/g2[j]` (clamped to 1 when g2[j] is degenerate). Mirrors C++
 `MnHesse.cxx:177-184` (and the analogous block at lines 216-223 for
-maxcalls overrun) — with a documented divergence on the very-large-g2
-case described below.
+maxcalls overrun) **exactly** — including the second clamp on the
+very-large-g2 case; see below for why that clamp is load-bearing.
 
-# Intentional divergence from C++
+# Why this mirrors C++ (PR #6's divergence was reverted)
 
 C++ uses a **double** eps2 check:
 
@@ -455,21 +455,19 @@ too — see iminuit S=2 from paras0 = 1268.65 stuck). The standard
 HEP workflow of "S=0/1 from cold seeds, polish at S=2" already
 avoids the paras0+S=2 trap.
 
-# Edge cases
+# Edge cases (raw comparison, no `abs` — exactly C++ MnHesse.cxx:288-291)
 
-- `g2[j] = Inf` → `1/g2 = 0`. Both clamps fall back to `V[j,j] = 1`
-  (the first check on `g2 < eps2` is false, then the second check
-  on `tmp < eps2` is true → 1).
-- `g2[j] = NaN` → first check uses `abs(NaN) < eps2 == false` →
-  goes to `1/NaN = NaN`; second check uses `abs(NaN) < eps2 == false`
-  → propagates NaN to `V[j,j]`. Pathological FCN, downstream
-  MnPosDef has to recover.
-- `g2[j] = -1e10` (negative — defensively): both checks operate on
-  `abs(...)`, so first check sees `1e10 ≥ eps2` → uses `1/(-1e10) =
-  -1e-10`; second check on `abs(-1e-10) < eps2` → fires → `V[j,j]
-  = 1`. Matches C++ behavior (which uses raw `g2(j)` without abs in
-  the first check; for `g2 < 0` the first check `g2 < eps2` is true
-  → C++ falls back to 1 immediately).
+- `g2[j] = Inf` → `1/g2 = 0`. First check `g2 < eps2` is false → `tmp
+  = 1/g2 = 0`; second check `tmp < eps2` is true → `V[j,j] = 1`.
+- `g2[j] = NaN` → `NaN < eps2` is `false` → `tmp = 1/NaN = NaN`; the
+  second `NaN < eps2` is also `false` → NaN propagates to `V[j,j]`.
+  Pathological FCN; downstream MnPosDef has to recover.
+- `g2[j] = -1e10` (negative curvature) → the first check `g2 < eps2`
+  is **true** (any negative number is below `eps2`) → `V[j,j] = 1.0`
+  immediately, matching C++. This is precisely why the comparison is
+  **raw** and not `abs(g2[j])`: `abs` would let `1/(-1e10) = -1e-10`
+  through and store a **negative variance** (poisoning EDM / error
+  reporting); the raw form never does. See the inline note at the loop.
 
 See `docs/dev/DAVIDON_CXX_AUDIT.md` for the audit trail.
 """

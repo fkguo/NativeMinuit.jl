@@ -104,9 +104,10 @@ with packed-BLAS routines DSPMV/DSPR.
   view wins for the typical Minuit2 `n ≤ 50` (Decision Q3 locked in
   ROADMAP v2). Both representations fit in L1; OpenBLAS DSYMV
   vectorizes better than DSPMV.
-- **What we keep**: `linalg.jl` retains a packed variant behind a
-  feature flag for benchmarking — to confirm the prior empirically and
-  to support hypothetical n ≥ 200 cases.
+- **What we ship**: `linalg.jl` uses dense `Symmetric` throughout and
+  **abandons** packed BLAS (and the ABObj layer) — see the file header. The
+  layout is isolated behind the documented surface so a packed variant *could*
+  be swapped in later if it ever wins on a benchmark (n ≥ 200); none is shipped.
 - **Revisit when**: a Phase 0 benchmark shows packed beating dense by
   more than 10% on any blocking scenario.
 
@@ -141,9 +142,10 @@ all of `inc/Math` and `inc/Fit`.
 `MnPlot.cxx`, `mntplot.cxx`, `mnbins.cxx`.
 
 - **Why deferred**: Julia users primarily plot via Plots.jl/Makie.jl.
-- **What we provide instead**: `mn_plot_text(::FunctionMinimum)` helper
-  in Phase 2.3 for terminal-only users who want a quick contour /
-  parameter scan glance.
+- **What we provide instead**: a `mn_plot_text` helper (plot_text.jl) for
+  terminal-only users — methods take a `ContoursError` or a raw
+  `Vector{Tuple{Real,Real}}` of contour points (e.g.
+  `mn_plot_text(contour(fmin, cf, 1, 2))`) and render an ASCII contour glance.
 
 ### ParametricFunction integration
 

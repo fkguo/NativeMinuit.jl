@@ -1,5 +1,34 @@
 # Upstream report draft — `MnHesse` `1/g2` clamp inverts physical meaning
 
+> **⚠️ SUPERSEDED — DO NOT FILE AS WRITTEN. See [`DAVIDON_CXX_AUDIT.md`](DAVIDON_CXX_AUDIT.md).**
+>
+> This draft's central thesis — that C++ `MnHesse`'s **second** diagonal clamp
+> (`vhmat(j,j) = tmp < eps2 ? 1 : tmp`) is an unambiguous bug to be removed —
+> was **overturned** by JuMinuit's own later x_jm warm-start audit:
+>
+> - The clamp is **load-bearing**, not a localised mistake. It produces the
+>   `V ≈ I` that lets a *warm* start take a large Newton step across basins
+>   (iminuit reaches χ²=322.59 this way). This draft only examined the
+>   *cold-start / FCN-flat* regime, where the same clamp instead causes a `V=I`
+>   line-search blowup. The two regimes want **opposite** `V` scales, so the
+>   clamp is a documented C++ **tradeoff**, not a clear bug.
+> - **PR #6** (the prescription in § "Suggested upstream patch" — remove the
+>   clamp, `std::fabs` form) was therefore **reverted** in JuMinuit. The current
+>   `_hesse_diagonal_failure` (hesse.jl ~492) **restores the C++ second clamp**
+>   and, unlike the patch below, uses a **raw** comparison (no `fabs`): a
+>   negative `g2` falls back to `1.0` rather than keeping a sign-flipped negative
+>   variance — see [`CPP_FIDELITY_AUDIT.md`](CPP_FIDELITY_AUDIT.md). The
+>   cold-start blowup regime is handled by the retry + Simplex layer instead.
+> - The specific fvals below (IAM `613.49 → 401.45`, X3872 `1.30 → 0.017`) are
+>   **pre-revert** and no longer describe the shipped defaults; the current IAM
+>   default reaches `404.15` (see [`IAM_CONVERGENCE_GAP.md`](IAM_CONVERGENCE_GAP.md)).
+>
+> Retained as an **investigation record**. The cold-start `V=I` blowup it
+> reproduces is a real, reproducible C++ behaviour — it is simply *not* fixable
+> by deleting the clamp (that breaks the warm-start basin walk). Whether a
+> *revised* upstream note is still worth filing is an open call for the
+> maintainer.
+
 **Component**: ROOT / Minuit2 — `Math/Minuit2/src/MnHesse.cxx`
 **Versions confirmed**: GooFit/Minuit2 v6.24.0 (commit `57dc936`), Python
 `iminuit` ≥ 2 (which links the same C++ source via `pybind11`)
@@ -145,7 +174,9 @@ flip downstream rather than silently inverting `1/(−g2)` to `1`.
 
 ## Cross-references
 
-* JuMinuit.jl PR that applied the same fix in the Julia port:
+* JuMinuit.jl PR #6 originally applied this fix in the Julia port — **but it
+  was later reverted** (the C++ second clamp was restored; see the SUPERSEDED
+  banner above and `DAVIDON_CXX_AUDIT.md`):
   <https://github.com/fkguo/JuMinuit.jl/pull/6>
 * JuMinuit.jl benchmark and physics-impact documentation:
   [`BenchmarkExamples/RESULTS.md`](../BenchmarkExamples/RESULTS.md)
