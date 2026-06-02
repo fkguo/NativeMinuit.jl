@@ -348,3 +348,7 @@ for APA / BibTeX, or:
   — the Julia wrapper this package complements and can replace.
 - **[iminuit](https://github.com/scikit-hep/iminuit)** (Hans Dembinski,
   scikit-hep) — the Python wrapper whose API JuMinuit mirrors.
+- **AI coding agents** — portions of the port, its tests, and the documentation
+  were drafted and adversarially cross-reviewed with the help of multiple AI
+  coding agents. The algorithmic and C++-fidelity decisions, and final
+  responsibility for the code, remain the authors'.
