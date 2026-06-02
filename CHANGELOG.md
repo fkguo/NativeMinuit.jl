@@ -3,6 +3,48 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-06-02
+
+A tooling + documentation release. The solver core is unchanged (the v0.3.0
+algorithms are byte-identical); this adds a global-search helper, regression
+tests, real-physics error-analysis demonstrations, and a docs pass.
+
+### Added
+
+- **`find_global_minimum`** — a basin-hopping global search for multi-basin
+  objectives (a single MIGRAD only finds the basin its start point drains into).
+  It perturbs the current best, re-fits, and adopts any deeper valid minimum,
+  repeating until no round improves. Complements `find_solution_modes` (which
+  clusters an already-sampled set into modes); use it to find the true minimum
+  *before* error analysis. Unbounded-only; returns a `FunctionMinimum` (check
+  `is_valid`).
+- **JET optimisation-analysis regression guard** — `test/test_aqua_jet.jl`
+  asserts (via `JET.@report_opt target_modules=(JuMinuit,)`) that the MIGRAD hot
+  path stays free of runtime dispatch — locking in the `CostFunction{F}`
+  devirtualisation the performance claim rests on. Verified on Julia 1.11 + 1.12.
+- **Bootstrap-vs-MINOS cross-validation test** — the resampling suite now checks
+  that a parametric bootstrap's ±1σ percentile interval reproduces each side of
+  the analytic MINOS asymmetric error.
+- **Error-analysis demonstrations** (`BenchmarkExamples/`, not unit tests):
+  - `X3872_dip/error_crosscheck.jl` — HESSE / MINOS / parametric-bootstrap on
+    the published single-basin dip fit (they agree).
+  - `IAM_2Pformfactor/error_crosscheck.jl` — a **cautionary** multi-basin study:
+    find the true minimum (multi-start + a `find_solution_modes(refine=true)`
+    adopt-deeper-basin loop), then trust the **local** error methods
+    (HESSE/MINOS/MC-Δχ²). Naive bootstrap/jackknife are shown to be unreliable
+    there — their re-fits scatter across basins, inflating the spread by orders
+    of magnitude.
+
+### Changed
+
+- Documentation aligned with the shipped code: the dev audit-trail docs
+  (`ROADMAP`/`DESIGN`/`GAP_AUDIT`/`DEFERRED`/`CPP_FIDELITY_AUDIT`/
+  `DAVIDON_CXX_AUDIT`) annotated as-built; the withdrawn `MnHesse` upstream-bug
+  draft removed (its thesis was reverted in the code); the
+  `_hesse_diagonal_failure` docstring/test corrected to the restored C++ clamp.
+  The README clarifies that IMinuit.jl wraps the Python `iminuit`, adds a
+  "multi-basin fits" workflow note, and acknowledges AI-agent assistance.
+
 ## [0.3.0] — 2026-05-31
 
 First public release. A complete error-analysis suite, a Julia-native
