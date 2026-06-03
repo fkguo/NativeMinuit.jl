@@ -132,6 +132,272 @@ end
 find_deeper_minimum(f, x0::AbstractVector, errors::AbstractVector; up::Real = 1.0, kwargs...) =
     find_deeper_minimum(CostFunction(f, up), x0, errors; kwargs...)
 
+# ─── Perturbation: Minuit convenience dispatch ────────────────────────────────
+
+"""
+    find_deeper_minimum(m::Minuit; kwargs...) -> FunctionMinimum
+
+Convenience overload — equivalent to
+`find_deeper_minimum(m.fcn, collect(m.values), collect(m.errors); kwargs...)`.
+Avoids extracting `values` and `errors` by hand when you already hold a
+converged [`Minuit`](@ref). All keyword arguments are forwarded to the
+parameter-perturbation overload.
+"""
+find_deeper_minimum(m::Minuit; kwargs...) =
+    # Route through m.cfwg (the CostFunctionWithGradient) when the user supplied an
+    # analytical / AD gradient, so the perturbation restarts use the gradient path.
+    # Fall back to m.fcn (numerical CostFunction) when no gradient was given.
+    find_deeper_minimum(m.cfwg === nothing ? m.fcn : m.cfwg,
+                        collect(Float64, m.values), collect(Float64, m.errors); kwargs...)
+
+# ─── Resampling: pre-fitted Minuit (primary implementation) ──────────────────
+
+"""
+    find_deeper_minimum(m::Minuit, refit, data; kwargs...) -> Minuit
+
+Data-resampling basin-hopping search for a **deeper** minimum on a multi-basin
+data-fitting objective.
+
+Unlike the parameter-perturbation overload, which randomly jitters parameters,
+this overload exploits the *statistical structure of the data*: each bootstrap
+resample of `data` is re-fit by `refit`, which naturally drifts toward the basin
+that best explains *that* data subset — making it far more effective on surfaces
+where basins are separated by large distances in parameter space relative to the
+HESSE scale.
+
+!!! note "Comparability: all χ² comparisons are on the original data"
+    `refit(subdata, start)` runs on a bootstrap subsample and returns *parameter
+    vectors* only, used as starting-point candidates. All function-value comparisons
+    use [`find_solution_modes`](@ref) with `refine=true`, which re-evaluates each
+    candidate on the *original* objective (via `m.fcn`). Comparability with
+    `m.fval` is guaranteed by design.
+
+!!! warning "Unbounded only — same contract as the perturbation overload"
+    Parameter limits and fixed flags are **not** carried over to the adopted
+    Minuit. Fold any bounds into the cost function before calling.
+    Always check `is_valid` on the returned `Minuit`.
+
+# Arguments
+- `m::Minuit` — a converged fit (MIGRAD + HESSE already run). Provides the cost
+  function, current best parameters as the warm-start for discovery, and the
+  HESSE covariance for whitening inside [`find_solution_modes`](@ref).
+- `refit` — any callable: `refit(subdata, start::Vector{Float64}) -> Vector{Float64}`.
+  Must run MIGRAD on the resampled subset starting from `start`, and return the
+  fitted parameter vector, or a `NaN`-filled vector of the same length if the
+  fit is invalid. Accepts functors/callable structs as well as plain functions.
+- `data` — the full dataset. Must support `data[idx]` indexing where `idx` is a
+  `Vector{Int}` bootstrap index vector.
+
+# Keyword arguments
+- `n_discovery::Integer = 20` — bootstrap resamples per round. Keep ≥ 10 for
+  [`find_solution_modes`](@ref) clustering to be stable; must be ≥ 2.
+- `max_rounds::Integer = 6` — cap on adoption rounds. Each round runs
+  `n_discovery` refits + one full-data re-minimisation if a deeper basin is found.
+- `strategy = Strategy(1)` — MIGRAD strategy for the adoption re-fit (full data).
+  Discovery-phase strategy is controlled inside `refit`.
+- `min_improvement::Real = 1e-3` — minimum χ² drop required to adopt a basin.
+- `parallel::Union{Bool,Nothing} = nothing` — controls threading in two places:
+  (1) the discovery loop (`Threads.@threads`) is parallelised **only** when
+  `parallel === true` — `refit` must be thread-safe (no shared mutable state);
+  under `nothing` or `false` discovery is always serial.
+  (2) the value is passed through to [`find_solution_modes`](@ref), which
+  auto-threads the per-mode re-fits when `nothing` and `m.threaded_gradient` is set.
+- `seed::Union{Integer,Nothing} = nothing` — RNG seed for reproducible bootstrap
+  index generation. Indices are pre-generated sequentially before any parallel
+  section, so results are deterministic regardless of `parallel`.
+- `verbose::Bool = false` — log χ² improvement at each adoption round.
+
+# Returns
+The deepest `Minuit` found (MIGRAD + HESSE already run at the new basin), or the
+*input `m` unchanged* if no deeper basin was found or the suitability check fired.
+
+# Suitability check
+After the **first** discovery round, if no resample finds a deeper basin the
+surface appears single-basin for data-resampling at this start point — a `@warn`
+is emitted and `m` is returned immediately. Try the parameter-perturbation
+overload: `find_deeper_minimum(m; perturb=…, n_restarts=…)`.
+
+# Example
+```julia
+m = Minuit(chi2, x0; names = pnames, errors = errs); migrad!(m); hesse(m)
+
+refit = (subdata, start) -> begin
+    cf = CostFunction(lec -> chi2_on(subdata, lec), 1.0)
+    fm = migrad(cf, start, errs; strategy = Strategy(1))
+    is_valid(fm) ? collect(values(fm)) : fill(NaN, length(start))
+end
+
+m_deep = find_deeper_minimum(m, refit, pts)
+is_valid(m_deep) || error("search failed")
+# m_deep already has HESSE; run minos!(m_deep) or get_contours_samples for errors
+```
+
+See also [`find_solution_modes`](@ref), the parameter-perturbation overload
+[`find_deeper_minimum(fcn, x0, errors)`](@ref).
+"""
+function find_deeper_minimum(m::Minuit, refit, data;
+        n_discovery     :: Integer                = 20,
+        max_rounds      :: Integer                = 6,
+        strategy                                  = Strategy(1),
+        min_improvement :: Real                   = 1e-3,
+        parallel        :: Union{Bool,Nothing}    = nothing,
+        seed            :: Union{Integer,Nothing} = nothing,
+        verbose         :: Bool                   = false)
+
+    n_discovery >= 2 ||
+        throw(ArgumentError("find_deeper_minimum: n_discovery must be ≥ 2"))
+    max_rounds >= 1 ||
+        throw(ArgumentError("find_deeper_minimum: max_rounds must be ≥ 1"))
+    min_improvement >= 0 ||
+        throw(ArgumentError("find_deeper_minimum: min_improvement must be ≥ 0"))
+    n  = length(data)
+    n >= 2 || throw(ArgumentError("find_deeper_minimum: data must have ≥ 2 elements"))
+    np = length(m.values)
+
+    rng    = seed === nothing ? Random.default_rng() : Random.Xoshiro(seed)
+    # Parallelize discovery only when explicitly requested: refit must be thread-safe.
+    do_par = parallel === true
+
+    for iter in 1:max_rounds
+        p_star = collect(Float64, m.values)
+
+        # Pre-generate all bootstrap index vectors sequentially so the RNG state
+        # is deterministic regardless of whether the discovery loop runs in parallel.
+        all_idx = [rand(rng, 1:n, n) for _ in 1:n_discovery]
+
+        # ── Discovery: refit each bootstrap resample ──────────────────────────
+        rows = Vector{Union{Vector{Float64},Nothing}}(undef, n_discovery)
+        if do_par
+            Threads.@threads :static for k in 1:n_discovery
+                r = refit(data[all_idx[k]], p_star)
+                rows[k] = (length(r) == np && all(isfinite, r)) ? r : nothing
+            end
+        else
+            for k in 1:n_discovery
+                r = refit(data[all_idx[k]], p_star)
+                rows[k] = (length(r) == np && all(isfinite, r)) ? r : nothing
+            end
+        end
+        valid_rows = filter(!isnothing, rows)
+
+        # ── Too few valid resamples: bail ─────────────────────────────────────
+        if length(valid_rows) < 2
+            @warn "find_deeper_minimum (resampling): only $(length(valid_rows)) valid " *
+                  "resample(s) in round $iter — FCN may throw or fail on most bootstrap " *
+                  "subsets. Check your `refit` function."
+            break
+        end
+
+        # ── Cluster and refine each mode on the ORIGINAL data (via m.fcn) ─────
+        # Pre-allocate disc matrix (avoids repeated vcat allocations).
+        disc = Matrix{Float64}(undef, length(valid_rows), np)
+        for (i, r) in enumerate(valid_rows)
+            disc[i, :] .= r
+        end
+        md = find_solution_modes(disc, m; refine = true, parallel = parallel)
+
+        # ── Suitability check (round 1 only) ─────────────────────────────────
+        # `new_min` is false when every resample converged to the same or a shallower
+        # basin — the surface may be single-basin, or the bootstrap may just not
+        # have explored deeply enough (try a larger `n_discovery`).
+        if iter == 1 && !any(x.new_min for x in md)
+            @warn "find_deeper_minimum (resampling): round 1 — " *
+                  "$(length(valid_rows)) valid resample(s) formed $(length(md)) mode(s), " *
+                  "none deeper than current best (χ² = $(round(m.fval; digits=3))). " *
+                  "No deeper basin found via data-resampling at this start. " *
+                  "The surface may be single-basin here, or bootstrap coverage was insufficient " *
+                  "(try a larger `n_discovery`). " *
+                  "For parameter-space search try: `find_deeper_minimum(m; perturb=…, n_restarts=…)`."
+            return m
+        end
+
+        # ── Find the deepest valid new-minimum mode ───────────────────────────
+        deeper = [x for x in md if x.new_min && x.refined_valid]
+        if isempty(deeper)
+            verbose && @info "find_deeper_minimum (resampling)" iter msg = "no deeper basin → stable"
+            break
+        end
+        bn          = deeper[argmin(x.refined_fval for x in deeper)]
+        fval_before = m.fval
+        fval_after  = bn.refined_fval
+        fval_before - fval_after >= min_improvement || break
+
+        verbose && @info "find_deeper_minimum (resampling)" iter χ²_before = fval_before χ²_after = fval_after
+
+        # ── Adopt: rebuild Minuit at new basin, re-fit + HESSE on full data ───
+        # Preserve the analytical gradient function if the original fit used one.
+        # Note: parameter limits and fixed flags are not carried over (unbounded
+        # contract, matching the perturbation overload).
+        grad = m.cfwg === nothing ? nothing : m.cfwg.g
+        # Use the refined_errors from the new basin (populated by migrad! inside
+        # _refine_mode) as step sizes — more appropriate than the old basin's
+        # HESSE errors, which may differ in scale by orders of magnitude.
+        # Fall back to m.errors only if refined_errors is unexpectedly empty.
+        adopt_errs  = isempty(bn.refined_errors) ? collect(Float64, m.errors) :
+                                                    collect(Float64, bn.refined_errors)
+        prev_ndata  = m.ndata
+        prev_prec   = m.prec
+        prev_vt     = m.verify_threading
+        m = Minuit(m.fcn.f, collect(Float64, bn.refined_values);
+                   name              = collect(m.parameters),
+                   error             = adopt_errs,
+                   grad              = grad,
+                   up                = m.fcn.up,
+                   strategy          = strategy,
+                   tol               = m.tol,
+                   print_level       = m.print_level,
+                   threaded_gradient = m.threaded_gradient,
+                   verify_threading  = prev_vt,
+                   prec              = prev_prec)
+        m.ndata = prev_ndata   # not a constructor kwarg; set post-construction
+        migrad!(m); hesse(m)
+    end
+    return m
+end
+
+# ─── Resampling: fresh-start (delegates to pre-fitted) ────────────────────────
+
+"""
+    find_deeper_minimum(cf::AbstractCostFunction, x0, errors, refit, data; kwargs...) -> Minuit
+
+Fresh-start data-resampling overload. Runs an initial MIGRAD + HESSE from `x0`
+to build the reference [`Minuit`](@ref), then delegates to the
+`(m::Minuit, refit, data)` overload. See that overload for full keyword
+documentation.
+
+When you already have a converged `Minuit`, prefer passing it directly —
+`find_deeper_minimum(m, refit, data)` skips the initial MIGRAD + HESSE.
+"""
+function find_deeper_minimum(cf::AbstractCostFunction, x0::AbstractVector,
+                             errors::AbstractVector, refit, data;
+                             strategy = Strategy(1), kwargs...)
+    errs = collect(Float64, errors)
+    m0   = Minuit(cf.f, collect(Float64, x0); error = errs, up = cf.up, strategy = strategy)
+    migrad!(m0); hesse(m0)
+    find_deeper_minimum(m0, refit, data; strategy = strategy, kwargs...)
+end
+
+# ─── Resampling: plain-callable wrapper ───────────────────────────────────────
+
+find_deeper_minimum(f, x0::AbstractVector, errors::AbstractVector, refit, data;
+                    up::Real = 1.0, kwargs...) =
+    find_deeper_minimum(CostFunction(f, up), x0, errors, refit, data; kwargs...)
+
+# ─── Dispatch disambiguator ───────────────────────────────────────────────────
+# Without this method, a call shaped `(Minuit, AbstractVector, AbstractVector)`
+# is ambiguous: the perturbation plain-callable wrapper is more specific on
+# args 2–3, while the resampling pre-fitted overload is more specific on arg 1.
+# Julia would throw MethodError. This sentinel is more specific on ALL three
+# args and resolves the ambiguity with a helpful message.
+find_deeper_minimum(::Minuit, ::AbstractVector, ::AbstractVector; kwargs...) =
+    throw(ArgumentError(
+        "find_deeper_minimum: ambiguous 3-arg call (Minuit, AbstractVector, AbstractVector). " *
+        "For parameter-perturbation from a Minuit use the 1-arg form: " *
+        "`find_deeper_minimum(m; perturb=…)`. " *
+        "For data-resampling pass a callable `refit` and a data collection: " *
+        "`find_deeper_minimum(m, refit, data)`."))
+
+
 # Deprecated 0.3.1 name. Basin-hopping cannot certify a global minimum, so the
 # honest name is `find_deeper_minimum`; this warning-emitting alias keeps any
 # v0.3.1 code working.
