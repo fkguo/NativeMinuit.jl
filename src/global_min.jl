@@ -61,6 +61,25 @@ function _perturb_point(best::Minuit, scale::Vector{Float64}, perturb::Real, rng
     return x
 end
 
+# Project a discovery candidate onto `m`'s constraints: pin fixed parameters at the
+# fit's value and clamp bounded ones into [lower, upper]. A user-supplied `refit`
+# need not respect bounds; without this, find_solution_modes would score the
+# ORIGINAL FCN at an out-of-bounds point and throw if the FCN is undefined there
+# (the usual reason a parameter is bounded).
+function _project_row(row::AbstractVector{<:Real}, m::Minuit)
+    p = collect(Float64, row)
+    @inbounds for i in eachindex(p)
+        if is_fixed(m.params, i)
+            p[i] = m.params.pars[i].value
+        else
+            lo, hi = m.limits[i]
+            isnan(lo) || (p[i] = max(p[i], lo))
+            isnan(hi) || (p[i] = min(p[i], hi))
+        end
+    end
+    return p
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Perturbation strategy — core (m::Minuit) + convenience overloads
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,11 +191,12 @@ honoured. `cf` may be an [`AbstractCostFunction`](@ref) (its gradient, if any, i
 carried) or a bare callable (`up` sets the error definition).
 """
 function find_deeper_minimum(cf::AbstractCostFunction, x0::AbstractVector, errors::AbstractVector;
-        limits = nothing, fixed = nothing, names = nothing, strategy = Strategy(1), kwargs...)
+        limits = nothing, fixed = nothing, names = nothing, name = nothing,
+        strategy = Strategy(1), kwargs...)
     grad = cf isa CostFunctionWithGradient ? cf.g : nothing
     chkg = cf isa CostFunctionWithGradient ? cf.check_gradient : true
     m = Minuit(cf.f, collect(Float64, x0); error = collect(Float64, errors), up = cf.up,
-               limits = limits, fixed = fixed, name = names,
+               limits = limits, fixed = fixed, name = (names === nothing ? name : names),
                grad = grad, check_gradient = chkg, strategy = strategy)
     find_deeper_minimum(m; strategy = strategy, kwargs...)
 end
@@ -284,9 +304,11 @@ function find_deeper_minimum(m::Minuit, refit, data;
             break
         end
 
+        # Project every candidate onto cur's constraints BEFORE clustering, so
+        # find_solution_modes never evaluates the FCN out of bounds / off a fixed value.
         disc = Matrix{Float64}(undef, length(valid_rows), np)
         for (i, r) in enumerate(valid_rows)
-            disc[i, :] .= r
+            disc[i, :] .= _project_row(r, cur)
         end
         # find_solution_modes refines each mode through Minuit(m.fcn.f, m) — limits
         # + fixed flags preserved, fixed parameters pinned — on the ORIGINAL data.
@@ -342,12 +364,12 @@ a converged `Minuit`, prefer passing it directly.
 """
 function find_deeper_minimum(cf::AbstractCostFunction, x0::AbstractVector,
                              errors::AbstractVector, refit, data;
-                             limits = nothing, fixed = nothing, names = nothing,
+                             limits = nothing, fixed = nothing, names = nothing, name = nothing,
                              strategy = Strategy(1), kwargs...)
     grad = cf isa CostFunctionWithGradient ? cf.g : nothing
     chkg = cf isa CostFunctionWithGradient ? cf.check_gradient : true
     m = Minuit(cf.f, collect(Float64, x0); error = collect(Float64, errors), up = cf.up,
-               limits = limits, fixed = fixed, name = names,
+               limits = limits, fixed = fixed, name = (names === nothing ? name : names),
                grad = grad, check_gradient = chkg, strategy = strategy)
     # The (m, refit, data) core fits a clone of `m` itself — no need to fit here.
     find_deeper_minimum(m, refit, data; strategy = strategy, kwargs...)

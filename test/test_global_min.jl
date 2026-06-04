@@ -79,6 +79,29 @@ end
     @test rf.fixed[2] == true                     # fix preserved
     @test rf.values[2] == 2.0                     # fixed param never moved (would be ~3.0 if un-fixed)
     @test rf.values[1] < 0                        # the FREE param still escaped to the deep well
+
+    # `name=` (singular, iminuit-style) accepted as an alias for `names=` on the
+    # bare overloads (else it would leak to the core as a MethodError).
+    mn = find_deeper_minimum(x -> (x[1]-1)^2 + (x[2]-2)^2, [0.0, 0.0], [0.3, 0.3];
+                             name = ["a", "b"], n_restarts = 8, max_rounds = 2, seed = 1)
+    @test mn isa Minuit
+    @test collect(mn.parameters) == ["a", "b"]
+end
+
+@testset "find_deeper_minimum — resampling projects OOB candidates (FCN throws past the bound)" begin
+    # The FCN is undefined for x[1] ≤ 0 — the very reason x[1] is bounded. A user
+    # `refit` that returns an OUT-OF-BOUNDS candidate must NOT crash the search:
+    # the discovery projection clamps it before find_solution_modes scores the FCN.
+    fb(x) = (log(x[1]))^2 + (x[1] - 2.0)^2 + x[2]^2          # DomainError for x[1] ≤ 0
+    m = Minuit(fb, [2.0, 0.0]; errors = [0.3, 0.3], limits = [(1e-6, nothing), nothing], strategy = 1)
+    migrad!(m); hesse(m)
+    data = collect(1.0:10.0)
+    refit_oob = (sub, st) -> [-0.5, 0.01 * (sum(sub)/length(sub) - 5.5)]   # x[1] = −0.5 (out of bounds)
+    m_out = with_logger(NullLogger()) do                     # must not throw a DomainError
+        find_deeper_minimum(m, refit_oob, data; n_discovery = 6, seed = 1)
+    end
+    @test m_out isa Minuit
+    @test m_out.values[1] >= 1e-6                             # stayed in bounds
 end
 
 @testset "find_deeper_minimum — resampling dispatches" begin
