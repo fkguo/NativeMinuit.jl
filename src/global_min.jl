@@ -236,7 +236,7 @@ insufficient (raise `n_discovery`); for parameter-space search try the
 perturbation overload `find_deeper_minimum(m; perturb=…)`.
 """
 function find_deeper_minimum(m::Minuit, refit, data;
-        n_discovery::Integer = 20, max_rounds::Integer = 6, strategy = m.strategy,
+        n_discovery::Integer = 20, max_rounds::Integer = 50, strategy = m.strategy,
         min_improvement::Real = 1e-3, maxfcn::Union{Integer,Nothing} = nothing,
         parallel::Union{Bool,Nothing} = nothing,
         seed::Union{Integer,Nothing} = nothing, verbose::Bool = false)
