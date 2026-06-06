@@ -1,17 +1,23 @@
 #!/bin/bash
-# Binder post-build: instantiate the Julia environment in .binder/
-# and install the IJulia kernel.
+# Binder post-build: configure PyCall to use the binder Python, then
+# instantiate the Julia environment and install the IJulia kernel.
 set -e
 
 julia --project=.binder -e '
 using Pkg
-# Dev the current repo's JuMinuit so the notebook uses the in-tree
+# Dev the current repo'\''s JuMinuit so the notebook uses the in-tree
 # version (not the registered one — JuMinuit.jl is private/dev).
 Pkg.develop(path="..")
+
+# Point PyCall at the binder'\''s own Python (empty string = use $PYTHON env var
+# or the Julia-default conda/system Python — whichever Binder provides).
+ENV["PYTHON"] = ""
+Pkg.build("PyCall")
+
 Pkg.instantiate()
 Pkg.precompile()
 
-# Register an IJulia kernel for the notebook to use.
+# Register an IJulia kernel for the notebooks to use.
 using IJulia
 installkernel("Julia (.binder)", "--project=@.")
 '
