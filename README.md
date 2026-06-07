@@ -15,8 +15,8 @@ that go beyond what either offers.
 License: **LGPL 2.1 or later** (mirrors upstream Minuit2). This is a derivative
 work of C++ Minuit2 — see [`LICENSE`](LICENSE) and [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 
-[![IAM fit (Binder)](https://img.shields.io/badge/launch-GESIS%20Binder-579ACA?logo=jupyter&logoColor=white)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
-[![X(3872) dip (Binder)](https://img.shields.io/badge/launch-GESIS%20Binder-579ACA?logo=jupyter&logoColor=white)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
+[![IAM fit (Binder)](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
+[![X(3872) dip (Binder)](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
 
 ## Installation
 

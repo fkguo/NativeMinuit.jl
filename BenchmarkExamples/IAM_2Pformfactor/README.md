@@ -9,13 +9,13 @@ Fit to meson-meson scattering data using coupled-channel IAM with unitarity fulf
 Y.-J. Shi, C.-Y. Seng, F.-K. Guo, B. Kubis, U.-G. Meißner, W. Wang, *Two-Meson Form Factors in Unitarized Chiral Perturbation Theory*, [arXiv:2011.00921](https://arxiv.org/abs/2011.00921).
 
 The Jupyter notebook `iamfit.ipynb` performing the IAM fit can be run
-interactively online — no install — by clicking:
+interactively online — no install, no login — via [Binder](https://mybinder.org):
 
-[![Binder](https://img.shields.io/badge/launch-GESIS%20Binder-579ACA?logo=jupyter&logoColor=white)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
 
-Hosted on [GESIS Binder](https://notebooks.gesis.org/binder/), a free BinderHub
-instance with its own GitHub-API quota (so it avoids the `mybinder.org`
-rate-limit errors). The first launch builds the image (a few minutes); later
-launches are cached.
+The first launch builds the image (several minutes); later launches are cached.
+If you land on a **"GitHub API rate limit"** page, that is a transient,
+mybinder.org-wide limit (shared token, resets each hour) — just retry a little
+later. It is not specific to this repository.
 
 Source repository: [github.com/fkguo/IAMfit](https://github.com/fkguo/IAMfit) — the original IAM fit (notebook + model code) that this benchmark example is adapted from.
