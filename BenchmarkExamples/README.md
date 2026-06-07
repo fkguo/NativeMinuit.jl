@@ -22,7 +22,7 @@ or `julia --project=. main.jl`).
 
 ### `X3872_dip/` — X(3872) line-shape with a dip near threshold
 
-▶ **Run online (no install):** [![Binder](https://mybinder.org/badge_logo.svg)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
+▶ **Run online (no install):** [![Binder](https://img.shields.io/badge/launch-GESIS%20Binder-579ACA?logo=jupyter&logoColor=white)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
 
 Fit of an effective coupled-channel amplitude to the e⁺e⁻ → J/ψπ⁺π⁻
 data in the X(3872) mass region, demonstrating a dip structure near
@@ -46,7 +46,7 @@ matrix is highly correlated → ideal stress test for MNCONTOUR.
 
 ### `IAM_2Pformfactor/` — Inverse Amplitude Method on ππ / Kπ / πη / πK form factors
 
-▶ **Run online (no install):** [![Binder](https://mybinder.org/badge_logo.svg)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
+▶ **Run online (no install):** [![Binder](https://img.shields.io/badge/launch-GESIS%20Binder-579ACA?logo=jupyter&logoColor=white)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
 
 Multi-channel χPT-IAM fit of meson-meson scattering phase shifts +
 form factors, used in

@@ -5,7 +5,7 @@ benchmark + stress test.
 
 ## Run online
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
+[![Binder](https://img.shields.io/badge/launch-GESIS%20Binder-579ACA?logo=jupyter&logoColor=white)](https://notebooks.gesis.org/binder/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
 
 `Xdip_published.ipynb` runs interactively on [GESIS Binder](https://notebooks.gesis.org/binder/)
 — free, no login, its own GitHub-API quota (avoids the `mybinder.org` rate-limit
