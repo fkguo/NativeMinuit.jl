@@ -207,6 +207,8 @@ end
 # Pick the merged "Value" cell for parameter-row tuple `r` (from
 # `_param_row_data`): asymmetric MINOS when both sides exist, else the
 # symmetric Hesse error, else the bare value (fixed / no covariance).
+# Used for the COMPACT layout (no MINOS run); after MINOS the table splits
+# value / Hesse / MINOS into separate columns via `_split_cells`.
 function _value_cell(r; mode::Symbol = :text)
     if r.minos_lo !== nothing && r.minos_hi !== nothing
         return _format_value_minos(r.value, r.minos_lo, r.minos_hi; mode = mode)
@@ -217,6 +219,58 @@ function _value_cell(r; mode::Symbol = :text)
     else
         return _fmt_cell(r.value)
     end
+end
+
+"""
+    _format_minos_err(value, lower, upper; mode=:text) -> String
+
+The MINOS asymmetric error WITHOUT the central value, for the post-MINOS
+comparison layout's dedicated column: `+hi / −lo` (`:text`) or
+`<sup>+hi</sup><sub>−lo</sub>` (`:html`), with a factored `×10ⁿ` / `eⁿ`
+when the value scale calls for it. `value` only sets the rounding frame.
+Returns `"—"` when neither side is a usable (finite, positive) error — the
+sentinel the table shows for a parameter whose MINOS did not validate.
+"""
+function _format_minos_err(value::Real, lower::Real, upper::Real; mode::Symbol = :text)
+    v = Float64(value); hi = abs(Float64(upper)); lo = abs(Float64(lower))
+    (isfinite(v) && isfinite(hi) && isfinite(lo) && (hi > 0 || lo > 0)) || return "—"
+    e10, _, estrs = _round_to_uncertainty(v, (hi, lo))
+    histr, lostr = estrs
+    if mode === :html
+        core = string("<sup>+", histr, "</sup><sub>−", lostr, "</sub>")
+        return e10 == 0 ? core : string(core, "×10<sup>", e10, "</sup>")
+    else
+        core = string("+", histr, " / −", lostr)
+        return e10 == 0 ? core : string("(", core, ")e", e10)
+    end
+end
+
+# Split a parameter row into separate (value, hesse, minos) cells for the
+# post-MINOS comparison layout. The value and the symmetric Hesse error
+# share ONE factored power of ten (driven by the Hesse error) so the row
+# reads coherently; the MINOS cell carries its own (usually equal) factor.
+# A free parameter whose MINOS did not validate — or was not requested —
+# shows `"—"`; a fixed parameter has blank Hesse / MINOS cells.
+function _split_cells(r; mode::Symbol = :text)
+    v = Float64(r.value)
+    if r.hesse !== nothing && isfinite(r.hesse) && r.hesse > 0
+        e10, vstr, estrs = _round_to_uncertainty(v, (Float64(r.hesse),))
+        suf = e10 == 0 ? "" :
+              (mode === :html ? string("×10<sup>", e10, "</sup>") : string("e", e10))
+        value_cell = string(vstr, suf)
+        hesse_cell = string("± ", estrs[1], suf)
+    else
+        value_cell = _fmt_cell(v)   # fixed param or no usable covariance
+        hesse_cell = ""
+    end
+    minos_cell = if r.fixed
+        ""
+    elseif r.minos_lo !== nothing && r.minos_hi !== nothing
+        _format_minos_err(v, r.minos_lo, r.minos_hi; mode = mode)
+    else
+        "—"
+    end
+    return (value_cell, hesse_cell, minos_cell)
 end
 
 # ── E: χ²/ndf + p-value (self-contained, no SpecialFunctions dep) ────────────

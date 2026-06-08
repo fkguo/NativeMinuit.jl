@@ -2266,19 +2266,32 @@ function Base.show(io::IO, ::MIME"text/plain", m::Minuit)
     # Validity checklist (replaces the old single status string).
     println(io, _checklist_text(m))
 
-    # Build rows + compute column widths. The Value column merges the
-    # central value with its uncertainty — asymmetric MINOS when present,
-    # else the symmetric Hesse error — rounded to the uncertainty.
-    headers = ["#", "Name", "Value", "Limit −", "Limit +", "Fixed"]
+    # Build rows + compute column widths. Before MINOS, the Value column
+    # merges the central value with its symmetric Hesse uncertainty (compact
+    # layout). After MINOS (`!isempty(m.minos_errors)`) the table widens into
+    # the iminuit-style comparison view — separate Value, Hesse and MINOS
+    # columns — so the asymmetric MINOS error sits next to its Hesse
+    # counterpart and a non-converged MINOS shows as "—".
     rows = [_param_row_data(m, i) for i in 1:n_pars(m.params)]
-    cells = [[
-        string(r.idx),
-        r.name,
-        _value_cell(r; mode = :text),
-        _fmt_cell(r.limit_lo),
-        _fmt_cell(r.limit_hi),
-        r.fixed ? "yes" : "",
-    ] for r in rows]
+    has_minos = !isempty(m.minos_errors)
+    if has_minos
+        headers = ["#", "Name", "Value", "Hesse", "MINOS", "Limit −", "Limit +", "Fixed"]
+        cells = [begin
+            vc, hc, mc = _split_cells(r; mode = :text)
+            [string(r.idx), r.name, vc, hc, mc,
+             _fmt_cell(r.limit_lo), _fmt_cell(r.limit_hi), r.fixed ? "yes" : ""]
+        end for r in rows]
+    else
+        headers = ["#", "Name", "Value", "Limit −", "Limit +", "Fixed"]
+        cells = [[
+            string(r.idx),
+            r.name,
+            _value_cell(r; mode = :text),
+            _fmt_cell(r.limit_lo),
+            _fmt_cell(r.limit_hi),
+            r.fixed ? "yes" : "",
+        ] for r in rows]
+    end
     widths = [maximum(length(c) for c in [headers[k]; [row[k] for row in cells]])
               for k in 1:length(headers)]
     pad = w -> w + 2
@@ -2372,9 +2385,13 @@ function Base.show(io::IO, ::MIME"text/html", m::Minuit)
     # Validity checklist chips (replaces the old single status badge).
     _render_checklist_html(io, m)
 
-    # Parameter table. The Value column merges the central value with its
-    # uncertainty — asymmetric MINOS when present, else symmetric Hesse.
-    headers = ["#", "Name", "Value", "Limit −", "Limit +", "Fixed"]
+    # Parameter table. Before MINOS the Value column merges the central value
+    # with its symmetric Hesse error; after MINOS the table widens into the
+    # iminuit-style comparison view (separate Value / Hesse / MINOS columns).
+    has_minos = !isempty(m.minos_errors)
+    headers = has_minos ?
+        ["#", "Name", "Value", "Hesse", "MINOS", "Limit −", "Limit +", "Fixed"] :
+        ["#", "Name", "Value", "Limit −", "Limit +", "Fixed"]
     print(io, """<table style="border-collapse:collapse;margin-top:0.3em">""")
     print(io, "<thead><tr>")
     for h in headers
@@ -2384,15 +2401,20 @@ function Base.show(io::IO, ::MIME"text/html", m::Minuit)
     print(io, "</tr></thead><tbody>")
     for i in 1:n_pars(m.params)
         r = _param_row_data(m, i)
-        # Parameter `r.name` is user-controlled → escape it. The Value
-        # cell is a plain number, a "v ± e" string, or the asymmetric
-        # `<sup>/<sub>` markup from `_format_value_minos` — that markup is
-        # intentional and built only from formatted numbers (no
+        # Parameter `r.name` is user-controlled → escape it. The Value /
+        # Hesse / MINOS cells are plain numbers, a "± e" string, or the
+        # asymmetric `<sup>/<sub>` markup from the MINOS formatters — that
+        # markup is intentional and built only from formatted numbers (no
         # user-controlled text), so it must NOT be escaped. Limit / Fixed
         # cells are numeric or fixed literals and are safe.
-        cells = [string(r.idx), _html_escape(r.name), _value_cell(r; mode = :html),
-                 _fmt_cell(r.limit_lo), _fmt_cell(r.limit_hi),
-                 r.fixed ? "yes" : ""]
+        cells = if has_minos
+            vc, hc, mc = _split_cells(r; mode = :html)
+            [string(r.idx), _html_escape(r.name), vc, hc, mc,
+             _fmt_cell(r.limit_lo), _fmt_cell(r.limit_hi), r.fixed ? "yes" : ""]
+        else
+            [string(r.idx), _html_escape(r.name), _value_cell(r; mode = :html),
+             _fmt_cell(r.limit_lo), _fmt_cell(r.limit_hi), r.fixed ? "yes" : ""]
+        end
         print(io, "<tr>")
         for c in cells
             print(io, """<td style="border:1px solid #d0d7de;padding:2px 8px">""",

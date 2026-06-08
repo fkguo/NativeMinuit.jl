@@ -146,6 +146,54 @@ plain(m) = (io = IOBuffer(); show(io, MIME"text/plain"(), m); String(take!(io)))
         @test occursin("upper side", plain(mf))
     end
 
+    @testset "F: post-MINOS Hesse/MINOS comparison columns" begin
+        m = Minuit(p -> (p[1] - 8.0)^2 + (p[2] - 2.0)^2, [7.0, 1.0];
+                   names = ["x", "y"])
+        migrad!(m)
+
+        # Before MINOS: compact layout — no Hesse / MINOS columns; the Value
+        # cell carries the symmetric ± error.
+        p0 = plain(m); h0 = html(m)
+        @test !occursin("MINOS", p0) && !occursin("Hesse", p0)
+        @test occursin("±", p0)
+        # (the correlation heatmap also emits <th>, so check the header cells)
+        @test !occursin(">Hesse</th>", h0) && !occursin(">MINOS</th>", h0)
+
+        # After MINOS: the table widens — Value | Hesse | MINOS | Limit± | Fixed.
+        minos!(m)
+        p1 = plain(m); h1 = html(m)
+        @test occursin("Hesse", p1) && occursin("MINOS", p1)
+        @test occursin(">Hesse</th>", h1) && occursin(">MINOS</th>", h1)
+        # The Hesse cell carries the ±; the MINOS cell carries the asymmetry.
+        @test occursin("±", p1)
+        @test occursin("<sup>+", h1) && occursin("<sub>−", h1)
+        # The split-cell helper returns (value, hesse, minos) with the ± on
+        # the Hesse cell only and a real number (not "—") for a valid MINOS.
+        rx = _D._param_row_data(m, 1)
+        vcell, hcell, mcell = _D._split_cells(rx; mode = :text)
+        @test !occursin("±", vcell)          # value cell is bare
+        @test occursin("±", hcell)           # hesse cell has ±
+        @test occursin("+", mcell) && occursin("−", mcell) && mcell != "—"
+
+        # A failed MINOS shows "—" in the MINOS column (still widened, since
+        # m.minos_errors is non-empty).
+        ix = findfirst(i -> m.params.pars[i].name == "x", 1:_D.n_pars(m.params))
+        o = m.minos_errors[ix]
+        m.minos_errors[ix] = _D.MinosError(o.par_idx, o.min_par_value,
+            o.upper, o.lower, false, false, false, false, false, false, o.nfcn)
+        _, _, mcell2 = _D._split_cells(_D._param_row_data(m, ix); mode = :text)
+        @test mcell2 == "—"
+        @test occursin("—", plain(m))
+
+        # A fixed parameter has blank Hesse / MINOS cells (not "—").
+        mfix = Minuit(p -> (p[1] - 1.0)^2 + (p[2] - 2.0)^2 + (p[3] - 3.0)^2,
+                      [0.0, 0.0, 0.0]; names = ["a", "b", "cc"], fixed = [false, false, true])
+        migrad!(mfix); minos!(mfix)
+        rfix = _D._param_row_data(mfix, 3)
+        vcf, hcf, mcf = _D._split_cells(rfix; mode = :text)
+        @test hcf == "" && mcf == ""
+    end
+
     # ── C: validity checklist ────────────────────────────────────────────────
     @testset "C: validity checklist chips" begin
         checks = _D._validity_checks(mc)

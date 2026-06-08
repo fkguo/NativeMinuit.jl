@@ -81,8 +81,9 @@ me.lower                # negative 1σ error (≤ 0)
 ```
 
 `minos!(m, "a")` (or `minos!(m, 1)`) does a single parameter. Once MINOS
-has run, the rich table folds the asymmetric error into the `Value`
-column. See [MINOS errors & contours](minos_contours.md) for the full
+has run, the rich table widens to show separate `Value`, `Hesse` and
+`MINOS` columns side by side (a non-converged MINOS shows `—`). See
+[MINOS errors & contours](minos_contours.md) for the full
 [`MinosError`](@ref) field list and 2-D confidence contours.
 
 !!! note "MINOS needs a covariance"

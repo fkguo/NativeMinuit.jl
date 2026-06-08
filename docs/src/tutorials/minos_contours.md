@@ -30,8 +30,12 @@ me = m.merrors["a"]
 @show me.upper me.lower    # +σ (≥ 0) and −σ (≤ 0); generally |upper| ≠ |lower|
 ```
 
-After `minos!`, displaying `m` folds the asymmetric error into the rich
-table's `Value` column. Each [`MinosError`](@ref) carries:
+After `minos!`, displaying `m` widens the rich table into a side-by-side
+comparison view: separate `Value`, `Hesse` and `MINOS` columns, so the
+asymmetric MINOS error sits next to its symmetric Hesse counterpart. A
+parameter whose MINOS did not converge shows `—` in the `MINOS` column (and
+is listed in a warning line below the table). Each [`MinosError`](@ref)
+carries:
 
 | Field             | Meaning                                                       |
 |:------------------|:--------------------------------------------------------------|
