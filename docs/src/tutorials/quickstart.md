@@ -82,7 +82,8 @@ me.lower                # negative 1σ error (≤ 0)
 
 `minos!(m, "a")` (or `minos!(m, 1)`) does a single parameter. Once MINOS
 has run, the rich table widens to show separate `Value`, `Hesse` and
-`MINOS` columns side by side (a non-converged MINOS shows `—`). See
+`MINOS` columns side by side (a MINOS side that failed to converge is marked
+`invalid`; `—` means MINOS was not run for that parameter). See
 [MINOS errors & contours](minos_contours.md) for the full
 [`MinosError`](@ref) field list and 2-D confidence contours.
 

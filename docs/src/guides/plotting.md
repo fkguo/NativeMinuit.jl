@@ -148,7 +148,9 @@ A fitted [`Minuit`](@ref) knows how to display itself in three formats.
 No call is needed — `show` does it. In a Jupyter or Pluto notebook a fitted
 `Minuit` renders as an **HTML table**: a merged value ± Hesse-error column
 before MINOS, widening after [`minos!`](@ref) into side-by-side `Value`,
-`Hesse` and `MINOS` columns (a non-converged MINOS shows `—`), a χ²/ndf and
+`Hesse` and `MINOS` columns (a MINOS side that failed to converge is marked
+`invalid`, so a one-sided MINOS still shows the side it got; `—` means MINOS
+was not run for that parameter), a χ²/ndf and
 p-value header for a χ² fit, a per-flag validity checklist, and a colour
 correlation-matrix heatmap with a near-degeneracy warning for
 strongly-correlated pairs. In the REPL the same information prints as a

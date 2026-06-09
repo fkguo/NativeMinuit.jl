@@ -175,15 +175,50 @@ plain(m) = (io = IOBuffer(); show(io, MIME"text/plain"(), m); String(take!(io)))
         @test occursin("±", hcell)           # hesse cell has ±
         @test occursin("+", mcell) && occursin("−", mcell) && mcell != "—"
 
-        # A failed MINOS shows "—" in the MINOS column (still widened, since
-        # m.minos_errors is non-empty).
+        # MINOS ran but BOTH sides failed → the cell shows `invalid` (the
+        # parameter has an entry, so it is distinguishable from "not run").
         ix = findfirst(i -> m.params.pars[i].name == "x", 1:_D.n_pars(m.params))
         o = m.minos_errors[ix]
         m.minos_errors[ix] = _D.MinosError(o.par_idx, o.min_par_value,
             o.upper, o.lower, false, false, false, false, false, false, o.nfcn)
         _, _, mcell2 = _D._split_cells(_D._param_row_data(m, ix); mode = :text)
-        @test mcell2 == "—"
-        @test occursin("—", plain(m))
+        @test mcell2 == _D._MINOS_INVALID
+        @test occursin("invalid", plain(m))
+
+        # ONE-sided MINOS: the converged side is published, the failed side is
+        # marked `invalid` — not discarded as "—" (regression: dropping the
+        # obtained side was incomplete information display).
+        m.minos_errors[ix] = _D.MinosError(o.par_idx, o.min_par_value,
+            o.upper, o.lower, false, true, false, false, false, false, o.nfcn)  # upper failed, lower OK
+        rsp = _D._param_row_data(m, ix)
+        _, _, mt = _D._split_cells(rsp; mode = :text)
+        _, _, mh = _D._split_cells(rsp; mode = :html)
+        @test mt != "—"
+        @test occursin("invalid", mt) && occursin("−", mt)   # upper invalid, lower value
+        @test !occursin("+", mt)                              # no converged upper magnitude
+        @test occursin("invalid", mh) && occursin("<sub>−", mh)
+        @test occursin("invalid", plain(m))
+        # Mirror case: lower failed, upper OK.
+        m.minos_errors[ix] = _D.MinosError(o.par_idx, o.min_par_value,
+            o.upper, o.lower, true, false, false, false, false, false, o.nfcn)
+        _, _, mt2 = _D._split_cells(_D._param_row_data(m, ix); mode = :text)
+        @test occursin("+", mt2) && occursin("invalid", mt2) && !occursin("−", mt2)
+
+        # NOT run for a parameter (no entry) → "—", distinct from a both-failed
+        # `invalid`. Run MINOS on only one of two free params; the table is
+        # still widened (m.minos_errors is non-empty) and the un-run param's
+        # MINOS cell is "—".
+        mnr = Minuit(p -> (p[1] - 8.0)^2 + (p[2] - 2.0)^2, [7.0, 1.0];
+                     names = ["x", "y"])
+        migrad!(mnr); minos!(mnr, "x")          # only x
+        iy = findfirst(i -> mnr.params.pars[i].name == "y", 1:_D.n_pars(mnr.params))
+        ry = _D._param_row_data(mnr, iy)
+        @test ry.minos_ran == false
+        _, _, mcy = _D._split_cells(ry; mode = :text)
+        @test mcy == "—"
+        # x DID run and converged → asymmetric, not "—"/"invalid".
+        _, _, mcx = _D._split_cells(_D._param_row_data(mnr, 1); mode = :text)
+        @test occursin("+", mcx) && occursin("−", mcx)
 
         # A fixed parameter has blank Hesse / MINOS cells (not "—").
         mfix = Minuit(p -> (p[1] - 1.0)^2 + (p[2] - 2.0)^2 + (p[3] - 3.0)^2,

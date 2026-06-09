@@ -221,6 +221,11 @@ function _value_cell(r; mode::Symbol = :text)
     end
 end
 
+# Marker shown for a MINOS side whose crossing did not converge, when the
+# OTHER side did. Matches the `upper_valid` / `lower_valid` API vocabulary
+# and the "did not converge" warning line.
+const _MINOS_INVALID = "invalid"
+
 """
     _format_minos_err(value, lower, upper; mode=:text) -> String
 
@@ -228,19 +233,38 @@ The MINOS asymmetric error WITHOUT the central value, for the post-MINOS
 comparison layout's dedicated column: `+hi / −lo` (`:text`) or
 `<sup>+hi</sup><sub>−lo</sub>` (`:html`), with a factored `×10ⁿ` / `eⁿ`
 when the value scale calls for it. `value` only sets the rounding frame.
-Returns `"—"` when neither side is a usable (finite, positive) error — the
-sentinel the table shows for a parameter whose MINOS did not validate.
+
+Each side is rendered **independently**: `lower` / `upper` may be `nothing`
+for a side whose crossing did not converge. A converged side shows its
+signed magnitude; the non-converged side shows the [`_MINOS_INVALID`] marker
+— so a ONE-sided MINOS still publishes the side it obtained (iminuit-style)
+instead of discarding both. Returns `"—"` only when NEITHER side is a
+usable (finite, positive) error.
 """
-function _format_minos_err(value::Real, lower::Real, upper::Real; mode::Symbol = :text)
-    v = Float64(value); hi = abs(Float64(upper)); lo = abs(Float64(lower))
-    (isfinite(v) && isfinite(hi) && isfinite(lo) && (hi > 0 || lo > 0)) || return "—"
-    e10, _, estrs = _round_to_uncertainty(v, (hi, lo))
-    histr, lostr = estrs
+function _format_minos_err(value::Real,
+                           lower::Union{Nothing,Real},
+                           upper::Union{Nothing,Real};
+                           mode::Symbol = :text)
+    v = Float64(value)
+    _usable(x) = x !== nothing && isfinite(Float64(x)) && abs(Float64(x)) > 0
+    hi = _usable(upper) ? abs(Float64(upper)) : nothing
+    lo = _usable(lower) ? abs(Float64(lower)) : nothing
+    (hi === nothing && lo === nothing) && return "—"
+    # One shared rounding frame over whichever side(s) converged: for a
+    # one-sided result the single valid magnitude sets precision + factor.
+    present = Tuple(x for x in (hi, lo) if x !== nothing)
+    e10, _, estrs = _round_to_uncertainty(v, present)
+    idx = 1
+    hi_str = nothing; lo_str = nothing
+    if hi !== nothing; hi_str = estrs[idx]; idx += 1; end
+    if lo !== nothing; lo_str = estrs[idx]; end
+    up_part = hi_str === nothing ? _MINOS_INVALID : string("+", hi_str)
+    lo_part = lo_str === nothing ? _MINOS_INVALID : string("−", lo_str)
     if mode === :html
-        core = string("<sup>+", histr, "</sup><sub>−", lostr, "</sub>")
+        core = string("<sup>", up_part, "</sup><sub>", lo_part, "</sub>")
         return e10 == 0 ? core : string(core, "×10<sup>", e10, "</sup>")
     else
-        core = string("+", histr, " / −", lostr)
+        core = string(up_part, " / ", lo_part)
         return e10 == 0 ? core : string("(", core, ")e", e10)
     end
 end
@@ -249,8 +273,11 @@ end
 # post-MINOS comparison layout. The value and the symmetric Hesse error
 # share ONE factored power of ten (driven by the Hesse error) so the row
 # reads coherently; the MINOS cell carries its own (usually equal) factor.
-# A free parameter whose MINOS did not validate — or was not requested —
-# shows `"—"`; a fixed parameter has blank Hesse / MINOS cells.
+# The MINOS cell renders each side independently (`_format_minos_err`): a
+# one-sided MINOS shows the converged side and marks the other `invalid`; a
+# parameter whose MINOS ran but failed on BOTH sides shows `invalid`, while
+# `—` means MINOS was not run for it. A fixed parameter has blank
+# Hesse / MINOS cells.
 function _split_cells(r; mode::Symbol = :text)
     v = Float64(r.value)
     if r.hesse !== nothing && isfinite(r.hesse) && r.hesse > 0
@@ -265,10 +292,12 @@ function _split_cells(r; mode::Symbol = :text)
     end
     minos_cell = if r.fixed
         ""
-    elseif r.minos_lo !== nothing && r.minos_hi !== nothing
+    elseif r.minos_lo !== nothing || r.minos_hi !== nothing
         _format_minos_err(v, r.minos_lo, r.minos_hi; mode = mode)
+    elseif r.minos_ran
+        _MINOS_INVALID   # MINOS ran but BOTH sides failed to converge
     else
-        "—"
+        "—"              # MINOS was not run for this parameter
     end
     return (value_cell, hesse_cell, minos_cell)
 end
@@ -503,16 +532,15 @@ function _render_corr_warning_text(io::IO, m::Minuit)
     end
 end
 
-# Free parameters whose MINOS ran but did NOT fully validate. For these
-# the table falls back to the symmetric HESSE error (see `_param_row_data`:
-# the asymmetric form is used only when BOTH sides are valid), which would
-# otherwise be indistinguishable from "MINOS was never run". Returns
-# `(name, side)` per such parameter, with `side ∈ ("both", "upper",
-# "lower")` naming the direction(s) that failed to converge. An at-bound
-# termination is a CLEAN MINOS result (`upper_valid` / `lower_valid` stay
-# `true` there — see the `MinosError` docstring), so it is NOT flagged,
-# mirroring the table's own gate. Iterates in external-index order so the
-# warning lists parameters top-to-bottom as they appear in the table.
+# Free parameters whose MINOS ran but did NOT fully validate (at least one
+# side's crossing failed). The MINOS column then shows the converged side
+# with the failed side marked `invalid`, or `—` when neither side
+# converged. Returns `(name, side)` per such parameter, with `side ∈
+# ("both", "upper", "lower")` naming the direction(s) that failed. An
+# at-bound termination is a CLEAN MINOS result (`upper_valid` /
+# `lower_valid` stay `true` there — see the `MinosError` docstring), so it
+# is NOT flagged. Iterates in external-index order so the warning lists
+# parameters top-to-bottom as they appear in the table.
 function _minos_failed(m::Minuit)
     out = Tuple{String,String}[]
     isempty(m.minos_errors) && return out
@@ -527,17 +555,18 @@ function _minos_failed(m::Minuit)
     return out
 end
 
-# Render the MINOS-failure warning (text). Surfaces the otherwise-silent
-# fall-back from a non-converged MINOS cross-search to the symmetric HESSE
-# error, so a plain `±` row after `minos!` can be told apart from a genuine
-# asymmetric result and from a never-run MINOS.
+# Render the MINOS-failure warning (text). Summarises which parameters'
+# MINOS did not (fully) converge; the MINOS column marks the missing side
+# `invalid` (or `—` when neither side converged), and the HESSE column is
+# the fallback for those.
 function _render_minos_warning_text(io::IO, m::Minuit)
     failed = _minos_failed(m)
     isempty(failed) && return
     parts = [s == "both" ? string("`", nm, "`") : string("`", nm, "` (", s, " side)")
              for (nm, s) in failed]
     println(io, "⚠ MINOS did not converge for ", join(parts, ", "),
-            " — showing the symmetric HESSE error instead.")
+            " — failed sides are marked `invalid` in the MINOS column;",
+            " use the HESSE error for them.")
 end
 
 function _render_minos_warning_html(io::IO, m::Minuit)
@@ -549,7 +578,8 @@ function _render_minos_warning_html(io::IO, m::Minuit)
              for (nm, s) in failed]
     print(io, """<div style="color:#bf8700;margin-top:0.4em">""")
     print(io, "⚠ MINOS did not converge for ", join(parts, ", "),
-          " — showing the symmetric HESSE error instead.")
+          " — failed sides are marked <code>invalid</code> in the MINOS column;",
+          " use the HESSE error for them.")
     print(io, "</div>")
 end
 

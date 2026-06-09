@@ -2215,7 +2215,11 @@ function _param_row_data(m::Minuit, i::Int)
     hesse_err = fixed ? nothing : m.errors[i]
     minos_lo = nothing
     minos_hi = nothing
-    if haskey(m.minos_errors, i)
+    # `minos_ran` distinguishes "MINOS ran for this parameter but both sides
+    # failed" (→ the cell shows `invalid`) from "MINOS was not run here" (→
+    # the cell shows `—`); see `_split_cells`.
+    minos_ran = haskey(m.minos_errors, i)
+    if minos_ran
         me = m.minos_errors[i]
         # New semantics: `lower_valid`/`upper_valid` are TRUE also at
         # par_limit (the bound_distance is physically meaningful), so
@@ -2227,6 +2231,7 @@ function _param_row_data(m::Minuit, i::Int)
     limit_hi = has_upper_limit(p) ? p.upper : nothing
     return (idx = i, name = p.name, value = value,
             hesse = hesse_err, minos_lo = minos_lo, minos_hi = minos_hi,
+            minos_ran = minos_ran,
             limit_lo = limit_lo, limit_hi = limit_hi, fixed = fixed)
 end
 

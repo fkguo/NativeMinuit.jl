@@ -32,10 +32,12 @@ me = m.merrors["a"]
 
 After `minos!`, displaying `m` widens the rich table into a side-by-side
 comparison view: separate `Value`, `Hesse` and `MINOS` columns, so the
-asymmetric MINOS error sits next to its symmetric Hesse counterpart. A
-parameter whose MINOS did not converge shows `—` in the `MINOS` column (and
-is listed in a warning line below the table). Each [`MinosError`](@ref)
-carries:
+asymmetric MINOS error sits next to its symmetric Hesse counterpart. A MINOS
+side that failed to converge is marked `invalid` (so a one-sided MINOS still
+shows the side it got, and a fully-failed one shows `invalid`); `—` means
+MINOS was not run for that parameter. Non-converged parameters are also
+listed in a warning line below the table. Each
+[`MinosError`](@ref) carries:
 
 | Field             | Meaning                                                       |
 |:------------------|:--------------------------------------------------------------|
