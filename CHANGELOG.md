@@ -3,6 +3,43 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-06-09
+
+A display + diagnostics release. The solver core (MIGRAD/HESSE/MINOS) is unchanged
+and the programmatic API is backward-compatible; this reworks how MINOS errors are
+shown in the rich `Minuit` table so a non-converged cross-search is no longer
+silently hidden behind the symmetric HESSE error.
+
+### Added
+
+- **MINOS non-convergence is surfaced, not silent.** When a MINOS cross-search
+  fails to converge for a parameter, the rich table previously fell back to the
+  symmetric HESSE error with no indication — indistinguishable from a genuine
+  symmetric result or a never-run MINOS. A `⚠` line below the table now lists the
+  affected parameters and which side(s) (`upper` / `lower` / `both`) did not
+  converge.
+- **Side-by-side Hesse vs MINOS columns after `minos!`.** Once MINOS has run, the
+  rich `text/plain` and HTML tables widen from the compact merged `value ± error`
+  column into separate `Value`, `Hesse` and `MINOS` columns (iminuit-style), so the
+  asymmetric MINOS error sits next to its symmetric HESSE counterpart.
+- **Per-side MINOS rendering.** Each MINOS side is shown independently: both
+  converged → `+hi / −lo`; only one converged → that side's value with the other
+  marked `invalid` (a one-sided result is no longer discarded); ran but both sides
+  failed → `invalid`; MINOS not run for the parameter → `—`.
+
+### Changed
+
+- After `minos!`, the rich `Minuit` table uses the new multi-column comparison
+  layout above (the pre-MINOS compact `value ± error` layout is unchanged).
+  Programmatic access (`m.values`, `m.errors`, `m.merrors`, …) is unaffected.
+
+### Docs
+
+- BenchmarkExamples notebooks migrated to JuMinuit's native API (e.g.
+  `contour_df_samples`); the IAM benchmark clarifies that its error band is the
+  JOINT (simultaneous) 1σ region. Binder links updated (mybinder.org, after GESIS
+  was decommissioned).
+
 ## [0.4.0] — 2026-06-05
 
 `find_deeper_minimum` gains a data-resampling strategy and full parameter-constraint
