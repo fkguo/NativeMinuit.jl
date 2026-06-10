@@ -43,6 +43,29 @@ RecipesBase.@recipe function f(c::ContoursError)
     return xs, ys
 end
 
+# ContourGrid (iminuit-style FCN grid slice): filled contour of the FCN
+# values + a marker at the central (best-fit) point. `fval[i, j]` is
+# x-major (FCN at (x[i], y[j])); Plots' contour z-convention is
+# z[j, i] ↔ (x[i], y[j]), hence the permutedims.
+RecipesBase.@recipe function f(g::ContourGrid)
+    xguide --> g.name_x
+    yguide --> g.name_y
+    @series begin
+        seriestype := :contour
+        fill --> true
+        colorbar_title --> (g.subtracted ? "FCN − min" : "FCN")
+        label --> ""
+        g.x, g.y, permutedims(g.fval)
+    end
+    @series begin
+        seriestype := :scatter
+        markershape --> :cross
+        markercolor --> :white
+        label --> ""
+        [g.value_x], [g.value_y]
+    end
+end
+
 # MinosError as an asymmetric error-bar at the central value.
 # For a 1D plot: x = par_idx, y = min_par_value ± (upper / lower).
 RecipesBase.@recipe function f(e::MinosError)

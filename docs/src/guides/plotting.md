@@ -44,8 +44,17 @@ plot(m.fmin)                              # parameter values with Hesse error ba
 minos!(m)                                 # run MINOS, fills m.merrors
 plot(collect(values(m.merrors)))          # Vector{MinosError} → multi-parameter error bars
 plot(m.merrors["a"])                      # a single MinosError → one asymmetric error bar
-plot(contour(m, 1, 2))                    # ContoursError → closed 1σ contour polygon
+plot(contour_ellipse(m, 1, 2))            # ContoursError → closed 1σ contour polygon
+plot(contour_grid(m, 1, 2))               # ContourGrid → filled FCN-landscape contour
 ```
+
+!!! note "Why not `contour(m, 1, 2)`?"
+    JuMinuit ≤ 0.4 exported the ellipse approximation as `contour`, which
+    made the bare name ambiguous next to `Plots.contour` / `GR.contour`
+    (`UndefVarError: contour not defined … ambiguity`). Since 0.5.0 the
+    ellipse is [`contour_ellipse`](@ref) and iminuit's grid slice is
+    [`contour_grid`](@ref); the bare `contour` is no longer exported
+    (`JuMinuit.contour` still works, with a deprecation warning).
 
 | Recipe target | Picture |
 |---|---|
@@ -53,6 +62,7 @@ plot(contour(m, 1, 2))                    # ContoursError → closed 1σ contour
 | [`MinosError`](@ref) (e.g. `m.merrors["a"]`) | one point at the central value with asymmetric `+upper / −lower` whiskers |
 | `Vector{MinosError}` (e.g. `collect(values(m.merrors))`) | the same, one point per parameter |
 | [`ContoursError`](@ref) | the boundary as a closed polygon in the `(par_x, par_y)` plane |
+| [`ContourGrid`](@ref) (from [`contour_grid`](@ref)) | filled contour of the FCN grid slice + a marker at the minimum (landscape view — NOT a confidence region; see the [`contour_grid`](@ref) docstring) |
 
 The recipes attach sensible defaults (markers, labels, `aspect_ratio` for the
 contour) and pass through any `plot` keyword.
@@ -110,26 +120,29 @@ calling those without Optim raises a friendly "load Optim.jl" message instead.)
 using JuMinuit, Plots
 m = Minuit(cost, x0); migrad!(m)
 
-draw_contour(m, 1, 2)             # 2D contour from contour(m, 1, 2; npoints=bins)
-draw_mncontour(m, 1, 2)           # ellipse contour (sigma = 1) — see note below
+draw_contour(m, 1, 2)             # FCN grid-slice landscape (filled contour)
+draw_mncontour(m, 1, 2)           # exact joint 68% confidence contour
+draw_mncontour(m, 1, 2; cl = [0.68, 0.95])  # overlay several CLs
 draw_profile(m, 1)                # 1D scan along par 1 (no inner minimisation)
 draw_mnprofile(m, 1)              # 1D MINOS profile (re-minimise the rest)
-draw_mnmatrix(m)                  # triangular matrix of all pairwise ellipse contours
+draw_mnmatrix(m)                  # triangular matrix of all pairwise MINOS contours
 ```
 
-!!! note "`draw_mncontour` / `draw_mnmatrix` draw the *approximate* contour"
-    Despite the `mn` in their names, both currently build their 2-D contours
-    from the fast covariance-ellipse [`contour`](@ref), **not** from the exact
-    `mncontour` / [`contour_exact`](@ref) boundary search. They render the
-    Hesse-ellipse approximation, not the re-minimised MINOS contour.
+!!! note "0.5.0: the `mn` helpers now draw the *exact* contour"
+    ≤ 0.4 `draw_mncontour` / `draw_mnmatrix` rendered the fast
+    covariance-ellipse approximation despite their names. They now trace
+    the exact [`mncontour`](@ref) boundary (one inner re-minimisation per
+    boundary point — slower, correct), and `draw_contour` shows the
+    iminuit-style [`contour_grid`](@ref) FCN landscape. The cheap ellipse
+    is still available as `plot(contour_ellipse(m, 1, 2))`.
 
 | Helper | Builds from | Notes |
 |---|---|---|
-| [`draw_contour`](@ref)`(m, par1, par2; bins=50, kws...)` | [`contour`](@ref) | fast ellipse-approximation contour |
-| [`draw_mncontour`](@ref)`(m, par1, par2; numpoints=100, nsigma=1, kws...)` | [`contour`](@ref) | ellipse-approximation contour (despite the name); `nsigma` must be `1` |
+| [`draw_contour`](@ref)`(m, par1, par2; size=50, bound=2, kws...)` | [`contour_grid`](@ref) | filled-contour FCN landscape (grid slice, others fixed — not a confidence region) |
+| [`draw_mncontour`](@ref)`(m, par1, par2; numpoints=100, cl=nothing, kws...)` | [`mncontour`](@ref) | exact joint confidence contour(s); `cl` scalar or vector (default joint 68 %), labelled by coverage |
 | [`draw_profile`](@ref)`(m, par; bins=100, low=0, high=0, kws...)` | [`profile`](@ref) | plain scan, no re-minimisation |
 | [`draw_mnprofile`](@ref)`(m, par; bins=30, low=0, high=0, kws...)` | [`mnprofile`](@ref) | MINOS profile (one inner MIGRAD per point) |
-| [`draw_mnmatrix`](@ref)`(m; numpoints=100, kws...)` | [`contour`](@ref) + [`mnprofile`](@ref) | off-diagonal uses the ellipse-approximation contour (despite the name); needs ≥ 2 free parameters; diagonal shows the 1D profile |
+| [`draw_mnmatrix`](@ref)`(m; numpoints=100, kws...)` | [`mncontour`](@ref) + [`mnprofile`](@ref) | off-diagonal: exact pairwise MINOS contours; needs ≥ 2 free parameters; diagonal shows the 1D profile |
 
 `par` is a 1-based index or a parameter-name string, and trailing `kws...` flow
 through to the underlying `Plots.plot`.
@@ -201,8 +214,8 @@ available, [`mn_plot_text`](@ref) renders a 2D point set as a Cartesian box of
 characters and returns a `String` ready for `println` / `@info`:
 
 ```julia
-# A MINOS contour as ASCII (the minimum is marked X):
-println(mn_plot_text(contour(m, 1, 2; npoints = 24)))
+# An (ellipse-approximation) contour as ASCII (the minimum is marked X):
+println(mn_plot_text(contour_ellipse(m, 1, 2; npoints = 24)))
 
 # Or any raw vector of (x, y) points (e.g. from mncontour):
 pts = mncontour(m, 1, 2)

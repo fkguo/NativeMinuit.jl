@@ -19,7 +19,8 @@
 """
     ContoursError
 
-Result of `contour`. Mirrors C++ `ContoursError`.
+Result of [`contour_ellipse`](@ref) / [`contour_exact`](@ref) (the
+boundary-curve contour algorithms). Mirrors C++ `ContoursError`.
 
 # Fields
 
@@ -37,7 +38,7 @@ Result of `contour`. Mirrors C++ `ContoursError`.
   Populated by [`contour_exact`](@ref) at **zero extra cost** (the inner
   re-minimization state is already computed per boundary point — see
   [`contour_parameter_sets`](@ref)). Empty for the ellipse
-  approximation [`contour`](@ref) (which does no inner re-minimization).
+  approximation [`contour_ellipse`](@ref) (no inner re-minimization).
 """
 struct ContoursError
     par_x::Int
@@ -173,10 +174,13 @@ function _contour_full_point(inner_x::AbstractVector{<:Real}, ix::Int, iy::Int,
 end
 
 """
-    contour(fmin, cf, par_x, par_y; npoints=20, kwargs...) -> ContoursError
+    contour_ellipse(fmin, cf, par_x, par_y; npoints=20, kwargs...) -> ContoursError
 
-Compute a 1σ contour in the (par_x, par_y) plane. **Phase 1 first cut:
-ellipse approximation** from MINOS errors + off-diagonal covariance.
+Compute a 1σ contour in the (par_x, par_y) plane as a fast **ellipse
+approximation** from MINOS errors + off-diagonal covariance. (Named
+`contour` before 0.5.0 — renamed both because the ellipse is not iminuit's
+`contour`, which is a grid slice ([`contour_grid`](@ref)), and because the
+bare name collided with `Plots.contour` under `using JuMinuit, Plots`.)
 
 # Algorithm (Phase 1 first cut)
 
@@ -231,6 +235,13 @@ ellipse approximation with the proper boundary search:
 Mirrors `reference/Minuit2_cpp/src/MnContours.cxx:34-204`. Much more
 accurate than the Phase 1 ellipse approximation for non-quadratic FCNs;
 slower (each boundary point requires a separate inner MIGRAD chain).
+
+`sigma=1` (default) traces the C++-identical boundary `FCN = fmin + up`
+— the curve whose axis crossings are the MINOS ±1σ errors and whose
+joint 2-D coverage is only 39.3 % (James, *The Interpretation of
+Errors*, §1.3.3). `sigma=k` traces `FCN = fmin + up·k²`; the
+iminuit-compatible [`mncontour`](@ref) drives this with
+`k = √(delta_chisq(cl, 2))` to produce joint confidence regions.
 """
 function contour_exact(
     fmin::FunctionMinimum,
@@ -242,7 +253,17 @@ function contour_exact(
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
     threaded_gradient::Bool = false,
+    # P5 scaling: trace the contour `FCN = fmin + up·sigma²` instead of
+    # `fmin + up`. At sigma=1 this is the C++-identical MnContours boundary
+    # (whose axis crossings are the MINOS ±1σ errors). `mncontour` drives
+    # this with `sigma = √(delta_chisq(cl, 2))` to produce iminuit-style
+    # JOINT confidence regions. Threads through both the axis MINOS runs
+    # and every ray cross-search (`function_cross_multi` aims at
+    # `fmin + up·sigma²`).
+    sigma::Real = 1.0,
 )
+    sigma > 0 ||
+        throw(ArgumentError("sigma must be positive, got $sigma"))
     state = fmin.state
     n = length(state.parameters)
     1 <= par_x <= n && 1 <= par_y <= n && par_x != par_y ||
@@ -263,11 +284,14 @@ function contour_exact(
     scratch_nm1 = n >= 2 ? MigradScratch(n - 1) : nothing
     scratch_nm2 = n >= 3 ? MigradScratch(n - 2) : nothing
 
-    # Step 1: MINOS on both axes
+    # Step 1: MINOS on both axes (at the same `sigma` as the ray searches,
+    # so the 4 axis points lie ON the kσ contour).
     mex = minos(fmin, cf, par_x; tlr=tlr, strategy=strategy, prec=prec,
-                  scratch=scratch_nm1, threaded_gradient=threaded_gradient)
+                  scratch=scratch_nm1, threaded_gradient=threaded_gradient,
+                  sigma=sigma)
     mey = minos(fmin, cf, par_y; tlr=tlr, strategy=strategy, prec=prec,
-                  scratch=scratch_nm1, threaded_gradient=threaded_gradient)
+                  scratch=scratch_nm1, threaded_gradient=threaded_gradient,
+                  sigma=sigma)
     nfcn = mex.nfcn + mey.nfcn
     (is_valid(mex) && is_valid(mey)) ||
         return ContoursError(Int(par_x), Int(par_y),
@@ -377,7 +401,8 @@ function contour_exact(
                 tlr = tlr, maxcalls = max(maxcalls - nfcn, 100),
                 strategy = strategy, prec = prec,
                 scratch = scratch_nm2,
-                threaded_gradient = threaded_gradient)
+                threaded_gradient = threaded_gradient,
+                sigma = sigma)
             nfcn += cross.nfcn
 
             # Genuine call-limit exit (C++ re-checks nfcn>maxcalls at L300).
@@ -411,7 +436,7 @@ function contour_exact(
                          full_points)
 end
 
-function contour(
+function contour_ellipse(
     fmin::FunctionMinimum,
     cf::AbstractCostFunction,
     par_x::Integer,
@@ -496,4 +521,72 @@ function contour(
         nfcn,
         true,
     )
+end
+
+# 0.5.0 rename: `contour` (ellipse approximation) → `contour_ellipse`.
+# `export_old = false` — re-exporting `contour` would re-introduce the name
+# clash with `Plots.contour` / `GR.contour` that motivated the rename
+# (`UndefVarError: contour not defined ... ambiguity` under
+# `using JuMinuit, Plots`). Qualified `JuMinuit.contour(...)` keeps working
+# with a deprecation warning. iminuit's `m.contour` (a 2D grid slice) is
+# [`contour_grid`](@ref).
+Base.@deprecate contour(fmin::FunctionMinimum, cf::AbstractCostFunction,
+                        par_x::Integer, par_y::Integer; kwargs...) contour_ellipse(
+    fmin, cf, par_x, par_y; kwargs...) false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ContourGrid — iminuit-style 2D grid slice (`Minuit.contour` parity).
+# The Minuit-level driver `contour_grid(m, par1, par2; ...)` lives in
+# iminuit_compat.jl; this is the result container + destructuring.
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    ContourGrid
+
+Result of [`contour_grid`](@ref) — a 2D **grid slice** of the FCN in the
+`(par_x, par_y)` plane with **all other parameters fixed** at their current
+(best-fit) values. Mirrors the return of iminuit's `Minuit.contour`.
+
+# Fields
+
+- `par_x::Int`, `par_y::Int` — 1-based external parameter indices.
+- `name_x::String`, `name_y::String` — parameter names (axis labels).
+- `x::Vector{Float64}`, `y::Vector{Float64}` — the grid axes.
+- `fval::Matrix{Float64}` — FCN values, `fval[i, j] = FCN` at
+  `(x[i], y[j])` (x-major; the plot recipe transposes for Plots'
+  `z[j, i]` convention).
+- `value_x::Float64`, `value_y::Float64` — the central (current/best-fit)
+  parameter values, marked by the plot recipe.
+- `up::Float64` — the FCN errordef, for user-drawn `Δχ²` level lines.
+- `subtracted::Bool` — `true` if the grid minimum was subtracted
+  (`subtract_min = true`), i.e. `fval` is already `Δχ²`-like.
+
+Destructures like iminuit's 3-tuple: `xs, ys, F = contour_grid(m, "a", "b")`.
+
+For confidence regions use [`mncontour`](@ref) — a grid **slice** is NOT a
+confidence region in a multi-parameter fit (see [`contour_grid`](@ref)).
+"""
+struct ContourGrid
+    par_x::Int
+    par_y::Int
+    name_x::String
+    name_y::String
+    x::Vector{Float64}
+    y::Vector{Float64}
+    fval::Matrix{Float64}
+    value_x::Float64
+    value_y::Float64
+    up::Float64
+    subtracted::Bool
+end
+
+# iminuit-parity destructuring: `xs, ys, F = contour_grid(m, 1, 2)`.
+Base.iterate(g::ContourGrid, s::Int = 1) =
+    s == 1 ? (g.x, 2) : s == 2 ? (g.y, 3) : s == 3 ? (g.fval, 4) : nothing
+Base.length(g::ContourGrid) = 3
+
+function Base.show(io::IO, g::ContourGrid)
+    print(io, "ContourGrid(", g.name_x, " × ", g.name_y, ", ",
+          length(g.x), "×", length(g.y), " grid",
+          g.subtracted ? ", min-subtracted" : "", ")")
 end

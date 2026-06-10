@@ -68,7 +68,9 @@ JuMinuit.MnCross
 
 ```@docs
 JuMinuit.mncontour
-JuMinuit.contour
+JuMinuit.contour_grid
+JuMinuit.ContourGrid
+JuMinuit.contour_ellipse
 JuMinuit.contour_exact
 JuMinuit.ContoursError
 JuMinuit.profile

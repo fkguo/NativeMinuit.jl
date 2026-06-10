@@ -491,32 +491,52 @@ function _scan_retain_best!(m::Minuit, base::Parameters, par::Int,
 end
 
 """
-    mncontour(m::Minuit, par1, par2; numpoints=100, size=numpoints,
-               sigma=1, cl=sigma, kws...) -> Vector{Tuple{Float64,Float64}}
+    mncontour(m::Minuit, par1, par2; cl=nothing, numpoints=100,
+               size=numpoints, kws...) -> Vector{Tuple{Float64,Float64}}
 
-MINOS 2D contour — the C++-faithful `MnContours` algorithm (boundary
-search via multi-parameter `function_cross`, not the ellipse
-approximation). Returns a vector of `(x, y)` points tracing the
-`sigma`-σ contour in the (par1, par2) plane, in **physical (external)
-coordinates** — the same frame as `m.values`, so the points plot directly
-(for bounded parameters they are mapped back through the sin/√ transform).
-Mirrors iminuit's `m.mncontour(par1, par2)`.
+MINOS 2D **confidence region** boundary — the `MnContours` profile
+algorithm (each boundary point re-minimizes all other free parameters via
+multi-parameter `function_cross`; not the ellipse approximation). Returns
+a vector of `(x, y)` points in **physical (external) coordinates** — the
+same frame as `m.values`, so the points plot directly (for bounded
+parameters they are mapped back through the sin/√ transform). Mirrors
+iminuit ≥ 2.0's `m.mncontour(par1, par2; cl=...)` **including its joint-
+coverage `cl` semantics**:
 
-`size` and `cl` are iminuit-compatible kwarg aliases for `numpoints`
-and `sigma` respectively. The iminuit names win if both pairs are
-passed.
+- `cl = nothing` (default) → the **joint** 2-D 68 % confidence region,
+  `Δχ² = delta_chisq(0.68, 2) ≈ 2.28` (× `m.up`).
+- `0 < cl < 1` → the joint 2-D region with that probability content.
+- `cl ≥ 1` → interpreted as nσ: the probability is `chisq_cl(cl², 1)`
+  (e.g. `cl = 1` → 68.27 % → `Δχ² ≈ 2.30`; `cl = 2` → 95.45 % →
+  `Δχ² ≈ 6.18`).
 
-Routes through [`contour_exact`](@ref) — the proper MNCONTOUR algorithm
-from `reference/Minuit2_cpp/src/MnContours.cxx`. The faster but
-approximate ellipse-based [`contour`](@ref) is kept for cases where a
-quick visual check is enough. Spec cross-check (1994 §1.4.4.2 vs 2004
-§4.4) confirms MnContours is the C++/iminuit `m.mncontour` default;
-this routing matches that expectation.
+`size` is the iminuit-compatible alias for `numpoints` (it wins if both
+are passed); `sigma` is a legacy alias for `cl`.
+
+!!! note "Joint coverage vs the C++ `Δχ² = up` curve"
+    Both conventions are F. James's own (*The Interpretation of Errors*,
+    Minuit doc, §1.3.3): the raw C++ MnContours boundary `FCN = fmin + up`
+    is the curve whose axis crossings are the single-parameter MINOS ±1σ
+    errors — but as a 2-D region it covers only **39.3 %**; for a
+    *simultaneous* statement about both parameters James prescribes
+    scaling `up` by the χ²(2) quantile (his Table 1.3.3 — exactly what
+    `cl` does here, following iminuit ≥ 2.0). For the unscaled C++ curve
+    use the low-level [`contour_exact`](@ref) (`sigma = 1`), or
+    `cl = chisq_cl(1, 2) ≈ 0.3935`. See the
+    [MINOS errors & contours](@ref) tutorial for the full discussion with
+    literature excerpts.
+
+Routes through [`contour_exact`](@ref) with
+`sigma = √(delta_chisq(cl, 2))` — the proper MNCONTOUR algorithm from
+`reference/Minuit2_cpp/src/MnContours.cxx`, with the crossing aim scaled
+to `fmin + up·sigma²` (mirrors iminuit's temporary-errordef scaling). The
+faster but approximate ellipse-based [`contour_ellipse`](@ref) is kept
+for cases where a quick visual check is enough.
 """
 function mncontour(m::Minuit, par1, par2;
                     numpoints::Integer = 100,
                     size::Union{Integer,Nothing} = nothing,
-                    sigma::Real = 1,
+                    sigma::Union{Real,Nothing} = nothing,
                     cl::Union{Real,Nothing} = nothing,
                     threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                     kwargs...)
@@ -524,22 +544,133 @@ function mncontour(m::Minuit, par1, par2;
         throw(ArgumentError("Call `migrad(m)` before `mncontour(m, ...)`"))
     _tg = _use_threads(m, threaded_gradient)
     npts = size === nothing ? numpoints : Int(size)
-    σ    = cl === nothing ? sigma : Float64(cl)
-    isapprox(σ, 1.0) ||
-        throw(ArgumentError("mncontour sigma/cl ≠ 1 is Phase 1.x deferred; got $σ"))
+    # cl wins over the legacy `sigma` alias; both default to iminuit's
+    # literal 0.68 (NOT 0.6827 — verified against iminuit 2.31
+    # `_cl_to_errordef(None, 2, 0.68) = 2.27886856637673`).
+    _cl = cl === nothing ? (sigma === nothing ? 0.68 : Float64(sigma)) :
+                            Float64(cl)
+    _cl > 0 ||
+        throw(ArgumentError("mncontour cl must be positive, got $_cl"))
+    # Joint-2D scaling (James Table 1.3.3 / iminuit `_cl_to_errordef`):
+    # Δχ² = delta_chisq(cl, ndof=2); the cross-search aim is
+    # fmin + up·sigma² with sigma = √Δχ².
+    σ_scale = sqrt(delta_chisq(_cl, 2))
     # Resolve indices then dispatch into `contour_exact` (real MnContours
-    # algorithm) rather than `contour` (Phase-1 ellipse approximation).
+    # algorithm) rather than the Phase-1 ellipse approximation.
     ix = par1 isa Integer ? Int(par1) : ext_index(m.params, String(par1))
     iy = par2 isa Integer ? Int(par2) : ext_index(m.params, String(par2))
     ix_int = m.params.int_of_ext[ix]
     iy_int = m.params.int_of_ext[iy]
     ce = contour_exact(m.fmin.internal, m.fmin.internal_cf,
                         ix_int, iy_int; npoints = npts,
-                        threaded_gradient = _tg, kwargs...)
+                        threaded_gradient = _tg, sigma = σ_scale, kwargs...)
     # contour_exact works in internal (sin/√) coords; return physical
     # (external) coords matching `m.values` (no-op for unbounded params).
     return [(int_to_ext_value(m.params, ix_int, px),
              int_to_ext_value(m.params, iy_int, py)) for (px, py) in ce.points]
+end
+
+"""
+    contour_grid(m::Minuit, par1, par2; size=50, bound=2, grid=nothing,
+                 subtract_min=false) -> ContourGrid
+
+iminuit's `Minuit.contour`: evaluate the FCN on a 2D grid in the
+`(par1, par2)` plane with **all other parameters held fixed** at their
+current (best-fit) values — a 2D **slice** of the FCN, the two-dimensional
+analogue of [`profile`](@ref). No minimization is performed. (Named
+`contour_grid` rather than iminuit's `contour` because the bare name
+collides with `Plots.contour` under `using JuMinuit, Plots`; this is also
+what IMinuit.jl exported as `contour`.)
+
+# Arguments
+
+- `par1`, `par2` — Integer index, String, or Symbol name. Must be two
+  distinct free parameters.
+- `size=50` — number of grid points per axis.
+- `bound=2` — scan range: a number `k` means `value ± k·σ` per axis
+  (σ = current HESSE error), clipped to any parameter limits; or pass
+  `((x_lo, x_hi), (y_lo, y_hi))` explicitly.
+- `grid=(xs, ys)` — explicit grid axes (overrides `size`/`bound`).
+- `subtract_min=false` — subtract the grid minimum from the values
+  (`fval` becomes Δχ²-like).
+
+Returns a [`ContourGrid`](@ref); destructures iminuit-style as
+`xs, ys, F = contour_grid(m, "a", "b")` with `F[i, j] = FCN(xs[i], ys[j])`,
+and plots directly (`plot(g)` → filled contour; or `draw_contour(m, ...)`).
+
+!!! warning "A slice is NOT a confidence region"
+    The grid fixes the other parameters instead of re-minimizing them, so
+    its `Δχ²` level curves are **conditional** regions — systematically
+    SMALLER than the true (profile) confidence region when `(par1, par2)`
+    correlate with the remaining free parameters, by ≈ `√(1−R²)` per axis
+    (R = multiple correlation with the others). With only 2 free
+    parameters slice ≡ profile and the levels are exact. Use
+    [`mncontour`](@ref) for confidence regions; use `contour_grid` to
+    inspect the FCN landscape (valley orientation, secondary minima).
+    For level lines: `Δχ² = m.up` projects to the single-parameter 68.27 %
+    intervals; the joint-2D 68.27 % level is `delta_chisq(0.68, 2) ≈ 2.30`
+    (× `m.up`).
+"""
+function contour_grid(m::Minuit, par1, par2;
+                       size::Integer = 50,
+                       bound = 2,
+                       grid = nothing,
+                       subtract_min::Bool = false)
+    ix = par1 isa Integer ? Int(par1) : ext_index(m.params, String(par1))
+    iy = par2 isa Integer ? Int(par2) : ext_index(m.params, String(par2))
+    n = n_pars(m.params)
+    (1 <= ix <= n && 1 <= iy <= n) ||
+        throw(ArgumentError("contour_grid: parameter index out of bounds (got $ix, $iy for n=$n)"))
+    ix != iy ||
+        throw(ArgumentError("contour_grid requires two distinct parameters"))
+    for idx in (ix, iy)
+        is_fixed(m.params.pars[idx]) &&
+            throw(ArgumentError("contour_grid: parameter `$(m.params.pars[idx].name)` is fixed"))
+    end
+    Int(size) >= 2 || throw(ArgumentError("contour_grid: size must be ≥ 2"))
+
+    base = collect(Float64, m.values)   # post-fit values when fitted, else initial
+
+    # Per-axis grid: explicit `grid` > explicit bound pairs > value ± k·σ.
+    # Numeric bounds are clipped against the parameter's limits (iminuit
+    # clips too — a grid point outside the limits would probe a region the
+    # fit itself can never reach).
+    function _axis(idx::Int, b)
+        v = base[idx]
+        lo, hi = if b isa Real
+            s = abs(Float64(m.errors[idx]))
+            (v - Float64(b) * s, v + Float64(b) * s)
+        else
+            (Float64(b[1]), Float64(b[2]))
+        end
+        p = m.params.pars[idx]
+        has_lower_limit(p) && (lo = max(lo, p.lower))
+        has_upper_limit(p) && (hi = min(hi, p.upper))
+        lo < hi || throw(ArgumentError("contour_grid: empty scan range for `$(p.name)`"))
+        return collect(range(lo, hi; length = Int(size)))
+    end
+    xs, ys = if grid !== nothing
+        length(grid) == 2 ||
+            throw(ArgumentError("contour_grid: grid must be a (xs, ys) pair"))
+        (collect(Float64, grid[1]), collect(Float64, grid[2]))
+    else
+        bx, by = bound isa Real ? (bound, bound) : (bound[1], bound[2])
+        (_axis(ix, bx), _axis(iy, by))
+    end
+
+    F = Matrix{Float64}(undef, length(xs), length(ys))
+    x0 = copy(base)
+    @inbounds for (j, yv) in enumerate(ys), (i, xv) in enumerate(xs)
+        x0[ix] = xv
+        x0[iy] = yv
+        F[i, j] = m.fcn(x0)
+    end
+    subtract_min && (F .-= minimum(F))
+
+    return ContourGrid(ix, iy,
+                        m.params.pars[ix].name, m.params.pars[iy].name,
+                        xs, ys, F, base[ix], base[iy],
+                        Float64(m.fcn.up), subtract_min)
 end
 
 """
@@ -662,18 +793,26 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    draw_contour(m::Minuit, par1, par2; bins=50, kws...) -> Plots.Plot
+    draw_contour(m::Minuit, par1, par2; size=50, bound=2, kws...) -> Plots.Plot
 
-Plot the 2D contour from `contour(m, par1, par2; npoints=bins)`. Requires
-`using Plots`. Mirrors IMinuit.jl's `draw_contour`.
+Filled-contour plot of the FCN **grid slice** from
+[`contour_grid`](@ref)`(m, par1, par2; subtract_min=true)` — iminuit's
+`m.draw_contour`. A landscape view, NOT a confidence region (see
+[`contour_grid`](@ref)); for confidence contours use
+[`draw_mncontour`](@ref). Requires `using Plots`. (≤ 0.4 this drew the
+[`contour_ellipse`](@ref) approximation instead.)
 """
 function draw_contour end
 
 """
-    draw_mncontour(m::Minuit, par1, par2; numpoints=100, nsigma=1, kws...) -> Plots.Plot
+    draw_mncontour(m::Minuit, par1, par2; numpoints=100, cl=nothing, kws...) -> Plots.Plot
 
-Plot the MINOS 2D contour. Equivalent to `draw_contour` for `sigma=1`.
-Requires `using Plots`.
+Plot **exact** MINOS 2D confidence contours from [`mncontour`](@ref)
+(boundary search with per-point re-minimization) at one or several
+confidence levels — `cl` follows `mncontour`'s iminuit semantics
+(default → joint 2-D 68 % region) and may be a vector to overlay several
+contours. Requires `using Plots`. (≤ 0.4 this drew the fast
+[`contour_ellipse`](@ref) approximation at Δχ² = `up` instead.)
 """
 function draw_mncontour end
 

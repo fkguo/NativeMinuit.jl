@@ -163,10 +163,12 @@ minos!(m)                 # asymmetric ±σ on every free param; minos!(m, "a") 
 minos!(m; sigma = 2)      # widen to the 2σ crossing
 me = m.merrors["a"]; me.upper; me.lower; is_valid(me)   # gate on upper_valid/lower_valid
 
-pts = mncontour(m, "a", "b"; numpoints = 40)   # EXACT MINOS boundary → Vector{Tuple}
-c   = contour(m, "a", "b")                      # fast HESSE-ellipse approx → ContoursError
+pts = mncontour(m, "a", "b"; numpoints = 40)   # EXACT joint 68% CL boundary → Vector{Tuple}
+c   = contour_ellipse(m, "a", "b")              # fast HESSE-ellipse approx → ContoursError
 c.points        # ← the boundary (Vector{Tuple});  NOT c.xs / c.ys (no such fields)
 c.valid
+xs, ys, F = contour_grid(m, "a", "b")           # iminuit m.contour: FCN GRID SLICE,
+                                                #   others FIXED (landscape, NOT a CL region)
 prof = profile(m, "a")                          # scan, no inner re-min (diagnostic)
 mnp  = mnprofile(m, "a")                         # true profile likelihood (re-minimizes rest)
 
@@ -177,11 +179,25 @@ to_latex(m)                                      # LaTeX table of the result (Ju
 ```
 - **MINOS needs a covariance** — after `simplex`/`scan` (which leave none), run
   `hesse!(m)` first. A normal `migrad!` already leaves one.
-- `draw_mncontour` / `draw_mnmatrix` actually render the **ellipse** `contour`,
-  not the exact `mncontour`, despite the `mn` in their names (needs `using Plots`).
+- **0.5.0 renames**: bare `contour` is NO LONGER EXPORTED (it collided with
+  `Plots.contour`). The old JuMinuit ellipse is `contour_ellipse`; iminuit's /
+  IMinuit.jl's grid-scan `contour` is `contour_grid` (returns `ContourGrid`;
+  destructures to `(xs, ys, F)`; `plot(g)` gives a filled contour). A grid
+  slice's Δχ² level curves are CONDITIONAL (others pinned) — smaller than the
+  true region by ≈√(1−R²) per axis on correlated fits → confidence regions
+  come from `mncontour`, landscape from `contour_grid`.
+- `draw_mncontour` / `draw_mnmatrix` render the **exact** `mncontour` (≥ 0.5.0;
+  earlier versions silently drew the ellipse); `draw_contour` = `contour_grid`
+  landscape (needs `using Plots`).
 - Point-count kwargs **differ**: `mncontour` takes `numpoints` (default 100),
-  `contour` takes `npoints` (default 20). `mncontour` is **1σ only** (it errors on
-  `sigma`/`cl ≠ 1`; for a 2σ region use `get_contours_samples`).
+  `contour_ellipse` takes `npoints` (default 20), `contour_grid` takes `size`
+  (default 50, per axis).
+- `mncontour` **cl semantics (0.5.0+, = iminuit ≥ 2.0)**: default → JOINT 2-D
+  68 % region (Δχ²≈2.28); `0<cl<1` → that joint prob; `cl≥1` → nσ (cl=2 →
+  joint 95.45 %, Δχ²≈6.18). The old C++ Δχ²=1 curve (projections = MINOS ±1σ;
+  joint coverage only 39.3 % — James, *Interpretation of Errors* §1.3.3) is
+  `mncontour(m,a,b; cl = chisq_cl(1,2))` or low-level `contour_exact`
+  (`sigma=1`). Pre-0.5.0 `mncontour` traced Δχ²=1 and ERRORED on `cl≠1`.
 - MINOS/contours mislead on a flat, strongly non-Gaussian, or multimodal
   surface (`is_valid(me)==false`, `upper_new_min` fires, ragged contour) → use
   the sampling tools below.
@@ -293,7 +309,7 @@ NamedTuple; for the accepted cloud compute it directly (`using Statistics; cor(r
 5. `up`/`errordef` = **1.0 for χ², 0.5 for −lnL**; cost objects set it automatically.
 6. `set_lower_limit!`/`set_upper_limit!` **clear the other side** → use `set_limits!` for two-sided.
 7. MINOS needs a covariance → after `simplex`/`scan`, `hesse!(m)` first.
-8. `contour(...)` → read `.points` / `.valid` (no `.xs`/`.ys`). `mncontour` = exact; `contour` = ellipse.
+8. `mncontour` = exact CL boundary; `contour_ellipse` = fast ellipse (read `.points`/`.valid`, no `.xs`/`.ys`); `contour_grid` = iminuit grid slice (landscape, NOT a CL region). Bare `contour` is unexported since 0.5.0 (Plots clash).
 9. AD: FCN **generic on eltype** + `using ForwardDiff` + `grad = x->ForwardDiff.gradient(f,x)`.
 10. Threading: `julia -t N` + thread-safe FCN (no shared mutable buffers) + `threaded_gradient=true`.
 11. `get_contours_samples` `ndof` = region dimension (joint by default; Δχ²=2.30 for 2-D 1σ).

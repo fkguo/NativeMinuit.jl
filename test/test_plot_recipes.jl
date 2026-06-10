@@ -11,7 +11,7 @@ using RecipesBase
     @testset "ContoursError → closed polygon recipe" begin
         cf = CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
-        c = contour(fmin, cf, 1, 2; npoints = 8)
+        c = contour_ellipse(fmin, cf, 1, 2; npoints = 8)
         @test c.valid
 
         # Apply the recipe; result is a Vector of RecipeData.
@@ -25,6 +25,25 @@ using RecipesBase
         @test length(xs) == 9   # 8 contour points + 1 wrap-around
         @test xs[1] == xs[end]
         @test ys[1] == ys[end]
+    end
+
+    @testset "ContourGrid → filled contour + center marker recipe" begin
+        f2(p) = (p[1] - 1.0)^2 + (p[2] - 2.0)^2
+        m = Minuit(f2, [0.0, 0.0]; names = ["a", "b"])
+        migrad!(m)
+        g = contour_grid(m, "a", "b"; size = 9, bound = 1)
+
+        kwargs = Dict{Symbol,Any}()
+        recipes = RecipesBase.apply_recipe(kwargs, g)
+        # Two @series: the contour surface + the center scatter marker.
+        @test length(recipes) == 2
+        xs, ys, Z = recipes[1].args
+        @test xs == g.x && ys == g.y
+        # The recipe transposes to Plots' z[j, i] ↔ (x[i], y[j]) convention.
+        @test size(Z) == (length(g.y), length(g.x))
+        @test Z[3, 5] ≈ g.fval[5, 3]
+        cx, cy = recipes[2].args
+        @test cx == [g.value_x] && cy == [g.value_y]
     end
 
     @testset "MinosError → scatter+yerror recipe" begin

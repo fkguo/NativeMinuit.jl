@@ -24,6 +24,7 @@ like `migrad(m)` / `chisq` / `Data` / `Fit` largely run unchanged.
 | `m.values`, `m.errors`, `m.covariance` | same (property access) |
 | `m.merrors` | same — `Dict` of MINOS errors keyed by name (also `m.minos_errors`, keyed by index) |
 | `m.mncontour(a, b)` | [`mncontour`](@ref)`(m, a, b)` |
+| `m.contour(a, b)` (IMinuit.jl `contour(m, a, b)`) | [`contour_grid`](@ref)`(m, a, b)` (renamed: avoids the `Plots.contour` clash) |
 | `m.profile(a)` / `m.mnprofile(a)` | [`profile`](@ref)`(m, a)` / [`mnprofile`](@ref)`(m, a)` |
 | IMinuit.jl `Fit`, `ArrayFit` | exported aliases of [`Minuit`](@ref) (see [`AbstractFit`](@ref)) |
 | IMinuit.jl `chisq`, `Data` | exported, same signatures |
@@ -106,13 +107,24 @@ argument:
 
 ```julia
 # iminuit:  pts = m.mncontour("a", "b")
-pts = mncontour(m, "a", "b")          # Vector{Tuple{Float64,Float64}}
+pts = mncontour(m, "a", "b")          # joint 68 % region (iminuit cl semantics)
+
+# iminuit:  x, y, F = m.contour("a", "b")   (IMinuit.jl: contour(m, "a", "b"))
+xs, ys, F = contour_grid(m, "a", "b") # FCN grid slice, others held fixed
 
 prof  = profile(m, "a")               # 1D scan, no inner minimization
 mprof = mnprofile(m, "a")             # MINOS profile (re-minimizes nuisances)
 ```
 
 Parameters may be passed by 1-based integer index or by name (`String`).
+
+!!! note "`contour` renames (0.5.0)"
+    iminuit's / IMinuit.jl's grid-scan `contour` is [`contour_grid`](@ref)
+    in JuMinuit — the bare name `contour` would clash with `Plots.contour`
+    under `using JuMinuit, Plots`. JuMinuit ≤ 0.4's own `contour` (a fast
+    error-ellipse approximation, *not* iminuit's grid) is now
+    [`contour_ellipse`](@ref); the unexported deprecated alias
+    `JuMinuit.contour` still forwards to it.
 
 ## `chisq` / `Data`: drop-in, same signatures
 
@@ -186,7 +198,8 @@ either gives a clear "load Optim" message rather than a `MethodError`.
 - `chisq`, `Data`, `model_fit`, `args`, `matrix`, `reset`, `set_precision` —
   exported with the same signatures;
 - the MINOS / contour semantics (`mncontour` traces the exact MnContours
-  boundary, not the HESSE ellipse).
+  boundary, not the HESSE ellipse, with iminuit ≥ 2.0's joint-coverage `cl`
+  — default joint 2-D 68 %, `Δχ² ≈ 2.28`).
 
 **Idiomatically different:**
 

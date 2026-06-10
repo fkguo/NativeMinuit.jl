@@ -56,7 +56,7 @@ PrecompileTools.@setup_workload begin
 
             # ── Path B: MINOS + contour (uses function_cross) ──────
             me_a = minos(m_a, cf_a, 1)
-            ce_a = contour(m_a, cf_a, 1, 2; npoints = 6)
+            ce_a = contour_ellipse(m_a, cf_a, 1, 2; npoints = 6)
 
             # ── Path C: bound-aware via Parameters ─────────────────
             params = Parameters([

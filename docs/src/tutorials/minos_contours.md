@@ -67,25 +67,34 @@ If you only need one side, `minos_upper(m, "a")` /
 `m`. The whole-fit alias `minos!(m; sigma = 2)` widens the scan to the
 2σ crossing.
 
-## 2-D confidence contours
+## 2-D contours: three tools, three jobs
+
+| Function | What it computes | Cost | Use it for |
+|---|---|---|---|
+| [`mncontour`](@ref) | **exact** MINOS boundary (re-minimizes the others at every point) | high | **confidence regions** |
+| [`contour_ellipse`](@ref) | error ellipse from the MINOS axes + covariance | low (2 MINOS runs) | quick near-quadratic preview |
+| [`contour_grid`](@ref) | FCN values on a grid, **others held fixed** (iminuit's `contour`) | `size²` FCN calls | inspecting the **landscape** |
 
 `mncontour` traces the **exact** MINOS contour in a parameter plane — the
-C++-faithful `MnContours` boundary search, re-minimizing the other
-parameters at each point. It returns a vector of `(x, y)` points (matching
-iminuit's `m.mncontour`):
+`MnContours` boundary search, re-minimizing the other parameters at each
+point. It returns a vector of `(x, y)` points and follows iminuit ≥ 2.0's
+**joint-coverage `cl` semantics** (see the
+[Δχ² conventions](@ref delta-chisq-conventions) section below):
 
 ```julia
-pts = mncontour(m, "a", "b"; numpoints = 40)   # Vector{Tuple{Float64,Float64}}
+pts = mncontour(m, "a", "b"; numpoints = 40)   # joint 2-D 68 % region (default)
+pts95 = mncontour(m, "a", "b"; cl = 0.95)      # joint 95 % region
+pts2σ = mncontour(m, "a", "b"; cl = 2)         # cl ≥ 1 ⇒ nσ → joint 95.45 %
 xs = first.(pts);  ys = last.(pts)
 ```
 
-If you'd rather have the structured result, the [`contour`](@ref)`(m, …)`
-method returns a [`ContoursError`](@ref) — a fast ellipse approximation
-from the Hesse covariance and the MINOS axes, good for a quick visual
-check:
+If you'd rather have the structured result, [`contour_ellipse`](@ref)`(m, …)`
+(named `contour` before 0.5.0) returns a [`ContoursError`](@ref) — a fast
+ellipse approximation from the Hesse covariance and the MINOS axes, good
+for a quick visual check:
 
 ```julia
-c = contour(m, "a", "b"; npoints = 32)
+c = contour_ellipse(m, "a", "b"; npoints = 32)
 ```
 
 Read the boundary from `c.points` and the status from `c.valid` — **not**
@@ -101,8 +110,125 @@ every boundary point** (the two contour coordinates plus the profiled
 rest) at no extra cost. The lower-level [`contour_exact`](@ref) returns a
 `ContoursError` whose [`contour_parameter_sets`](@ref) gives those vectors
 — the native analogue of IMinuit.jl's `get_contours`. The ellipse
-[`contour`](@ref) does no inner re-minimization, so it leaves that field
-empty.
+[`contour_ellipse`](@ref) does no inner re-minimization, so it leaves that
+field empty.
+
+### [Δχ², coverage, and the two contour conventions](@id delta-chisq-conventions)
+
+A 2-D contour can answer two **different** statistical questions, and the
+right `Δχ²` level differs between them. Both conventions come from
+F. James himself; the distinction is spelled out in his Minuit document
+*The Interpretation of Errors* (2004) and in Eadie/James et al.,
+*Statistical Methods in Experimental Physics* (2nd ed., 2006; "SMEP"
+below) — full citations at the end of this section.
+
+**Question 1 — single-parameter errors.** The curve `FCN = fmin + up`
+(`Δχ² = 1` for a χ² fit) is the curve whose *extreme points along each
+axis are the MINOS ±1σ errors of that parameter*. This is what the raw
+C++ `MnContours` traces, by design:
+
+> "draw the contour line connecting all points where the function takes
+> on the value `Fmin + UP` (MnContours will do this for you) … If MINOS
+> is requested to find the errors in parameter one, it will find the
+> extreme contour points A and B, whose x-coordinates … will be
+> respectively the negative and positive MINOS errors of parameter one."
+> — James, *The Interpretation of Errors*, §1.3.2
+
+The single-parameter coverage of those projections is 68.3 % **whatever
+the number of fit parameters** (SMEP p. 238: the MINOS interval for one
+parameter uses `λ = Δ ln L = 1/2`, i.e. `Δχ² = 1`, in any dimension). But
+read as a *2-D region*, this same curve covers far less:
+
+> "The probability that parameter one *and* parameter two simultaneously
+> take on values within the one-standard-deviation likelihood contour is
+> **39.3 %**." — James, *The Interpretation of Errors*, §1.3.3
+
+(SMEP Table 9.1 tabulates exactly this: the `K = 1` ellipse in two
+variables has probability content 0.393; the worked example on p. 222
+notes that two separate 68 % intervals cover both true values
+simultaneously only 46 % of the time.)
+
+**Question 2 — a joint confidence region.** For a *simultaneous*
+statement about `NPAR` parameters, James prescribes scaling `up` by the
+χ²(NPAR) quantile (his Table 1.3.3; SMEP §9.3.3 gives the same rule,
+`ln L = ln L_max − ½χ²_β(k)`):
+
+| coverage β | 1 par (`Δχ²`) | 2 par | 3 par |
+|---|---|---|---|
+| 68.3 % | 1.00 | 2.30 | 3.53 |
+| 90 %   | 2.71 | 4.61 | 6.25 |
+| 95 %   | 3.84 | 5.99 | 7.82 |
+| 99 %   | 6.63 | 9.21 | 11.34 |
+
+(For a negative-log-likelihood FCN all values are halved — that is what
+`up = 0.5` already encodes. The general entry is
+[`delta_chisq`](@ref)`(β, NPAR)`.)
+
+**How JuMinuit maps the two conventions:**
+
+- [`mncontour`](@ref)`(m, a, b; cl = …)` — **Question 2**, following
+  iminuit ≥ 2.0: the default `cl` traces the joint 2-D 68 % region
+  (`Δχ² = delta_chisq(0.68, 2) ≈ 2.28`); `cl ≥ 1` means nσ
+  (`cl = 2` → joint 95.45 %, `Δχ² ≈ 6.18`).
+- The **Question-1 curve** (projections = MINOS ±1σ; the C++/`MnContours`
+  default and the convention of the 1994 MINUIT manual) is available as
+  the low-level [`contour_exact`](@ref)`(fmin, cf, ix, iy)` (`sigma = 1`
+  traces `fmin + up` exactly), or through `mncontour` with
+  `cl = chisq_cl(1, 2) ≈ 0.3935`.
+- Single-parameter errors themselves come from [`minos!`](@ref)
+  (`Δχ² = up`, any dimension), not from a 2-D contour.
+
+```julia
+pts_joint = mncontour(m, "a", "b")                       # 68 % joint region
+pts_cpp   = mncontour(m, "a", "b"; cl = chisq_cl(1, 2))  # Δχ²=1 curve (C++)
+```
+
+!!! warning "Label your contours"
+    The two curves differ by √2.30 ≈ 1.5× in linear size. Calling the
+    `Δχ² = 1` curve a "68 % confidence region" overstates its joint
+    coverage (39.3 %); calling the joint-68 % contour's projections "the
+    1σ parameter errors" overstates them by ~1.5×. State which convention
+    a published contour uses.
+
+**References.** F. James, *The Interpretation of Errors* (Minuit/Minuit2
+documentation, CERN, 2004), §1.3 — distributed with Minuit2 and
+[available from CERN](https://seal.web.cern.ch/documents/minuit/mnerror.pdf);
+F. James, *MINUIT — Function Minimization and Error Analysis*, CERN
+Program Library D506 (v94.1, 1994), §7; W. T. Eadie, D. Drijard,
+F. E. James, M. Roos, B. Sadoulet, *Statistical Methods in Experimental
+Physics*, 2nd ed. (World Scientific, 2006), §9.1.2–9.1.3 (Table 9.1),
+§9.3.3, p. 238.
+
+### FCN landscape: `contour_grid`
+
+[`contour_grid`](@ref) is iminuit's `Minuit.contour` (what IMinuit.jl
+exported as `contour`): the FCN evaluated on a 2-D grid with **all other
+parameters pinned** at their best-fit values — the 2-D analogue of
+[`profile`](@ref). No minimization happens; it is a cheap *map* of the
+function near the minimum (valley orientation, hints of secondary minima):
+
+```julia
+xs, ys, F = contour_grid(m, "a", "b"; size = 50, bound = 2)  # iminuit-style
+g = contour_grid(m, "a", "b"; subtract_min = true)
+plot(g)                                       # filled-contour landscape
+```
+
+!!! warning "A slice is NOT a confidence region"
+    Because the other parameters are *fixed* rather than re-minimized, the
+    `Δχ²` level curves of a grid slice are **conditional** regions —
+    systematically *smaller* than the true profile-likelihood region when
+    `(a, b)` correlate with the remaining free parameters (per axis by
+    ≈ `√(1−R²)`, `R` = multiple correlation with the rest; with only two
+    free parameters slice ≡ profile). For confidence regions use
+    [`mncontour`](@ref).
+
+    Picking the level itself: `Δχ² = up` (i.e. `m.up`) is the curve whose
+    per-axis **projections** are the single-parameter 68.27 % intervals
+    (the C++ MnContours convention — its joint 2-D coverage is only
+    39.3 %); the **joint** 2-D 68 % region needs
+    `Δχ² = delta_chisq(0.68, 2) ≈ 2.28` (the [`mncontour`](@ref)
+    default). See the
+    [Δχ² conventions](@ref delta-chisq-conventions) section above.
 
 ## 1-D profiles
 
@@ -137,12 +263,13 @@ using JuMinuit, Plots
 plot(c)                                    # closed contour polygon
 ```
 
-There are also IMinuit.jl-style draw helpers (`draw_mncontour`,
-`draw_profile`, `draw_mnprofile`, `draw_mnmatrix`) that build the
-corresponding plot for you when `using Plots` is loaded. Note that
-`draw_mncontour` / `draw_mnmatrix` currently render the fast
-covariance-**ellipse** [`contour`](@ref), not the exact `mncontour` /
-[`contour_exact`](@ref) boundary, despite the `mn` in their names.
+There are also IMinuit.jl-style draw helpers (`draw_contour`,
+`draw_mncontour`, `draw_profile`, `draw_mnprofile`, `draw_mnmatrix`) that
+build the corresponding plot for you when `using Plots` is loaded.
+`draw_mncontour` / `draw_mnmatrix` trace the exact [`mncontour`](@ref)
+boundary (since 0.5.0 — earlier versions silently drew the ellipse
+approximation); `draw_contour` shows the [`contour_grid`](@ref) FCN
+landscape.
 
 ## When MINOS or MnContours fail
 

@@ -19,30 +19,63 @@ using JuMinuit
 using Plots
 
 """
-    draw_contour(m::Minuit, par1, par2; bins=50, kws...) -> Plots.Plot
+    draw_contour(m::Minuit, par1, par2; size=50, bound=2, bins=nothing, kws...) -> Plots.Plot
 
-Plot the 2D contour from `contour(m, par1, par2; npoints=bins)`. The
-`kws...` flow through to `Plots.plot(...)`.
+Filled-contour plot of the FCN **grid slice** from
+`contour_grid(m, par1, par2; size, bound, subtract_min=true)` — iminuit's
+`m.draw_contour`. A landscape view, NOT a confidence region (the grid
+fixes the other parameters; see `contour_grid`). `bins` is accepted as a
+legacy alias for `size`. The `kws...` flow through to `Plots.plot(...)`.
 """
 function JuMinuit.draw_contour(m::JuMinuit.Minuit, par1, par2;
-                                 bins::Integer = 50, kws...)
-    ce = JuMinuit.contour(m, par1, par2; npoints = bins)
-    return Plots.plot(ce; kws...)
+                                 size::Integer = 50,
+                                 bound = 2,
+                                 bins::Union{Integer,Nothing} = nothing,
+                                 kws...)
+    sz = bins === nothing ? size : Int(bins)
+    g = JuMinuit.contour_grid(m, par1, par2;
+                               size = sz, bound = bound, subtract_min = true)
+    return Plots.plot(g; kws...)
 end
 
 """
-    draw_mncontour(m::Minuit, par1, par2; numpoints=100, nsigma=1, kws...) -> Plots.Plot
+    draw_mncontour(m::Minuit, par1, par2; numpoints=100, cl=nothing,
+                   nsigma=nothing, kws...) -> Plots.Plot
 
-Plot the MINOS 2D contour using `numpoints` boundary points.
+Plot **exact** MINOS 2D confidence contours (`mncontour` — boundary
+search with per-point re-minimization) at one or several confidence
+levels. `cl` follows `mncontour`'s iminuit semantics (default → joint
+2-D 68 % region; `0<cl<1` → that joint probability; `cl≥1` → nσ) and
+may be a vector to overlay several contours (mirrors iminuit's
+`draw_mncontour`). `nsigma` is a legacy alias for a scalar `cl`.
+(≤ 0.4 this drew the fast `contour_ellipse` approximation at Δχ²=up
+instead — fixed.)
 """
 function JuMinuit.draw_mncontour(m::JuMinuit.Minuit, par1, par2;
                                   numpoints::Integer = 100,
-                                  nsigma::Real = 1,
+                                  cl = nothing,
+                                  nsigma::Union{Real,Nothing} = nothing,
                                   kws...)
-    isapprox(nsigma, 1.0) ||
-        throw(ArgumentError("draw_mncontour nsigma ≠ 1 is Phase 1.x deferred"))
-    ce = JuMinuit.contour(m, par1, par2; npoints = numpoints)
-    return Plots.plot(ce; kws...)
+    cls = cl === nothing ?
+            (nsigma === nothing ? [0.68] : [Float64(nsigma)]) :
+            (cl isa Real ? [Float64(cl)] : collect(Float64, cl))
+    ix = par1 isa Integer ? Int(par1) : JuMinuit.ext_index(m.params, String(par1))
+    iy = par2 isa Integer ? Int(par2) : JuMinuit.ext_index(m.params, String(par2))
+    plt = Plots.plot(; xlabel = m.params.pars[ix].name,
+                       ylabel = m.params.pars[iy].name, kws...)
+    for c in cls
+        pts = JuMinuit.mncontour(m, par1, par2; numpoints = numpoints, cl = c)
+        xs = [p[1] for p in pts]
+        ys = [p[2] for p in pts]
+        if !isempty(xs)         # close the boundary polygon
+            push!(xs, xs[1])
+            push!(ys, ys[1])
+        end
+        prob = c >= 1 ? JuMinuit.chisq_cl(c^2, 1) : c    # nσ → probability
+        Plots.plot!(plt, xs, ys;
+                     label = string(round(100 * prob; digits = 1), "% CL"))
+    end
+    return plt
 end
 
 """
@@ -86,14 +119,16 @@ function JuMinuit.draw_mnprofile(m::JuMinuit.Minuit, par;
 end
 
 """
-    draw_mnmatrix(m::Minuit; numpoints=100, kws...) -> Plots.Plot
+    draw_mnmatrix(m::Minuit; numpoints=100, cl=nothing, kws...) -> Plots.Plot
 
 Triangular matrix of all pairwise 2D contours. Each free parameter pair
 gets one sub-plot; the diagonal shows the 1D MINOS profile. Mirrors
-iminuit's `m.draw_mnmatrix()`.
+iminuit's `m.draw_mnmatrix()`. `cl` follows `mncontour`'s iminuit
+semantics (default → joint 2-D 68 % region per pair).
 """
 function JuMinuit.draw_mnmatrix(m::JuMinuit.Minuit;
                                  numpoints::Integer = 100,
+                                 cl::Union{Real,Nothing} = nothing,
                                  kws...)
     n = JuMinuit.n_pars(m.params)
     free_idx = [i for i in 1:n if !JuMinuit.is_fixed(m.params.pars[i])]
@@ -113,8 +148,18 @@ function JuMinuit.draw_mnmatrix(m::JuMinuit.Minuit;
                                      legend = false,
                                      ticks = nothing))
         elseif ii > jj
-            ce = JuMinuit.contour(m, i, j; npoints = numpoints)
-            push!(plots, Plots.plot(ce; legend = false, ticks = nothing))
+            # Exact MINOS boundary per pair (iminuit's draw_mnmatrix uses
+            # mncontour; ≤ 0.4 this drew the ellipse approximation — fixed).
+            pts = cl === nothing ?
+                JuMinuit.mncontour(m, i, j; numpoints = numpoints) :
+                JuMinuit.mncontour(m, i, j; numpoints = numpoints, cl = cl)
+            xs = [p[1] for p in pts]
+            ys = [p[2] for p in pts]
+            if !isempty(xs)
+                push!(xs, xs[1])
+                push!(ys, ys[1])
+            end
+            push!(plots, Plots.plot(xs, ys; legend = false, ticks = nothing))
         else
             push!(plots, Plots.plot(; legend = false, framestyle = :none))
         end

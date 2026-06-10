@@ -76,7 +76,7 @@ using JSON
     @testset "ContoursError round-trip" begin
         cf = CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
-        c = contour(fmin, cf, 1, 2; npoints = 8)
+        c = contour_ellipse(fmin, cf, 1, 2; npoints = 8)
         @test c.valid
 
         d = JuMinuit.to_dict(c)

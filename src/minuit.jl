@@ -92,7 +92,9 @@ methods plus iminuit-style property access.
 - `hesse!(m; strategy)` — refine the Hessian.
 - `minos!(m, par_idx_or_name; ...)` — single-parameter MINOS.
 - `minos!(m; ...)` — MINOS on all free parameters.
-- `contour(m, par_x, par_y; npoints)` — 2D contour.
+- `mncontour(m, par_x, par_y; numpoints)` — exact 2D confidence contour;
+  `contour_grid` (FCN landscape) and `contour_ellipse` (fast ellipse) for
+  the cheaper variants.
 
 # Properties (iminuit-style)
 
@@ -1342,26 +1344,33 @@ minos_lower(m::Minuit, par::Symbol; kwargs...) =
     minos_lower(m, String(par); kwargs...)
 
 """
-    contour(m::Minuit, par_x, par_y; npoints=20, bins=nothing, kwargs...) -> ContoursError
+    contour_ellipse(m::Minuit, par_x, par_y; npoints=20, bins=nothing, kwargs...) -> ContoursError
 
-Compute a 2D contour. `par_x` / `par_y` may be Integer or String.
-The `bins=...` kwarg is an IMinuit.jl-compatible alias for `npoints`
-(takes precedence when both are passed).
+Compute a fast approximate 2D contour — a (possibly asymmetric) **error
+ellipse** built from the two axes' MINOS errors + the off-diagonal
+covariance. `par_x` / `par_y` may be Integer or String. The `bins=...`
+kwarg is an IMinuit.jl-compatible alias for `npoints` (takes precedence
+when both are passed).
+
+Cheap (2 MINOS runs, no boundary search) but assumes the FCN is
+near-quadratic. For the exact MnContours boundary use [`mncontour`](@ref);
+for an iminuit-style FCN landscape grid use [`contour_grid`](@ref).
+(Named `contour` before 0.5.0.)
 """
-function contour(m::Minuit, par_x::Integer, par_y::Integer;
+function contour_ellipse(m::Minuit, par_x::Integer, par_y::Integer;
                   npoints::Integer = 20,
                   bins::Union{Integer,Nothing} = nothing,
                   threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                   kwargs...)
     m.fmin === nothing &&
-        throw(ArgumentError("Call `migrad!(m)` before `contour(m, ...)`"))
+        throw(ArgumentError("Call `migrad!(m)` before `contour_ellipse(m, ...)`"))
     _tg = _use_threads(m, threaded_gradient)
     npts = bins === nothing ? Int(npoints) : Int(bins)
     ix = m.params.int_of_ext[par_x]
     iy = m.params.int_of_ext[par_y]
     # Use the internal-coord-wrapped CostFunction (parallel-review #4
     # A7/B4 — see minos! for the rationale).
-    ce = contour(m.fmin.internal, m.fmin.internal_cf, ix, iy;
+    ce = contour_ellipse(m.fmin.internal, m.fmin.internal_cf, ix, iy;
                   npoints = npts,
                   threaded_gradient = _tg, kwargs...)
     # The contour runs in internal coords; return physical (external) ones,
@@ -1370,11 +1379,18 @@ function contour(m::Minuit, par_x::Integer, par_y::Integer;
     return _externalize_contour(ce, m.params, par_x, par_y)
 end
 
-function contour(m::Minuit, px::AbstractString, py::AbstractString;
+function contour_ellipse(m::Minuit, px::AbstractString, py::AbstractString;
                   kwargs...)
-    return contour(m, ext_index(m.params, String(px)),
+    return contour_ellipse(m, ext_index(m.params, String(px)),
                       ext_index(m.params, String(py)); kwargs...)
 end
+
+# 0.5.0 rename (rationale at the low-level deprecation in src/contours.jl).
+# `false` = export_old off: re-exporting `contour` would re-introduce the
+# `Plots.contour` ambiguity the rename exists to fix. Qualified
+# `JuMinuit.contour(...)` keeps working, with a deprecation warning.
+Base.@deprecate contour(m::Minuit, par_x::Integer, par_y::Integer; kwargs...) contour_ellipse(m, par_x, par_y; kwargs...) false
+Base.@deprecate contour(m::Minuit, px::AbstractString, py::AbstractString; kwargs...) contour_ellipse(m, px, py; kwargs...) false
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Property-style access (iminuit copy-paste compatibility)

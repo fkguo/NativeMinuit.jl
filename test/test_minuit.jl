@@ -171,13 +171,13 @@
         m = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
                     names = ["x", "y"])
         migrad!(m)
-        c = contour(m, 1, 2; npoints = 10)
+        c = contour_ellipse(m, 1, 2; npoints = 10)
         @test c isa ContoursError
         @test c.valid
         @test length(c.points) == 10
 
         # By name
-        c2 = contour(m, "x", "y"; npoints = 8)
+        c2 = contour_ellipse(m, "x", "y"; npoints = 8)
         @test c2.valid
         @test length(c2.points) == 8
     end

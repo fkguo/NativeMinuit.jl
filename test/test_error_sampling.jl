@@ -105,7 +105,7 @@ end
         end
 
         # The ellipse approximation does NO inner re-minimization → empty.
-        ce_ell = contour(m.fmin.internal, m.fmin.internal_cf, 1, 2; npoints = 8)
+        ce_ell = contour_ellipse(m.fmin.internal, m.fmin.internal_cf, 1, 2; npoints = 8)
         @test isempty(contour_parameter_sets(ce_ell))
 
         # Backward-compatible 7-arg constructor still works (full_points empty).

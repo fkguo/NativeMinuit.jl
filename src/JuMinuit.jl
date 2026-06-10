@@ -124,7 +124,13 @@ export initial_int_values, initial_int_errors
 export hesse, hesse!, HesseResult
 export squeeze_symmetric, squeeze_error
 export MnCross, MinosError, minos, minos_lower, minos_upper
-export ContoursError, contour, contour_exact, contour_parameter_sets
+# NB: the bare `contour` (≤ 0.4 the ellipse approximation) is deliberately
+# NOT exported — it collides with `Plots.contour` / `GR.contour` under
+# `using JuMinuit, Plots`. `JuMinuit.contour` survives as a deprecated
+# alias of `contour_ellipse`; iminuit's grid-slice `contour` is
+# `contour_grid`.
+export ContoursError, contour_ellipse, contour_exact, contour_parameter_sets
+export ContourGrid, contour_grid
 export function_cross_multi
 # Sampling-based / contour error analysis (error_sampling.jl)
 export delta_chisq, chisq_cl

@@ -5,11 +5,17 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
 
 ## [0.5.0] — 2026-06-10
 
-A `find_solution_modes` overhaul, driven by a field stress test on a real
-9-parameter two-solution coupled-channel fit (f1(1420), 2026-06): the fit-local
-whitening metrics scored a genuine two-basin cloud as "0 modes", an
-untrustworthy covariance was used silently, and an expensive FCN had no way to
-bound the call count. The solver core (MIGRAD/HESSE/MINOS) is unchanged.
+Two independent overhauls. **`find_solution_modes`** gains cloud-scale whitening,
+an `:auto` default, FCN-call policies, and a re-fit budget — driven by a field
+stress test on a real 9-parameter two-solution coupled-channel fit (f1(1420),
+2026-06) where the old fit-local metrics scored a genuine two-basin cloud as
+"0 modes", used an untrustworthy covariance silently, and gave an expensive FCN
+no way to bound the call count. The **2-D contour family** is reorganized for
+iminuit fidelity and to resolve the `Plots.contour` name clash. The solver core
+(MIGRAD/HESSE/MINOS) is unchanged. **Breaking**: the bare `contour` is no longer
+exported (renamed `contour_ellipse`; iminuit's grid slice is the new
+`contour_grid`), `mncontour` now traces joint confidence regions (iminuit `cl`
+semantics), and `find_solution_modes`'s `whiten` default changes to `:auto`.
 
 ### Added
 
@@ -50,6 +56,18 @@ bound the call count. The solver core (MIGRAD/HESSE/MINOS) is unchanged.
   950/50 unbalanced clusters, degenerate coordinates, the untrusted-covariance
   fallback, FCN-call counting for `fvals = :none/:lazy`, and the refine
   budget/callback contract.
+- **`contour_grid(m, par1, par2; size=50, bound=2, grid, subtract_min)`** —
+  iminuit's `Minuit.contour` (the function IMinuit.jl exported as `contour`):
+  the FCN evaluated on a 2-D grid with all **other parameters held fixed** at
+  their current values — a slice, the 2-D analogue of `profile`. Returns a
+  `ContourGrid` (new exported type) that destructures iminuit-style
+  (`xs, ys, F = contour_grid(...)`, `F[i,j] = FCN(xs[i], ys[j])`) and has a
+  filled-contour plot recipe with a marker at the minimum. The docstring spells
+  out the statistics: a slice's Δχ² level curves are **conditional** regions —
+  smaller than the true profile-likelihood region by ≈ `√(1−R²)` per axis when
+  the pair correlates with the remaining free parameters — so it is a
+  *landscape* tool; confidence regions come from `mncontour`. Numeric `bound`
+  ranges are clipped to parameter limits; fixed parameters are rejected.
 
 ### Changed
 
@@ -74,12 +92,53 @@ bound the call count. The solver core (MIGRAD/HESSE/MINOS) is unchanged.
 - With `fvals = :none`/`:lazy`, the cluster **representative is the
   whitened-space medoid** (most central member) instead of the min-χ² member
   (which would require evaluating every sample).
+- **`mncontour` now traces joint confidence regions (iminuit ≥ 2.0 `cl`
+  semantics).** Previously it always traced the C++ MnContours curve
+  `FCN = fmin + up` (Δχ² = 1) and rejected `cl ≠ 1`. Now `cl` works like
+  iminuit's: default → the joint 2-D 68 % region (`Δχ² = delta_chisq(0.68, 2)
+  ≈ 2.28`); `0 < cl < 1` → that joint probability; `cl ≥ 1` → nσ (`cl = 2` →
+  joint 95.45 %, Δχ² ≈ 6.18). The scaling factors match iminuit 2.31's
+  `_cl_to_errordef` to 1e-10. Rationale (per F. James, *The Interpretation of
+  Errors*, §1.3.3, and SMEP 2nd ed. Table 9.1/§9.3.3 — excerpted in the
+  MINOS-contours tutorial): the Δχ²=1 curve's joint 2-D coverage is only
+  39.3 %; for a *simultaneous* statement James prescribes the χ²(NPAR)
+  quantile, which is exactly what `cl` now applies. **Migration:** the old
+  Δχ²=1 curve is `mncontour(m, a, b; cl = chisq_cl(1, 2))` (≈ 0.3935) or the
+  low-level `contour_exact` (`sigma = 1`, C++-identical); single-parameter
+  errors remain `minos!` (Δχ² = up, unchanged). `contour_exact` gains a
+  `sigma` kwarg (`fmin + up·sigma²`) so both conventions stay available.
+- **`draw_mncontour` takes `cl`** (scalar or vector; overlays one contour per
+  level, labelled by coverage) instead of the `nsigma=1`-only restriction;
+  `draw_mnmatrix` likewise accepts `cl`.
+- **`contour` → `contour_ellipse`** (both the `Minuit`-level and the low-level
+  `(fmin, cf)` methods). The old name was doubly wrong: it was NOT iminuit's
+  `contour` (that is a grid slice, now `contour_grid`), and exporting it made
+  the bare name ambiguous against `Plots.contour` / `GR.contour`
+  (`UndefVarError: contour not defined … ambiguity` under
+  `using JuMinuit, Plots`). The bare `contour` is **no longer exported**;
+  qualified `JuMinuit.contour(...)` keeps working as a deprecated alias of
+  `contour_ellipse`.
 
 ### Fixed
 
 - A `K = 0` clustering outcome no longer evaluates the FCN at all N samples
   for nothing (for a 0.5 s/call FCN and 800 samples that was ~7 minutes of
   wasted wall-time before an empty result).
+- **`draw_mncontour` and `draw_mnmatrix` now draw the exact MINOS contour**
+  (`mncontour` boundary search) as their names and docstrings always claimed.
+  Previously both silently rendered the fast covariance-ellipse approximation.
+  `draw_contour` now shows the iminuit-style `contour_grid` FCN landscape
+  (filled contour, minimum subtracted) instead of the ellipse.
+
+### Docs
+
+- The MINOS-contours tutorial gains a "Δχ², coverage, and the two contour
+  conventions" section with excerpts from F. James, *The Interpretation of
+  Errors* (Minuit doc, 2004, §1.3.2–1.3.3) and *Statistical Methods in
+  Experimental Physics* (2nd ed., Table 9.1, §9.3.3, p. 238): the Δχ²=1
+  curve = single-parameter MINOS errors via its projections (joint coverage
+  39.3 %); a joint region needs the χ²(NPAR) quantile (68 %: 1.00/2.30/3.53
+  for 1/2/3 parameters), which is what `mncontour`'s `cl` applies.
 
 ## [0.4.1] — 2026-06-09
 

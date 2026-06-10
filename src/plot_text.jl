@@ -10,7 +10,7 @@
 #
 # Use when there is no GUI backend (headless CI, SSH session, terminal):
 #
-#     julia> println(mn_plot_text(contour(fmin, cf, 1, 2; npoints=24)))
+#     julia> println(mn_plot_text(contour_ellipse(fmin, cf, 1, 2; npoints=24)))
 # ─────────────────────────────────────────────────────────────────────────────
 
 """

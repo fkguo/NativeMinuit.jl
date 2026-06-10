@@ -120,8 +120,11 @@ using Test
         pts = mncontour(m, 1, 2; numpoints = 8)
         @test length(pts) == 8
         @test all(p -> p isa Tuple{Float64,Float64}, pts)
-        # All points within ~1σ of (1, 2)
-        @test all(p -> abs(p[1] - 1.0) ≤ 1.5 && abs(p[2] - 2.0) ≤ 1.5, pts)
+        # Default cl → joint-2D 68 % region: radius √2.279·σ ≈ 1.51 (σ = 1
+        # for this uncorrelated quadratic; iminuit-parity semantics).
+        r = sqrt(JuMinuit.delta_chisq(0.68, 2))
+        @test all(p -> abs(p[1] - 1.0) ≤ r + 0.02 && abs(p[2] - 2.0) ≤ r + 0.02, pts)
+        @test maximum(abs(p[1] - 1.0) for p in pts) ≈ r atol = 0.02
     end
 
     @testset "profile = scan with bins default" begin
@@ -236,16 +239,38 @@ using Test
         @test chisq(model, d, [2.0, 1.0]; fitrange = 2:2:4) ≈ 0.0 atol = 1e-12
     end
 
-    @testset "mncontour size= and cl= aliases" begin
-        f = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
-        m = Minuit(f, [0.0, 0.0]; error = [0.1, 0.1])
+    @testset "mncontour size= / cl= (iminuit joint-coverage semantics)" begin
+        # f = x² + y² + xy — the case empirically cross-checked against
+        # iminuit 2.31: σ_x = √(4/3) ≈ 1.1547 and mncontour(default)
+        # max|x| = 1.743 ≈ σ_x·√2.27887.
+        f = x -> x[1]^2 + x[2]^2 + x[1] * x[2]
+        m = Minuit(f, [0.1, 0.1]; error = [0.1, 0.1])
         migrad(m)
+        σx = sqrt(4 / 3)
+        @test m.errors[1] ≈ σx rtol = 1e-3
+
+        # The Δχ² factors themselves must match iminuit's
+        # `_cl_to_errordef(cl, npar=2)` (values recorded from iminuit 2.31.3).
+        @test JuMinuit.delta_chisq(0.68, 2) ≈ 2.27886856637673 rtol = 1e-10
+        @test JuMinuit.delta_chisq(1, 2) ≈ 2.295748928898636 rtol = 1e-10
+        @test JuMinuit.delta_chisq(2, 2) ≈ 6.180074306244168 rtol = 1e-10
+
         # `size` is iminuit alias for `numpoints`
         pts1 = mncontour(m, 1, 2; numpoints = 8)
         pts2 = mncontour(m, 1, 2; size = 8)
         @test length(pts1) == length(pts2) == 8
-        # cl=1.0 is the only currently supported value (Phase 1.x deferred)
-        @test_throws ArgumentError mncontour(m, 1, 2; cl = 2.0)
+        # default cl → joint 68 %: the x-extreme is the kσ MINOS crossing
+        @test maximum(abs(p[1]) for p in pts1) ≈ σx * sqrt(2.27886856637673) rtol = 0.01
+        # cl ≥ 1 → nσ: cl=2 traces the joint 95.45 % region (Δχ² ≈ 6.18) —
+        # previously threw "Phase 1.x deferred"; now iminuit-parity.
+        pts2σ = mncontour(m, 1, 2; numpoints = 8, cl = 2.0)
+        @test maximum(abs(p[1]) for p in pts2σ) ≈ σx * sqrt(6.180074306244168) rtol = 0.01
+        # The C++ Δχ²=up curve is recoverable: cl = chisq_cl(1, 2) ≈ 0.3935
+        # → max|x| = σ_x (the MINOS ±1σ crossing).
+        pts_cpp = mncontour(m, 1, 2; numpoints = 8, cl = JuMinuit.chisq_cl(1.0, 2))
+        @test maximum(abs(p[1]) for p in pts_cpp) ≈ σx rtol = 0.01
+        # invalid cl rejected
+        @test_throws ArgumentError mncontour(m, 1, 2; cl = -0.5)
     end
 
     @testset "simplex(m) ncall alias" begin
