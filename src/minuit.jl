@@ -907,21 +907,47 @@ end
 
 # Build a fresh `Parameters` with values carried forward from a given
 # `BoundedFunctionMinimum`. The user-original m.params is NOT mutated.
-# Errors are taken as `max(bfm.ext_errors[i], p_old.error)` — the
-# post-MIGRAD ext_error is usually a tighter estimate, but near a
-# sin/sqrt bound the C++ Int2extError formula can collapse to a value
-# far smaller than the natural scale, which would seed the next MIGRAD
-# with steps below the numerical-gradient threshold. The `max` floor
-# with the original step protects against this regression (review
-# BLOCKING #1). The two-arg form is used by the migrad! retry loop to
-# build the seed for each successive pass without first stowing the
-# intermediate BFM in `m.fmin`. The one-arg form is the implicit-resume
-# entrypoint used at the top of `migrad!`.
-function _build_resume_params(m::Minuit, bfm::BoundedFunctionMinimum)
+# Error semantics are mode-dependent:
+# - `floor_errors = true` (default; migrad! pass-1 resume, retry loop,
+#   use_simplex probe): errors = `max(bfm.ext_errors[i], p_old.error)`
+#   — the post-MIGRAD ext_error is usually a tighter estimate, but near
+#   a sin/sqrt bound the C++ Int2extError formula can collapse to a
+#   value far smaller than the natural scale, which would seed the next
+#   MIGRAD with steps below the numerical-gradient threshold. The `max`
+#   floor with the original step protects against this regression
+#   (review BLOCKING #1).
+# - `floor_errors = false` (repeat `simplex(m)` resume): carry positive
+#   finite fit errors AS-IS — iminuit's repeat m.simplex() seeds from
+#   the current state errors even when they SHRANK below the
+#   constructor steps (round-3 review counterexample: error=1.0 bowl
+#   needs the un-floored 0.25 to reproduce iminuit's [0.5, 0.5]).
+#   Degenerate fit errors (0/negative/non-finite) fall back to the
+#   prior step.
+# The two-arg form is used by the migrad! retry loop to build the seed
+# for each successive pass without first stowing the intermediate BFM
+# in `m.fmin`. The one-arg form is the implicit-resume entrypoint used
+# at the top of `migrad!` and in `simplex(m::Minuit)`.
+function _build_resume_params(m::Minuit, bfm::BoundedFunctionMinimum;
+                               floor_errors::Bool = true)
     new_pars = Vector{MinuitParameter}(undef, n_pars(m.params))
     @inbounds for i in 1:n_pars(m.params)
         p_old = m.params.pars[i]
-        new_err = max(bfm.ext_errors[i], p_old.error)
+        e_fit = bfm.ext_errors[i]
+        # `floor_errors = true` (migrad! retry loop): never resume with a
+        # step smaller than the user's original — the historical retry
+        # heuristic. `floor_errors = false` (repeat `simplex(m)`): carry
+        # the fit error AS-IS like iminuit, whose repeat m.simplex()
+        # seeds from the current state errors even when they SHRANK
+        # below the constructor steps (verified 2.31.3: error=1.0 warm
+        # bowl → 1st run errors [1.0, 0.25], 2nd run must seed 0.25 not
+        # 1.0 to land on iminuit's [0.5, 0.5]). Degenerate fit errors
+        # (0/negative/non-finite, e.g. after an all-NaN run) fall back
+        # to the prior step so the resume stays usable.
+        new_err = if floor_errors
+            max(e_fit, p_old.error)
+        else
+            (isfinite(e_fit) && e_fit > 0) ? e_fit : p_old.error
+        end
         new_pars[i] = MinuitParameter(p_old.name,
                                        bfm.ext_values[i],
                                        new_err;
@@ -932,7 +958,7 @@ function _build_resume_params(m::Minuit, bfm::BoundedFunctionMinimum)
     return Parameters(new_pars, m.prec)
 end
 
-_build_resume_params(m::Minuit) = _build_resume_params(m, m.fmin)
+_build_resume_params(m::Minuit; kwargs...) = _build_resume_params(m, m.fmin; kwargs...)
 
 """
     minos!(m::Minuit, par; kwargs...) -> Minuit

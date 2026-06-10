@@ -160,3 +160,23 @@ nonfinite_calls(cf::CostFunction) = cf.n_nonfinite[]
 Return the error definition (`up`) — `1.0` for χ², `0.5` for NLL.
 """
 errordef(cf::CostFunction) = cf.up
+
+"""
+    _effective_maxfcn(maxfcn, n) -> Int
+
+Resolve the user-facing `maxfcn` kwarg to the effective per-application
+FCN budget. Mirrors C++ `ModularFunctionMinimizer.cxx:53-54`:
+`if (maxfcn == 0) maxfcn = 200 + 100·npar + 5·npar²` — `0` (like
+`nothing`) is the shared "use the default budget" sentinel for ALL
+minimizers (iminuit: `m.simplex(ncall=0)` / `m.migrad(ncall=0)` run the
+default budget; a NEGATIVE ncall raises in pybind's unsigned-int
+conversion, mirrored here as an `ArgumentError`).
+"""
+function _effective_maxfcn(maxfcn::Union{Integer,Nothing}, n::Integer)
+    if maxfcn !== nothing && Int(maxfcn) < 0
+        throw(ArgumentError(
+            "maxfcn must be ≥ 0 (0 = default-budget sentinel), got $maxfcn"))
+    end
+    return (maxfcn === nothing || Int(maxfcn) == 0) ?
+           (200 + 100 * Int(n) + 5 * Int(n)^2) : Int(maxfcn)
+end

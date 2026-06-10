@@ -397,7 +397,7 @@ function migrad(
     warn_nonfinite::Bool = true,
 )
     n = length(x0)
-    maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+    maxfcn_eff = _effective_maxfcn(maxfcn, n)
 
     # P6: baseline BEFORE the seed bootstrap so a non-finite f(x0) at
     # call #1 is included in the run's non-finite tally.
@@ -453,7 +453,7 @@ function migrad(
     print_level::Integer = 0,
 )
     n = length(seed)
-    maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+    maxfcn_eff = _effective_maxfcn(maxfcn, n)
     # verify_threading default false here: warm-restart `migrad(cf, seed)`
     # is called from inner cross-search probes where outer migrad has
     # already verified. The 2-evaluation cost would multiply by probe

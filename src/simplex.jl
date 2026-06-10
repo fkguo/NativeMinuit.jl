@@ -147,8 +147,15 @@ function simplex(
     # call #1 is included in the run's non-finite tally (mirrors
     # `nonfinite_baseline` in `_migrad_loop`).
     nf_base = nonfinite_calls(cf)
+    # Budget is RUN-LOCAL: C++ constructs a fresh `MnFcn` (the call
+    # counter) per `MnApplication::operator()`, so `maxfcn` always means
+    # "calls in THIS application". A reused `CostFunction` must not
+    # inherit earlier runs' calls into this run's budget — snapshot the
+    # baseline and compare deltas everywhere (pre-builder gate, loop
+    # guard, post-`ybar` verdict, and the nfcn stored in the states).
+    ncall_base = ncalls(cf)
 
-    maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+    maxfcn_eff = _effective_maxfcn(maxfcn, n)
     # C++ Simplex EDM goal = effective_toler = toler·Up() with the canonical
     # toler = 0.1: ModularFunctionMinimizer::Minimize scales the tolerance by
     # Up() for ALL builders (ModularFunctionMinimizer.cxx:175). The extra
@@ -188,6 +195,36 @@ function simplex(
     pts = Vector{Tuple{Float64,Vector{Float64}}}(undef, n + 1)
     pts[1] = (f_seed, copy(x))
 
+    # C++ `ModularFunctionMinimizer::Minimize` (ModularFunctionMinimizer
+    # .cxx:78-85) bails out BETWEEN seed generation and the builder when
+    # the seed evaluation already exhausted the budget (`NumOfCalls() >=
+    # maxfcn` ⇒ MnReachedCallLimit): iminuit's `m.simplex(ncall=1)`
+    # returns after exactly the one seed call and never builds the
+    # initial simplex. Observables mirrored from the C++ simplex seed
+    # state: fval = f(x0); per-param dirin = the input steps; edm = n·up
+    # — the InitialGradientCalculator seed has g2 = 2·up/dirin² and
+    # V = diag(1/g2), so its EDM estimate Σ g2·dirin²/2 collapses to
+    # n·up identically (iminuit 2.31.3 empirical: edm=2.0 at n=2, up=1).
+    if ncalls(cf) - ncall_base >= maxfcn_eff
+        dirin_bail = Float64[abs(Float64(errs[i])) for i in 1:n]
+        par_bail = MinimumParameters(copy(x), dirin_bail, f_seed)
+        err_bail = MinimumError(Symmetric(Matrix{Float64}(I, n, n), :U),
+                                 1.0, MnHesseFailed, false)
+        grad_bail = FunctionGradient(zeros(n), zeros(n), zeros(n))
+        st_bail = MinimumState(par_bail, err_bail, grad_bail,
+                                n * cf.up, ncalls(cf) - ncall_base)
+        fm_bail = FunctionMinimum(st_bail, st_bail, cf.up;
+                                   is_valid = false,
+                                   reached_call_limit = true,
+                                   above_max_edm = false,
+                                   hesse_failed = false,
+                                   made_pos_def = false,
+                                   nonfinite_fval = !isfinite(f_seed),
+                                   n_nonfinite_calls = nonfinite_calls(cf) - nf_base)
+        warn_nonfinite && _warn_nonfinite_fcn(fm_bail; minimizer = "SIMPLEX")
+        return fm_bail
+    end
+
     jl = 1
     jh = 1
     amin = f_seed
@@ -224,19 +261,37 @@ function simplex(
     fcn_limit = false
     above_max_edm = false
 
+    # C++ `SimplexBuilder.cxx:99/196` is a do-while: the FIRST
+    # Nelder-Mead round runs unconditionally, and `(Edm() > minedm ||
+    # edmPrev > minedm) && NumOfCalls() < maxfcn` is evaluated only at
+    # the BOTTOM of each round (a C++ `continue` jumps to that bottom
+    # check, exactly like `continue` here jumps back to this top guard —
+    # so exempting round 1 makes the two forms identical). Without the
+    # exemption, a seed whose INITIAL simplex already satisfies
+    # edm ≤ minedm (warm start) — or whose edm is NaN (all-non-finite
+    # FCN; IEEE `>` is false) — skips the body entirely and drifts from
+    # C++/iminuit by the 2-3 FCN calls of that mandatory first round
+    # (iminuit 2.31.3: warm quadratic nfcn=6 vs 4, all-NaN nfcn=7 vs 4).
+    first_round = true
     while true
-        if !(edm(sp) > minedm_eff || edm_prev > minedm_eff)
-            break
+        if !first_round
+            if !(edm(sp) > minedm_eff || edm_prev > minedm_eff)
+                break
+            end
+            if ncalls(cf) - ncall_base >= maxfcn_eff
+                fcn_limit = true
+                break
+            end
         end
-        if ncalls(cf) >= maxfcn_eff
-            fcn_limit = true
-            break
-        end
+        first_round = false
 
         jl = sp.jl
         jh = sp.jh
         amin = sp.pts[jl][1]
         edm_prev = edm(sp)
+        # C++ `niterations++` fires at the top of every ATTEMPTED round
+        # (SimplexBuilder.cxx:118), not only on update paths.
+        n_iter += 1
 
         # pbar = centroid of all vertices EXCEPT jh
         fill!(pbar, 0.0)
@@ -258,7 +313,6 @@ function simplex(
             if ystar < sp.pts[jh][1]
                 update!(sp, ystar, pstar)
                 if jh != sp.jh
-                    n_iter += 1
                     continue
                 end
             end
@@ -271,7 +325,6 @@ function simplex(
                 break  # contraction failed — simplex collapsed
             end
             update!(sp, ystst, pstst)
-            n_iter += 1
             continue
         end
 
@@ -291,7 +344,6 @@ function simplex(
             else
                 update!(sp, ystar, pstar)
             end
-            n_iter += 1
             continue
         end
         ρ > ρmax && (ρ = ρmax)
@@ -303,12 +355,10 @@ function simplex(
 
         if yrho < sp.pts[jl][1] && yrho < ystst
             update!(sp, yrho, prho)
-            n_iter += 1
             continue
         end
         if ystst < sp.pts[jl][1]
             update!(sp, ystst, pstst)
-            n_iter += 1
             continue
         end
         if yrho > sp.pts[jl][1]
@@ -317,7 +367,6 @@ function simplex(
             else
                 update!(sp, ystar, pstar)
             end
-            n_iter += 1
             continue
         end
         if ystar > sp.pts[jh][1]
@@ -330,12 +379,11 @@ function simplex(
             end
             update!(sp, ystst, pstst)
         end
-        n_iter += 1
     end
 
     # ── Final centroid + scaled errors ───────────────────────────────
     # NB: `above_max_edm` is evaluated AFTER the post-loop centroid swap
-    # (line below) — matches `SimplexBuilder.cxx:217` where the EDM check
+    # (line below) — matches `SimplexBuilder.cxx:235` where the EDM check
     # uses the final-state simplex. v1 snapshotted it BEFORE the swap,
     # which could mismatch when the final centroid lowers `jl` enough
     # to flip the edm-vs-minedm threshold (review IMPORTANT #6).
@@ -362,15 +410,29 @@ function simplex(
 
     final_dirin = dirin(sp)
     edm_final = edm(sp)
+    # C++ `SimplexBuilder.cxx:229-237` decides the verdict AFTER the
+    # final-centroid evaluation, budget first: `NumOfCalls() > maxfcn`
+    # (strict — the `ybar` call above counts) ⇒ MnReachedCallLimit even
+    # when the loop exited edm-converged; only otherwise can
+    # `Edm() > minedm` ⇒ MnAboveMaxEdm. Recompute the flag here from the
+    # post-`ybar` call count instead of trusting the in-loop exit reason
+    # (the in-loop `fcn_limit` remains as loop-exit control only).
+    fcn_limit = ncalls(cf) - ncall_base > maxfcn_eff
     above_max_edm = (edm_final > minedm_eff) && !fcn_limit
     # Per-param errors ≈ dirin · √(up/edm). The dirin is the simplex
     # extent; scaling by √(up/edm) projects onto the local-curvature
-    # estimate. Mirrors SimplexBuilder.cxx:200-201.
-    if edm_final > 0.0
-        scale = sqrt(cf.up / edm_final)
-        @inbounds for i in 1:n
-            final_dirin[i] *= scale
-        end
+    # estimate. C++ `SimplexBuilder.cxx:218` applies it UNCONDITIONALLY:
+    # edm = 0 (e.g. constant FCN) ⇒ errors +Inf; edm = NaN (all-non-
+    # finite FCN) ⇒ errors NaN — both verified against iminuit 2.31.3
+    # (errors [inf, inf] / [nan, nan] respectively). A `edm > 0` guard
+    # here silently produced finite seed-scale errors on exactly those
+    # degenerate paths. Julia-only wrinkle: `sqrt` THROWS on negative
+    # arguments where C++ returns a quiet NaN, so map a negative ratio
+    # (pathological Up or edm) to NaN explicitly.
+    ratio = cf.up / edm_final
+    scale = ratio < 0.0 ? NaN : sqrt(ratio)
+    @inbounds for i in 1:n
+        final_dirin[i] *= scale
     end
 
     # ── Build FunctionMinimum from the final state ───────────────────
@@ -385,7 +447,7 @@ function simplex(
                               1.0, MnHesseFailed, false)
     grad_state = FunctionGradient(zeros(n), zeros(n), zeros(n))
     state = MinimumState(par_state, err_state, grad_state, edm_final,
-                          ncalls(cf))
+                          ncalls(cf) - ncall_base)
 
     seed_state_obj = state   # simplex doesn't track a separate seed
     # P6: a non-finite incumbent fval can NEVER be a valid minimum — and

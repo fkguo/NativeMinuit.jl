@@ -398,7 +398,19 @@ function simplex(m::Minuit;
                   ncall::Union{Integer,Nothing} = nothing,
                   minedm::Union{Real,Nothing} = nothing)
     eff = ncall !== nothing ? ncall : maxfcn
-    m.fmin = simplex(m.fcn, m.params;
+    # iminuit-style implicit resume (same idiom as `migrad!`): a repeat
+    # `m.simplex()` starts from the CURRENT state — previous fit values
+    # AND its updated per-parameter errors — not from the constructor
+    # parameters. iminuit 2.31.3 empirical (warm bowl, errors=0.1): the
+    # 2nd `simplex(ncall=6)` resumes with the fit-scale errors
+    # [0.970…, 0.485…], burns 8 calls, and ends call-limit invalid.
+    # `floor_errors = false`: iminuit carries the fit errors AS-IS, even
+    # when they shrank below the constructor steps (error=1.0 bowl:
+    # 2nd-run seed must use 0.25, not max(0.25, 1.0) — that's what lands
+    # on iminuit's final [0.5, 0.5]).
+    params_to_use = m.fmin === nothing ? m.params :
+                    _build_resume_params(m; floor_errors = false)
+    m.fmin = simplex(m.fcn, params_to_use;
                       maxfcn = eff, minedm = minedm,
                       prec = m.prec)
     return m

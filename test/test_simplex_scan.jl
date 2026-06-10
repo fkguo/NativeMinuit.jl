@@ -214,4 +214,188 @@ using Test
         @test m.valid
     end
 
+    @testset "do-while first-round fidelity (iminuit 2.31.3 nfcn parity)" begin
+        # C++ SimplexBuilder is a do-while: the first Nelder-Mead round
+        # runs unconditionally, even when the INITIAL simplex already
+        # satisfies edm ≤ minedm (warm start) or has edm = NaN (the
+        # all-NaN pin lives in test_nonfinite_fcn.jl). All nfcn / fval
+        # pins are empirical iminuit 2.31.3 values (same FCN, seed,
+        # errors=0.1, m.simplex() at default budget/tolerance). fvals
+        # are pinned bit-exactly — these FCNs use only +/−/*, so the
+        # doubles are platform-deterministic.
+        clean = x -> (x[1] - 1.0)^2 + 4.0 * (x[2] - 2.0)^2
+
+        # Warm seed AT the minimum: initial edm ≈ 0.044 < minedm = 0.1·up
+        # ⇒ pre-fix the loop body never ran (nfcn=4 vs iminuit's 6).
+        m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+        simplex(m)
+        @test m.nfcn == 6
+        @test m.fval === 0.0
+        @test m.valid
+
+        # Cold start: the entry guard passes anyway — the path must stay
+        # EXACTLY as before the do-while fix (bit-identical to iminuit).
+        m = Minuit(clean, [0.0, 0.0]; error = 0.1)
+        simplex(m)
+        @test m.nfcn == 21
+        @test reinterpret(UInt64, m.fval) == 0x3f754d1eb851eb0a # 0.005200500488281143
+        @test m.valid
+
+        # NaN wall blocking the minimum: cold path unchanged (422 calls,
+        # bit-identical finite incumbent), verdict call-limit-invalid —
+        # and the non-finite returns trigger the single end-of-run warn.
+        wallf = x -> x[1] > 0.5 ? NaN : (x[1] - 1.0)^2 + x[2]^2
+        m = Minuit(wallf, [0.0, 0.0]; error = 0.1)
+        @test_logs (:warn, r"non-finite") simplex(m)
+        @test m.nfcn == 422
+        @test reinterpret(UInt64, m.fval) == 0x3fd7147ae147ae14 # 0.360625
+        @test !m.valid
+        @test m.fmin.internal.reached_call_limit
+        @test !m.fmin.internal.nonfinite_fval
+    end
+
+    @testset "pre-builder budget gate (ModularFunctionMinimizer.cxx:78-85)" begin
+        # iminuit 2.31.3: m.simplex(ncall=1) bails right after the one
+        # seed call — nfcn=1, fval=f(x0), call-limit invalid, errors =
+        # the input steps, edm = n·up (InitialGradientCalculator seed:
+        # g2 = 2·up/dirin² with V = diag(1/g2) ⇒ EDM ≡ n·up).
+        clean = x -> (x[1] - 1.0)^2 + 4.0 * (x[2] - 2.0)^2
+        m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+        simplex(m; ncall = 1)
+        @test m.nfcn == 1
+        @test m.fval === 0.0
+        @test !m.valid
+        @test m.fmin.internal.reached_call_limit
+        @test m.fmin.internal.state.edm === 2.0
+        @test all(isapprox.(collect(m.errors), 0.1; rtol = 1e-12))
+
+        # Mid-round exhaustion: the builder never aborts inside a round —
+        # ncall=2..5 all finish the mandatory round + final centroid
+        # (nfcn=6, call-limit invalid); ncall=6 is exactly enough
+        # (strict post-ybar `>` ⇒ valid). iminuit-verified boundary.
+        for nc in (2, 5)
+            m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+            simplex(m; ncall = nc)
+            @test m.nfcn == 6
+            @test !m.valid
+            @test m.fmin.internal.reached_call_limit
+        end
+        m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+        simplex(m; ncall = 6)
+        @test m.nfcn == 6
+        @test m.valid
+    end
+
+    @testset "degenerate-edm error scaling is unconditional (SimplexBuilder.cxx:218)" begin
+        # C++ scales dirin by √(up/edm) with NO edm guard: a constant
+        # FCN (edm = 0) must report errors = +Inf — iminuit 2.31.3:
+        # valid=True, edm=0.0, errors=[inf, inf], nfcn=7 (the mandatory
+        # first round runs even though edm starts at 0). The pre-fix
+        # `edm > 0` guard silently kept finite seed-scale errors here.
+        m = Minuit(x -> 3.5, [0.0, 0.0]; error = 0.1)
+        simplex(m)
+        @test m.nfcn == 7
+        @test m.valid
+        @test m.fval === 3.5
+        @test m.fmin.internal.state.edm === 0.0
+        @test all(==(Inf), collect(m.errors))
+
+        # Healthy fits: errors match iminuit to 12 digits (warm bowl,
+        # same config as the nfcn=6 pin above).
+        clean = x -> (x[1] - 1.0)^2 + 4.0 * (x[2] - 2.0)^2
+        m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+        simplex(m)
+        @test isapprox(m.errors[1], 0.9701425001453362; rtol = 1e-12)
+        @test isapprox(m.errors[2], 0.48507125007266594; rtol = 1e-12)
+    end
+
+    @testset "repeated simplex(m): iminuit-style resume + run-local budget" begin
+        # iminuit 2.31.3: a repeat m.simplex() resumes from the CURRENT
+        # state — fit values AND the updated per-parameter errors — not
+        # the constructor parameters. Warm bowl, errors=0.1:
+        #   1st simplex(ncall=6): 6 calls, valid;
+        #   2nd simplex(ncall=6): resumes with fit-scale errors, burns 8
+        #     calls, call-limit invalid (iminuit displays the CUMULATIVE
+        #     nfcn 14 = 6+8; JuMinuit reports the per-run 8 — display
+        #     convention only, the per-run call count is identical), and
+        #     errors land 12-digit-identical to iminuit;
+        #   repeat at default budget: 16 calls, valid.
+        clean = x -> (x[1] - 1.0)^2 + 4.0 * (x[2] - 2.0)^2
+        m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+        simplex(m; ncall = 6)
+        @test m.nfcn == 6
+        @test m.valid
+        simplex(m; ncall = 6)
+        @test m.nfcn == 8
+        @test !m.valid
+        @test m.fmin.internal.reached_call_limit
+        @test isapprox(m.errors[1], 0.8944271909999166; rtol = 1e-12)
+        @test isapprox(m.errors[2], 0.5031152949374517; rtol = 1e-12)
+
+        m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+        simplex(m)
+        simplex(m)
+        @test m.nfcn == 16
+        @test m.valid
+        @test isapprox(m.errors[1], 0.7359621520214286; rtol = 1e-12)
+        @test isapprox(m.errors[2], 0.3715887336186622; rtol = 1e-12)
+
+        # Run-local budget at the LOW level: a reused CostFunction's
+        # second run gets a fresh per-application budget (C++ constructs
+        # `MnFcn` per `MnApplication::operator()`) instead of
+        # insta-bailing on the lifetime counter; states carry the
+        # per-run nfcn.
+        cf = CostFunction(clean, 1.0)
+        fm1 = simplex(cf, [1.0, 2.0], [0.1, 0.1]; warn_nonfinite = false)
+        fm2 = simplex(cf, [1.0, 2.0], [0.1, 0.1]; warn_nonfinite = false)
+        @test fm1.is_valid
+        @test fm2.is_valid
+        @test fm1.state.nfcn == 6
+        @test fm2.state.nfcn == 6
+        @test !fm2.reached_call_limit
+
+        # Resume carries SHRUNKEN fit errors as-is (no max() floor) —
+        # iminuit 2.31.3, error=1.0 bowl: 1st run ends errors=[1.0,
+        # 0.25]; the 2nd MUST seed 0.25 (not max(0.25, 1.0)) to land on
+        # iminuit's final errors [0.5, 0.5] with the same 8 calls.
+        m = Minuit(clean, [1.0, 2.0]; error = 1.0)
+        simplex(m; ncall = 6)
+        @test m.nfcn == 8
+        @test !m.valid
+        @test isapprox(m.errors[1], 1.0;  rtol = 1e-12)
+        @test isapprox(m.errors[2], 0.25; rtol = 1e-12)
+        simplex(m; ncall = 6)
+        @test m.nfcn == 8
+        @test !m.valid
+        @test m.fmin.internal.reached_call_limit
+        @test isapprox(m.errors[1], 0.5; rtol = 1e-12)
+        @test isapprox(m.errors[2], 0.5; rtol = 1e-12)
+    end
+
+    @testset "maxfcn=0 is the C++ default-budget sentinel; negative throws" begin
+        # C++ ModularFunctionMinimizer.cxx:53-54: `if (maxfcn == 0)
+        # maxfcn = 200 + 100·npar + 5·npar²` — shared by ALL minimizers.
+        # iminuit: m.simplex(ncall=0) runs the default budget (warm bowl
+        # → nfcn=6, valid); a negative ncall raises (pybind unsigned
+        # conversion) → ArgumentError here.
+        clean = x -> (x[1] - 1.0)^2 + 4.0 * (x[2] - 2.0)^2
+        m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+        simplex(m; ncall = 0)
+        @test m.nfcn == 6
+        @test m.valid
+        m = Minuit(clean, [1.0, 2.0]; error = 0.1)
+        @test_throws ArgumentError simplex(m; ncall = -5)
+
+        # Same sentinel through the MIGRAD entries (shared
+        # _effective_maxfcn helper): maxfcn=0 ≡ default budget.
+        rosen = x -> (1.0 - x[1])^2 + 100.0 * (x[2] - x[1]^2)^2
+        ma = Minuit(rosen, [-1.2, 1.0]; error = 0.1)
+        migrad!(ma)
+        mb = Minuit(rosen, [-1.2, 1.0]; error = 0.1)
+        migrad!(mb; maxfcn = 0)
+        @test mb.valid
+        @test mb.nfcn == ma.nfcn
+        @test mb.fval === ma.fval
+    end
+
 end

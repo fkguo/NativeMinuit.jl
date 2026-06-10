@@ -284,6 +284,13 @@ end
         @test isnan(m.fval)
         @test m.fmin.internal.nonfinite_fval
         @test m.fmin.internal.n_nonfinite_calls > 0
+        # iminuit 2.31.3 parity on the degenerate path: 3 setup calls +
+        # the mandatory do-while first round (reflect + expand + ρ-step,
+        # all NaN ⇒ every branch comparison false, no update) + the
+        # post-loop centroid = 7 calls exactly. Errors are NaN like
+        # iminuit (unconditional √(up/edm) scaling with edm = NaN).
+        @test m.nfcn == 7
+        @test all(isnan, collect(m.errors))
     end
 
     @testset "SIMPLEX NaN wall: finite incumbent kept, counted, invalid" begin

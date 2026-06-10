@@ -500,7 +500,7 @@ function migrad(
     warn_nonfinite::Bool = true,
 )
     n = length(x0)
-    maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+    maxfcn_eff = _effective_maxfcn(maxfcn, n)
 
     # P6: baseline BEFORE the seed bootstrap so a non-finite f(x0) at
     # call #1 is included in the run's non-finite tally.
@@ -555,7 +555,7 @@ function migrad(
     print_level::Integer = 0,
 )
     n = length(seed)
-    maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+    maxfcn_eff = _effective_maxfcn(maxfcn, n)
     return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
