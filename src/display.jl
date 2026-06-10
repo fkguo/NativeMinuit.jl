@@ -408,13 +408,18 @@ function _validity_checks(m::Minuit)
     internal = bfm.internal
     cov_ok = m.accurate && !internal.made_pos_def && !internal.hesse_failed
     atlimit_ok = isempty(_at_limit_indices(m))
-    return [
+    checks = [
         (label = "Valid minimum",       status = m.is_valid ? :ok : :bad),
         (label = "EDM below goal",      status = internal.above_max_edm ? :warn : :ok),
         (label = "Below call limit",    status = internal.reached_call_limit ? :bad : :ok),
         (label = "Covariance accurate", status = cov_ok ? :ok : :warn),
         (label = "No params at limit",  status = atlimit_ok ? :ok : :warn),
     ]
+    # P6: only surfaced when it fired — a NaN/Inf incumbent fval is the
+    # explicit reason the minimum is invalid (handoff F7).
+    internal.nonfinite_fval &&
+        insert!(checks, 2, (label = "FCN value finite", status = :bad))
+    return checks
 end
 
 _check_glyph(s::Symbol) = s === :ok ? "✓" : s === :warn ? "⚠" : "✗"

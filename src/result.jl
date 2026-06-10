@@ -30,6 +30,21 @@ Status flags (mirror C++ `FunctionMinimum`):
 - `hesse_failed` — Hesse refinement (Phase 1) failed.
 - `made_pos_def` — MnPosDef perturbed the error matrix.
 
+P6 non-finite-FCN diagnostics (JuMinuit additions; C++ FunctionMinimum
+carries no analogue, but the observable verdict matches iminuit —
+a NaN incumbent there also surfaces as `valid=False`):
+
+- `nonfinite_fval` — the final `fval` is non-finite (`NaN`/`±Inf`).
+  Always implies `is_valid == false`; this flag records the explicit
+  reason. A non-finite fval can only become the incumbent when the FCN
+  is non-finite at the very first evaluation (seed) or when a `-Inf`
+  trial legitimately wins the IEEE comparisons — mid-run NaN/`+Inf`
+  trials can never displace a finite incumbent.
+- `n_nonfinite_calls` — how many FCN evaluations during this MIGRAD run
+  returned a non-finite value (0 for a healthy fit). Non-zero with a
+  finite `fval` means the minimizer brushed an undefined region but the
+  incumbent stayed finite.
+
 M6 (GAP_AUDIT) — per-iteration history:
 
 - `states::Vector{MinimumState}` — per-iteration snapshots when MIGRAD
@@ -48,6 +63,9 @@ struct FunctionMinimum
     above_max_edm::Bool
     hesse_failed::Bool
     made_pos_def::Bool
+    # P6: non-finite-FCN diagnostics (see docstring).
+    nonfinite_fval::Bool
+    n_nonfinite_calls::Int
     # M6: per-iteration MIGRAD history, populated when `_migrad_loop`
     # was invoked with `storage_level >= 1`. Each entry is a
     # deep-copied snapshot of `s0` at the end of one DFP iteration
@@ -64,11 +82,14 @@ function FunctionMinimum(state::MinimumState, seed::MinimumState, up::Real;
                           above_max_edm::Bool = false,
                           hesse_failed::Bool = false,
                           made_pos_def::Bool = false,
+                          nonfinite_fval::Bool = false,
+                          n_nonfinite_calls::Integer = 0,
                           states::Vector{MinimumState} = MinimumState[],
                           storage_level::Integer = 0)
     FunctionMinimum(state, seed, Float64(up),
                     is_valid, reached_call_limit, above_max_edm,
                     hesse_failed, made_pos_def,
+                    nonfinite_fval, Int(n_nonfinite_calls),
                     states, Int(storage_level))
 end
 
@@ -92,6 +113,8 @@ reached_call_limit(m::FunctionMinimum) = m.reached_call_limit
 above_max_edm(m::FunctionMinimum) = m.above_max_edm
 hesse_failed(m::FunctionMinimum) = m.hesse_failed
 made_pos_def(m::FunctionMinimum) = m.made_pos_def
+nonfinite_fval(m::FunctionMinimum) = m.nonfinite_fval
+n_nonfinite_calls(m::FunctionMinimum) = m.n_nonfinite_calls
 
 """
     covariance(m::FunctionMinimum) -> Symmetric{Float64,Matrix{Float64}}
@@ -151,7 +174,8 @@ function _show_minimum_box(io::IO, m::FunctionMinimum)
 
     # Status row 1
     println(io, "├", "─"^35, "┼", "─"^35, "┤")
-    valid_str = m.is_valid ? "Valid Minimum" : "INVALID Minimum"
+    valid_str = m.is_valid ? "Valid Minimum" :
+                m.nonfinite_fval ? "INVALID (fval non-finite)" : "INVALID Minimum"
     edm_status = m.above_max_edm ? "EDM ABOVE threshold (x 10)" :
                                      "Below EDM threshold (goal x 10)"
     println(io, "│", _center(valid_str, 35), "│", _center(edm_status, 35), "│")

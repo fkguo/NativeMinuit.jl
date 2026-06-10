@@ -356,6 +356,15 @@ the inner-HESSE refinement). Default `maxfcn` matches C++ `MnApplication.cxx:43`
 - `reached_call_limit=true` if `nfcn ≥ maxfcn` before convergence.
 - `above_max_edm=true` if final EDM > 10·(tol·0.002).
 - `made_pos_def=true` if MnPosDef perturbed the matrix at any point.
+- `nonfinite_fval=true` (⇒ `is_valid=false`) if the final fval is
+  NaN/±Inf; `n_nonfinite_calls` counts FCN evaluations that returned a
+  non-finite value during the run. If any occurred AND the fit did not
+  end valid, a single `@warn` is emitted at the end (suppress with
+  `warn_nonfinite=false`; valid fits never warn). iminuit parity: NaN
+  FCN values pass through to the minimizer unchanged (iminuit's
+  `throw_nan=False` default); non-finite trials lose every IEEE `<`
+  comparison against a finite incumbent, so they are rejected exactly
+  as in C++ Minuit2.
 
 # Thread safety
 
@@ -385,21 +394,29 @@ function migrad(
     storage_level::Integer = 0,
     has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
+    warn_nonfinite::Bool = true,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+
+    # P6: baseline BEFORE the seed bootstrap so a non-finite f(x0) at
+    # call #1 is included in the run's non-finite tally.
+    nf_base = nonfinite_calls(cf)
 
     # M5: optional `prior_cov` overrides the diagonal-from-g2 seed
     # inv_hessian (and sets `dcovar = 0`). Mirrors C++
     # MnSeedGenerator.cxx:63-67 `state.HasCovariance()` branch.
     seed = seed_state(cf, x0, errs, strategy, prec; prior_cov = prior_cov)
-    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
+    fm = _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
                           verify_threading = verify_threading,
                           storage_level = storage_level,
                           has_limits = has_limits,
-                          print_level = print_level)
+                          print_level = print_level,
+                          nonfinite_baseline = nf_base)
+    warn_nonfinite && _warn_nonfinite_fcn(fm)
+    return fm
 end
 
 """
@@ -511,6 +528,14 @@ allocates its own buffers — bit-for-bit identical to the pre-Phase-D
 behavior. When supplied, scratch dimension MUST match `length(seed)`
 or the call falls back to local allocation (defensive — should not
 happen if the caller uses [`_get_scratch!`](@ref) correctly).
+
+`nonfinite_baseline` (P6): value of `nonfinite_calls(cf)` at the start
+of the RUN this loop belongs to. The public `migrad(cf, x0, errs)`
+entries snapshot it before `seed_state` so seed-time non-finite returns
+are attributed to the run; when `nothing` (direct/warm-restart callers)
+the loop snapshots at its own entry. The delta is stored on the
+returned `FunctionMinimum.n_nonfinite_calls`; the loop itself never
+warns (MINOS/contour probes re-enter here hundreds of times).
 """
 function _migrad_loop(
     seed::MinimumState,
@@ -525,8 +550,11 @@ function _migrad_loop(
     storage_level::Integer = 0,
     has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
+    nonfinite_baseline::Union{Nothing,Int} = nothing,
 )
     n = length(seed)
+    nf_base = nonfinite_baseline === nothing ? nonfinite_calls(cf) :
+              Int(nonfinite_baseline)
     # M6: per-iteration history. Empty when `storage_level == 0`
     # (default) — the snapshot pass below is skipped entirely so
     # there's no allocation overhead in the zero-alloc gate path.
@@ -562,6 +590,10 @@ function _migrad_loop(
     end
     edmval *= 0.002
 
+    # P6: early-return helper values — the seed IS the final state on
+    # these paths, so the non-finite verdict applies to the seed fval.
+    seed_nonfinite = !isfinite(seed.parameters.fval)
+
     # Pre-loop call-limit check (matches C++ ModularFunctionMinimizer.cxx:182-187:
     # "Stop before iterating - call limit already exceeded").
     if ncalls(cf) >= maxfcn
@@ -569,12 +601,16 @@ function _migrad_loop(
             seed, seed, cf.up;
             is_valid = false,
             reached_call_limit = true,
+            nonfinite_fval = seed_nonfinite,
+            n_nonfinite_calls = nonfinite_calls(cf) - nf_base,
             states = history, storage_level = Int(storage_level),
         )
     end
 
     if n == 0
         return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+                                nonfinite_fval = seed_nonfinite,
+                                n_nonfinite_calls = nonfinite_calls(cf) - nf_base,
                                 states = history,
                                 storage_level = Int(storage_level))
     end
@@ -601,11 +637,15 @@ function _migrad_loop(
     # genuinely-singular V via their own error paths.
     if !is_valid(seed.parameters) || !is_valid(seed.gradient) || !is_available(seed.error)
         return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+                                nonfinite_fval = seed_nonfinite,
+                                n_nonfinite_calls = nonfinite_calls(cf) - nf_base,
                                 states = history,
                                 storage_level = Int(storage_level))
     end
     if seed.edm < 0
         return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+                                nonfinite_fval = seed_nonfinite,
+                                n_nonfinite_calls = nonfinite_calls(cf) - nf_base,
                                 states = history,
                                 storage_level = Int(storage_level))
     end
@@ -821,6 +861,18 @@ function _migrad_loop(
             new_edm = estimate_edm!(vg_work, new_grad, s0.error)
 
             if isnan(new_edm)
+                # C++ VariableMetricBuilder.cxx:302-306 "Edm is NaN;
+                # stop iterations": the candidate point (new_par /
+                # new_grad) is discarded, s0 stays incumbent, and the
+                # INNER iteration returns to the outer pass — which
+                # still runs the strategy ≥ 1 inner-HESSE refinement on
+                # s0, exactly like the C++ outer do-while. The
+                # non-finite guards in `hesse`/`make_posdef!` keep that
+                # refinement crash-free when s0 is NaN-poisoned (it
+                # ends in MnHesseFailed, as in C++).
+                if print_level >= 1
+                    _trace_warn(print_level, "MnMigrad", "Edm is NaN; stop iterations")
+                end
                 break
             end
 
@@ -996,13 +1048,23 @@ function _migrad_loop(
     reached_limit = ncalls(cf) >= maxfcn_eff
     above_max = edm_corrected > 10 * edmval
 
-    is_valid_final = !reached_limit && !above_max && !hesse_failed_flag && is_valid(final)
+    # P6: a non-finite incumbent fval can NEVER be a valid minimum — but
+    # none of the C++-mirrored flags catches it (`NaN > 10·edmval` is
+    # false, so `above_max` misses; the state-component validity never
+    # looks at fval). Without this gate a seed-NaN fit at Strategy 0
+    # returned `is_valid = true` with `fval = NaN` (handoff F7).
+    # iminuit's observable verdict for the same FCN is `valid=False`.
+    nonfinite_final = !isfinite(final.parameters.fval)
+
+    is_valid_final = !reached_limit && !above_max && !hesse_failed_flag &&
+                     !nonfinite_final && is_valid(final)
 
     if print_level >= 1
         status = is_valid_final ? "VALID" :
                  (reached_limit ? "call-limit hit" :
                   above_max ? "above-max-edm" :
-                  hesse_failed_flag ? "hesse-failed" : "INVALID")
+                  hesse_failed_flag ? "hesse-failed" :
+                  nonfinite_final ? "non-finite fval" : "INVALID")
         _trace_info(print_level, "MnMigrad",
                     @sprintf("done: %s  iters=%d  edm=%.6g  ncalls=%d",
                              status, iter_dfp, final.edm, ncalls(cf)))
@@ -1015,9 +1077,54 @@ function _migrad_loop(
         above_max_edm = above_max,
         hesse_failed = hesse_failed_flag,
         made_pos_def = made_pos_def_flag,
+        nonfinite_fval = nonfinite_final,
+        n_nonfinite_calls = nonfinite_calls(cf) - nf_base,
         states = history,
         storage_level = Int(storage_level),
     )
+end
+
+"""
+    _warn_nonfinite_fcn(fm::FunctionMinimum, n::Integer = fm.n_nonfinite_calls)
+
+P6: single end-of-run diagnostic for FCNs that returned non-finite
+values (NaN/Inf) during MIGRAD — emitted only when the OUTCOME was
+affected:
+
+- the final fval itself is non-finite (`fm.nonfinite_fval`), or
+- non-finite values occurred AND the fit ended invalid (the blocked /
+  stalled case from handoff F7: an anchor fit that ended
+  `fval = NaN, valid = false` with no hint why).
+
+A fit that converges to a VALID minimum despite brushing ±Inf/NaN
+during exploration stays silent — log-domain likelihoods (e.g. an
+extended binned NLL pushing predicted counts to 0 on a trial step) do
+this routinely, and iminuit is silent there too (its per-call NaN
+warnings via MnPrint are suppressed at the default print level). The
+count stays queryable on `fm.n_nonfinite_calls` either way.
+
+The count `n` can be overridden by drivers that aggregate several
+passes (the `migrad!` retry loop). No-op when `n == 0`.
+"""
+function _warn_nonfinite_fcn(fm::FunctionMinimum, n::Integer = fm.n_nonfinite_calls)
+    n > 0 || return nothing
+    if fm.nonfinite_fval
+        @warn "MIGRAD: the FCN returned a non-finite value (NaN/Inf) in " *
+              "$n of the evaluations, and the final fval itself is " *
+              "non-finite — the minimum is INVALID (nonfinite_fval). " *
+              "This typically means the FCN is undefined at (or within " *
+              "one gradient step of) the start point. Check the seed and " *
+              "the parameter region where your model is well-defined."
+    elseif !fm.is_valid
+        @warn "MIGRAD: the FCN returned a non-finite value (NaN/Inf) in " *
+              "$n of the evaluations and the fit did not converge. " *
+              "Non-finite trial points are never accepted as improvements " *
+              "over a finite incumbent (they are rejected like +∞), but " *
+              "they can block line searches and stall convergence — the " *
+              "fit may have ended early at the edge of the well-defined " *
+              "region."
+    end
+    return nothing
 end
 
 # M6: deep-copy a MinimumState so it can be safely retained past the

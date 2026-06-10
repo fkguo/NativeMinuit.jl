@@ -172,10 +172,11 @@ function hesse(
     # flag through MIGRAD + AD path and gate this branch on
     # `is_analytical(state.gradient)` to match C++ exactly.
     if cf isa CostFunctionWithGradient
-        # CostFunction wrapper SHARES `cf.f`, `cf.up`, and `cf.nfcn` —
-        # FCN calls against `cf_numeric` increment the same counter so
-        # the `maxcalls` budget below remains correct.
-        cf_numeric = CostFunction(cf.f, cf.up, cf.nfcn)
+        # CostFunction wrapper SHARES `cf.f`, `cf.up`, `cf.nfcn`, and
+        # `cf.n_nonfinite` — FCN calls against `cf_numeric` increment
+        # the same counters so the `maxcalls` budget below (and the P6
+        # non-finite tally) remain correct.
+        cf_numeric = CostFunction(cf.f, cf.up, cf.nfcn, cf.n_nonfinite)
         refresh_out = FunctionGradient(zeros(Float64, n),
                                         zeros(Float64, n),
                                         zeros(Float64, n))
@@ -367,6 +368,31 @@ function hesse(
     # MnMadePosDef tag would apply — bit-identical to the allocating
     # `make_posdef(MinimumError(Symmetric(vhmat,:U),1.))` it replaces, but
     # without that call's input copy, p/s scratch, and result wrapper.
+    #
+    # P6 guard: non-finite Hessian entries (the FCN returned NaN/Inf at
+    # one or more x±d probe points — e.g. a model undefined beyond a
+    # physical boundary that the probes straddle) can be repaired by
+    # neither MnPosDef nor the invert. Bail to the diagonal failure
+    # state with MnHesseFailed, exactly like the budget-overrun /
+    # degenerate-G2 failure modes above — instead of letting LAPACK
+    # throw `ArgumentError("matrix contains Infs or NaNs")` out of the
+    # eigenvalue gate (observed via `migrad!` strategy ≥ 1 on an FCN
+    # that is NaN at the seed; C++/iminuit return an invalid minimum,
+    # they never crash).
+    vh_finite = true
+    @inbounds for j in 1:n, i in 1:j
+        if !isfinite(vhmat[i, j])
+            vh_finite = false
+            break
+        end
+    end
+    if !vh_finite
+        if print_level >= 1
+            _trace_warn(print_level, "MnHesse",
+                        "Hessian has non-finite entries — FCN returned NaN/Inf in the probe region")
+        end
+        return _hesse_diagonal_failure(state, g2, prec, ncalls(cf), MnHesseFailed)
+    end
     made_pd = make_posdef!(Symmetric(vhmat, :U), prec)
 
     # ── Symmetric invert (in place) ───────────────────────────────

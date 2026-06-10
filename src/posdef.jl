@@ -63,6 +63,21 @@ function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecisio
     eps = prec.eps
     eps2 = prec.eps2
 
+    # P6 guard: a matrix with non-finite entries (NaN/Inf — typically from
+    # an FCN that returned NaN inside the derivative probe region) cannot
+    # be repaired by the diagonal-add/eigenvalue machinery, and Julia's
+    # LAPACK `eigvals` THROWS on such input (C++ Minuit2's eigenvalue
+    # routine grinds NaN through silently and returns a still-broken
+    # matrix tagged MnMadePosDef; the downstream invert then fails).
+    # Mirror the C++ OUTCOME without the crash: return the matrix
+    # untouched with the MnMadePosDef tag (dcovar forced to 1.0, same as
+    # the C++ tag ctor), letting the caller's own failure paths fire.
+    @inbounds for j in 1:n, i in 1:j
+        if !isfinite(M_in[i, j])
+            return MinimumError(err.inv_hessian, 1.0, MnMadePosDef, true)
+        end
+    end
+
     # n=1 fast path (MnPosDef.cxx:37-43)
     if n == 1
         if M_in[1, 1] < eps
@@ -208,6 +223,16 @@ function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
     eps = prec.eps
     eps2 = prec.eps2
 
+    # P6 guard — same rationale as the allocating `make_posdef(err)`
+    # above: never feed a non-finite matrix to LAPACK eigvals. Leave `S`
+    # untouched and report `true` (the MnMadePosDef tag would apply);
+    # the caller's downstream invert/validity checks handle the rest.
+    @inbounds for j in 1:n, i in 1:j
+        if !isfinite(M[i, j])
+            return true
+        end
+    end
+
     # n=1 fast path (MnPosDef.cxx:37-43) — mutate in place.
     if n == 1
         if M[1, 1] < eps
@@ -296,6 +321,14 @@ function is_posdef_enough(err::MinimumError, prec::MachinePrecision = MachinePre
     n = size(M, 1)
     eps2 = prec.eps2
     epspdf = max(1.0e-6, eps2)
+
+    # P6 guard: non-finite entries are by definition not pos-def-enough,
+    # and must not reach LAPACK eigvals (it throws on NaN/Inf input).
+    for j in 1:n, i in 1:j
+        if !isfinite(M[i, j])
+            return false
+        end
+    end
 
     # Quick diagonal check
     for i in 1:n

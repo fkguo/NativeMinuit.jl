@@ -393,10 +393,12 @@ function Minuit(
                          limits = limit_tuples, fixed = fx_vec,
                          prec = prec)
     cf = CostFunction(fcn, up_resolved)
-    # Build cached CFwG when grad provided — share nfcn Ref so call
-    # count is consistent across both views into the user FCN.
+    # Build cached CFwG when grad provided — share the nfcn (and P6
+    # n_nonfinite) Refs so call counts are consistent across both views
+    # into the user FCN.
     cfwg = grad === nothing ? nothing :
-        CostFunctionWithGradient(fcn, grad, up_resolved, cf.nfcn, Ref(0);
+        CostFunctionWithGradient(fcn, grad, up_resolved, cf.nfcn, Ref(0),
+                                 cf.n_nonfinite;
                                  check_gradient = check_gradient)
     strat = strategy isa Strategy ? strategy : Strategy(Int(strategy))
     return Minuit(cf, params, nothing, Dict{Int,MinosError}(), prec,
@@ -651,6 +653,11 @@ function migrad!(m::Minuit;
     retry_strategy = m.cfwg === nothing ? Strategy(2) : strategy
     best_bfm = bfm
     npass = 1
+    # P6: aggregate non-finite FCN returns across ALL passes for the
+    # single end-of-run warning (each pass's count is measured by its
+    # own inner `_migrad_loop`; `_migrad_into!` suppresses the per-pass
+    # warning via `warn_nonfinite = false`).
+    nf_total = bfm.internal.n_nonfinite_calls
     # The user's per-parameter step on m.params is the stable, pass-invariant
     # length scale for both the fixed-point tolerance and the growth ceiling.
     base_errs = [p.error for p in m.params.pars]
@@ -684,6 +691,7 @@ function migrad!(m::Minuit;
                              print_level = print_level,
                              prior_cov = prior_cov)
         npass += 1
+        nf_total += bfm.internal.n_nonfinite_calls
         best_bfm = _retry_select_better(bfm, best_bfm)
 
         # Cycle detection: re-convergence to an already-catalogued basin.
@@ -697,6 +705,10 @@ function migrad!(m::Minuit;
 
     m.fmin = best_bfm
     m.n_passes = npass
+    # P6: warn ONCE at the end of the whole migrad! run (handoff F7) —
+    # iminuit warns per NaN return via MnPrint (suppressed at default
+    # print level); JuMinuit reports the aggregate with the verdict.
+    _warn_nonfinite_fcn(best_bfm.internal, nf_total)
     return m
 end
 
@@ -713,6 +725,8 @@ function _migrad_into!(m::Minuit, params::Parameters;
                         verify_threading::Bool,
                         print_level::Integer,
                         prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing)
+    # P6: `warn_nonfinite = false` — the migrad! retry loop emits ONE
+    # aggregate warning at the end instead of one per pass.
     if m.cfwg !== nothing
         return migrad(m.cfwg, params;
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
@@ -720,7 +734,8 @@ function _migrad_into!(m::Minuit, params::Parameters;
                        threaded_gradient = threaded_gradient,
                        verify_threading = verify_threading,
                        prior_cov = prior_cov,
-                       print_level = print_level)
+                       print_level = print_level,
+                       warn_nonfinite = false)
     else
         return migrad(m.fcn, params;
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
@@ -728,7 +743,8 @@ function _migrad_into!(m::Minuit, params::Parameters;
                        threaded_gradient = threaded_gradient,
                        verify_threading = verify_threading,
                        prior_cov = prior_cov,
-                       print_level = print_level)
+                       print_level = print_level,
+                       warn_nonfinite = false)
     end
 end
 
@@ -1525,11 +1541,13 @@ function Base.setproperty!(m::Minuit, name::Symbol, val)
         # in the struct rather than fetched on demand. Use the
         # original `f` (and `g`) so the user's closures survive.
         new_up = Float64(val)
-        setfield!(m, :fcn, CostFunction(m.fcn.f, new_up, m.fcn.nfcn))
+        setfield!(m, :fcn, CostFunction(m.fcn.f, new_up, m.fcn.nfcn,
+                                         m.fcn.n_nonfinite))
         if m.cfwg !== nothing
             setfield!(m, :cfwg,
                 CostFunctionWithGradient(m.cfwg.f, m.cfwg.g, new_up,
-                                          m.cfwg.nfcn, m.cfwg.ngrad;
+                                          m.cfwg.nfcn, m.cfwg.ngrad,
+                                          m.cfwg.n_nonfinite;
                                           check_gradient = m.cfwg.check_gradient))
         end
     elseif name === :values
@@ -2020,17 +2038,24 @@ function hesse(m::Minuit; strategy::Union{Strategy,Integer} = Strategy(1),
     # convergence flags (`reached_call_limit`, `above_max_edm` describe
     # how MIGRAD ran, not the current covariance — those don't change
     # under hesse).
+    # P6: `nonfinite_fval` is sticky like the convergence flags — HESSE
+    # never moves the point, so a non-finite incumbent fval stays
+    # non-finite (and the fit stays invalid). `n_nonfinite_calls`
+    # likewise describes the MIGRAD run that produced this state.
     new_err_valid = JuMinuit.is_valid(new_state.error)
     new_is_valid  = new_err_valid &&
                     !bfm.internal.reached_call_limit &&
-                    !bfm.internal.above_max_edm
+                    !bfm.internal.above_max_edm &&
+                    !bfm.internal.nonfinite_fval
     new_fmin_int = FunctionMinimum(new_state, bfm.internal.seed,
                                      bfm.internal.up;
                                      is_valid = new_is_valid,
                                      reached_call_limit = bfm.internal.reached_call_limit,
                                      above_max_edm = bfm.internal.above_max_edm,
                                      hesse_failed = hesse_now_failed,
-                                     made_pos_def = made_pos_def_now)
+                                     made_pos_def = made_pos_def_now,
+                                     nonfinite_fval = bfm.internal.nonfinite_fval,
+                                     n_nonfinite_calls = bfm.internal.n_nonfinite_calls)
 
     # Rebuild external view via the shared helper. Use bfm.internal.up
     # (the value attached to the internal-coord FM, set at migrad time)

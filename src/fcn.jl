@@ -49,6 +49,13 @@ applied on the same call boundary (see `transform.jl`).
 - `nfcn::Base.RefValue{Int}` — call counter; mutates on each
   invocation via the call-operator overload. `Ref` is the idiomatic
   Julia way to hold mutable state inside an otherwise-immutable struct.
+- `n_nonfinite::Base.RefValue{Int}` — count of calls whose return value
+  was non-finite (`NaN`/`±Inf`). Mirrors iminuit's `FCN::check_value`
+  NaN detection (iminuit `src/fcn.cpp`), except iminuit warns per
+  occurrence (via MnPrint, suppressed at default print level) while
+  JuMinuit aggregates here and the MIGRAD drivers warn ONCE at the end
+  of a run that did not end valid (handoff F7/P6; valid fits stay
+  silent). Read via [`nonfinite_calls`](@ref).
 
 # Performance notes
 
@@ -92,9 +99,10 @@ struct CostFunction{F,T} <: AbstractCostFunction
     f::F
     up::T
     nfcn::Base.RefValue{Int}
+    n_nonfinite::Base.RefValue{Int}
 end
 
-CostFunction(f, up = 1.0) = CostFunction(f, up, Ref(0))
+CostFunction(f, up = 1.0) = CostFunction(f, up, Ref(0), Ref(0))
 
 """
     (cf::CostFunction)(x::AbstractVector) -> Float64
@@ -103,10 +111,18 @@ Evaluate the user function at `x`, incrementing the call counter.
 Returns `Float64`. Numeric returns (e.g. `Int`) are coerced via the
 `Float64` constructor — isbits→isbits, zero allocation. Non-numeric
 returns trigger a `MethodError`.
+
+A non-finite return (`NaN`/`±Inf`) additionally increments the
+`n_nonfinite` counter — the value itself is passed through UNCHANGED
+(iminuit/Minuit2 parity: NaN propagates into the minimizer, whose
+`<`-comparisons reject it against any finite incumbent; see
+`_migrad_loop`'s non-finite handling).
 """
 @inline function (cf::CostFunction)(x::AbstractVector)
     cf.nfcn[] += 1
-    return Float64(cf.f(x))::Float64
+    v = Float64(cf.f(x))::Float64
+    isfinite(v) || (cf.n_nonfinite[] += 1)
+    return v
 end
 
 """
@@ -119,12 +135,24 @@ ncalls(cf::CostFunction) = cf.nfcn[]
 """
     reset_ncalls!(cf::CostFunction) -> CostFunction
 
-Reset the call counter to zero. Returns `cf`.
+Reset the call counter (and the non-finite-return counter) to zero.
+Returns `cf`.
 """
 function reset_ncalls!(cf::CostFunction)
     cf.nfcn[] = 0
+    cf.n_nonfinite[] = 0
     return cf
 end
+
+"""
+    nonfinite_calls(cf) -> Int
+
+Number of FCN evaluations (so far) that returned a non-finite value
+(`NaN`/`±Inf`). Defined for both `CostFunction` and
+`CostFunctionWithGradient`. Reset together with the call counter by
+[`reset_ncalls!`](@ref).
+"""
+nonfinite_calls(cf::CostFunction) = cf.n_nonfinite[]
 
 """
     errordef(cf::CostFunction)

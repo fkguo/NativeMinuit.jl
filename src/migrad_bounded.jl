@@ -193,7 +193,7 @@ function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
     # grad=…)` takes, so dropping it would silently re-enable the
     # CheckGradient seed check and defeat the `check_gradient=false` opt-out.
     return CostFunctionWithGradient(wrapped_f, wrapped_g, up,
-                                     cf.nfcn, cf.ngrad;
+                                     cf.nfcn, cf.ngrad, cf.n_nonfinite;
                                      check_gradient = cf.check_gradient)
 end
 
@@ -359,6 +359,7 @@ function migrad(
     verify_threading::Bool = threaded_gradient,
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
     print_level::Integer = 0,
+    warn_nonfinite::Bool = true,
 )
     n_total = n_pars(params)
     n_active = n_free(params)
@@ -377,6 +378,9 @@ function migrad(
     # INTERNAL coordinates — callers (e.g. `migrad!` retry loop) extract
     # it from a prior `bfm.internal.state.error.inv_hessian`, which the
     # internal MIGRAD produced. No further coordinate transform needed.
+    # P6: `warn_nonfinite` is forwarded — the inner low-level migrad owns
+    # the single end-of-run warning; `migrad!`'s retry loop passes
+    # `false` and emits its own aggregate warning instead.
     fmin_int = migrad(cf_internal, int_vals, int_errs;
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
                        prec = prec,
@@ -384,7 +388,8 @@ function migrad(
                        verify_threading = verify_threading,
                        prior_cov = prior_cov,
                        has_limits = _has_limits_internal(params),
-                       print_level = print_level)
+                       print_level = print_level,
+                       warn_nonfinite = warn_nonfinite)
 
     # ── Convert internal results back to external ────────────────
     ext_values, ext_errors_vec, ext_cov_mat =
@@ -425,6 +430,7 @@ function migrad(
     verify_threading::Bool = false,
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
     print_level::Integer = 0,
+    warn_nonfinite::Bool = true,
 )
     n_total = n_pars(params)
     n_active = n_free(params)
@@ -439,7 +445,8 @@ function migrad(
     # Internal MIGRAD dispatches to the CFwG path → uses analytical gradient.
     # threaded_gradient + verify_threading are no-ops for AD path but
     # accepted for API symmetry. `prior_cov` is in INTERNAL coordinates
-    # (see plain-CF overload comment above).
+    # (see plain-CF overload comment above). `warn_nonfinite`: see the
+    # plain-CF overload — single warning owned by the inner migrad.
     fmin_int = migrad(cf_internal_grad, int_vals, int_errs;
                        strategy = strategy, tol = tol, maxfcn = maxfcn,
                        prec = prec,
@@ -447,7 +454,8 @@ function migrad(
                        verify_threading = verify_threading,
                        prior_cov = prior_cov,
                        has_limits = _has_limits_internal(params),
-                       print_level = print_level)
+                       print_level = print_level,
+                       warn_nonfinite = warn_nonfinite)
 
     ext_values, ext_errors_vec, ext_cov_mat =
         _internal_to_external_results(fmin_int, params, cf.up)

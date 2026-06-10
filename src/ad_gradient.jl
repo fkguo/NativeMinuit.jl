@@ -68,6 +68,7 @@ struct CostFunctionWithGradient{F,G,T} <: AbstractCostFunction
     up::T
     nfcn::Base.RefValue{Int}
     ngrad::Base.RefValue{Int}
+    n_nonfinite::Base.RefValue{Int}
     check_gradient::Bool
 end
 
@@ -77,11 +78,15 @@ end
 # gradient at the seed, matching C++/iminuit). Pass `check_gradient=false`
 # to skip the seed-time discrepancy check.
 CostFunctionWithGradient(f, g, up::Real = 1.0; check_gradient::Bool = true) =
-    CostFunctionWithGradient(f, g, Float64(up), Ref(0), Ref(0), check_gradient)
+    CostFunctionWithGradient(f, g, Float64(up), Ref(0), Ref(0), Ref(0),
+                             check_gradient)
 
 CostFunctionWithGradient(f, g, up::Real, nfcn::Base.RefValue{Int},
-                         ngrad::Base.RefValue{Int}; check_gradient::Bool = true) =
-    CostFunctionWithGradient(f, g, Float64(up), nfcn, ngrad, check_gradient)
+                         ngrad::Base.RefValue{Int},
+                         n_nonfinite::Base.RefValue{Int} = Ref(0);
+                         check_gradient::Bool = true) =
+    CostFunctionWithGradient(f, g, Float64(up), nfcn, ngrad, n_nonfinite,
+                             check_gradient)
 
 # Phase F alias kept for any external code that already imported it;
 # new signatures should prefer `AbstractCostFunction` directly. Defined
@@ -90,14 +95,20 @@ CostFunctionWithGradient(f, g, up::Real, nfcn::Base.RefValue{Int},
 # the open-ended `AbstractCostFunction`).
 const AnyCostFunction = Union{CostFunction, CostFunctionWithGradient}
 
-# Forward CostFunction-like accessors
+# Forward CostFunction-like accessors. Non-finite returns are counted
+# (passed through unchanged) — same contract as the `CostFunction`
+# call operator; see fcn.jl.
 @inline function (cf::CostFunctionWithGradient)(x::AbstractVector)
     cf.nfcn[] += 1
-    return Float64(cf.f(x))::Float64
+    v = Float64(cf.f(x))::Float64
+    isfinite(v) || (cf.n_nonfinite[] += 1)
+    return v
 end
 
 ncalls(cf::CostFunctionWithGradient) = cf.nfcn[]
-reset_ncalls!(cf::CostFunctionWithGradient) = (cf.nfcn[] = 0; cf)
+reset_ncalls!(cf::CostFunctionWithGradient) =
+    (cf.nfcn[] = 0; cf.n_nonfinite[] = 0; cf)
+nonfinite_calls(cf::CostFunctionWithGradient) = cf.n_nonfinite[]
 errordef(cf::CostFunctionWithGradient) = cf.up
 ngrad_calls(cf::CostFunctionWithGradient) = cf.ngrad[]
 
@@ -460,7 +471,7 @@ function negative_g2_line_search(
     prec::MachinePrecision = MachinePrecision(),
 )
     has_negative_g2(state.gradient, prec) || return state
-    cf_num = CostFunction(cf.f, cf.up, cf.nfcn)
+    cf_num = CostFunction(cf.f, cf.up, cf.nfcn, cf.n_nonfinite)
     return negative_g2_line_search(state, cf_num, strategy, prec)
 end
 
@@ -486,9 +497,14 @@ function migrad(
     storage_level::Integer = 0,
     has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
+    warn_nonfinite::Bool = true,
 )
     n = length(x0)
     maxfcn_eff = maxfcn === nothing ? (200 + 100 * n + 5 * n^2) : Int(maxfcn)
+
+    # P6: baseline BEFORE the seed bootstrap so a non-finite f(x0) at
+    # call #1 is included in the run's non-finite tally.
+    nf_base = nonfinite_calls(cf)
 
     # M5: optional `prior_cov` overrides the diagonal-from-g2 seed
     # inv_hessian (and sets `dcovar = 0`). Mirrors C++
@@ -502,13 +518,16 @@ function migrad(
     # single-call gradient path). Default false even when threaded=true.
     # `has_limits` threads the per-parameter bound flags to the inner-HESSE
     # step clamp for bounded AD fits (same as the numerical path).
-    return _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
+    fm = _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
                           verify_threading = verify_threading,
                           storage_level = storage_level,
                           has_limits = has_limits,
-                          print_level = print_level)
+                          print_level = print_level,
+                          nonfinite_baseline = nf_base)
+    warn_nonfinite && _warn_nonfinite_fcn(fm)
+    return fm
 end
 
 """

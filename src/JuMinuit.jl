@@ -100,7 +100,7 @@ export CovStatus
 export MnHesseValid, MnHesseFailed, MnMadePosDef, MnInvertFailed, MnNotPosDef
 export MinimumParameters, FunctionGradient, MinimumError, MinimumState
 export CostFunction
-export ncalls, reset_ncalls!, errordef
+export ncalls, reset_ncalls!, errordef, nonfinite_calls
 export is_valid, has_step_size, is_analytical, is_accurate, is_pos_def
 export is_made_pos_def, hesse_failed, invert_failed, is_available
 export has_parameters, has_covariance, fval, edm, nfcn
@@ -114,7 +114,7 @@ export seed_state, warm_restart_state
 export FunctionMinimum, migrad
 export is_thread_safe, ThreadSafetyError
 export parameters, errors, gradient, covariance
-export reached_call_limit, above_max_edm
+export reached_call_limit, above_max_edm, nonfinite_fval, n_nonfinite_calls
 export MinuitParameter, Parameters
 export has_lower_limit, has_upper_limit, has_limits, is_fixed
 export n_pars, n_free, ext_index
