@@ -3,6 +3,84 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-06-10
+
+A `find_solution_modes` overhaul, driven by a field stress test on a real
+9-parameter two-solution coupled-channel fit (f1(1420), 2026-06): the fit-local
+whitening metrics scored a genuine two-basin cloud as "0 modes", an
+untrustworthy covariance was used silently, and an expensive FCN had no way to
+bound the call count. The solver core (MIGRAD/HESSE/MINOS) is unchanged.
+
+### Added
+
+- **Cloud-scale whitening `whiten = :sample`** — per-coordinate robust scale
+  `σ_k = 1.4826·MAD` of the sample column. Fit-independent: it measures the
+  cloud with its own yardstick, which is what a multi-basin cloud (spread ≫
+  local fit σ) needs — on such clouds the fit-local `:cov`/`:errors` metrics
+  isolate every point and report 0 modes even with a perfect covariance.
+  Degenerate coordinates (zero cloud spread) fall back to the fit σ, with a
+  warning; never silently.
+- **`whiten = :auto` — the new default.** Picks the metric from the cloud/fit
+  width ratio: `:sample` when the cloud is wider than the fit's local scale in
+  some coordinate (`max_k σ_cloud_k/σ_fit_k > 4`, the multi-basin regime),
+  otherwise the previous `:cov` fallback chain — single-basin Δχ² clouds
+  sampled at the fit scale keep the statistically tightest (Mahalanobis)
+  metric and previous behavior exactly.
+- **Zero-FCN-call / lazy χ² policies** for expensive cost functions:
+  `fvals = :none` clusters with **zero** FCN evaluations (representatives =
+  whitened-space medoids; `fval`/`delta_fval` = `NaN`; modes sorted by refined
+  χ² or population), `fvals = :lazy` evaluates only the K cluster
+  representatives. The previously implicit cost — N full FCN calls when
+  `fvals` is omitted — is now documented prominently, and is skipped
+  automatically when clustering finds no modes.
+- **Re-fit budget + survivability** (`refine = true`): `refine_maxfcn` (FCN
+  cap per MIGRAD attempt), `refine_strategy` and `refine_tol` (triage
+  settings for slow FCNs), and `refine_callback` (fires once per finished
+  mode with a self-contained NamedTuple — checkpointing for multi-hour runs;
+  invocations serialized, exceptions caught). `SolutionMode` gains
+  `refined_walltime` alongside `refined_nfcn`.
+- **Actionable zero-modes diagnostics.** When clustering yields 0 modes (or
+  bins > half the samples as noise), a warning reports the cloud's median /
+  90%-quantile nearest-neighbour whitened distance against `threshold` and
+  suggests the concrete fix (`whiten = :sample`, or the threshold that would
+  reconnect the cloud).
+- **Field-geometry regression tests**: the real two-basin 9-parameter
+  geometry (multiplicative + error-scaled clouds, anchored-at-the-wrong-basin
+  refine with `new_min` rescue), the `:auto` gate on fit-scale clouds,
+  950/50 unbalanced clusters, degenerate coordinates, the untrusted-covariance
+  fallback, FCN-call counting for `fvals = :none/:lazy`, and the refine
+  budget/callback contract.
+
+### Changed
+
+- **`whiten` default: `:cov` → `:auto`.** Behavior is unchanged for clouds
+  sampled at the fit's own scale (they resolve to `:cov` as before); clouds
+  wider than the fit scale — where the old default returned 0 modes — now
+  resolve to `:sample` and find the basins. Pass `whiten = :cov` to force the
+  old metric unconditionally.
+- **An untrustworthy covariance is no longer used silently** for
+  `whiten = :cov`: if the fit is invalid or its Hessian was forced positive
+  definite (`m.accurate == false`), the metric falls back to `:errors` with a
+  warning (previously: silent use of the patched covariance → silent 0-mode
+  results on the hard fits this tool targets).
+- Degenerate fit-σ coordinates (zero/non-finite) are now **warned about**
+  when they drop out of the `:errors` metric (previously a silent
+  0-contribution that could collapse the metric without a trace).
+- `find_deeper_minimum` (resampling strategy) now pins `whiten = :cov`
+  explicitly for its internal clustering of converged candidates — the same
+  metric it has always used, now independent of the `find_solution_modes`
+  default (converged candidates are tight clumps at the fit scale, exactly
+  the geometry the anchor metric is right for).
+- With `fvals = :none`/`:lazy`, the cluster **representative is the
+  whitened-space medoid** (most central member) instead of the min-χ² member
+  (which would require evaluating every sample).
+
+### Fixed
+
+- A `K = 0` clustering outcome no longer evaluates the FCN at all N samples
+  for nothing (for a 0.5 s/call FCN and 800 samples that was ~7 minutes of
+  wasted wall-time before an empty result).
+
 ## [0.4.1] — 2026-06-09
 
 A display + diagnostics release. The solver core (MIGRAD/HESSE/MINOS) is unchanged

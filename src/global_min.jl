@@ -214,8 +214,10 @@ find_deeper_minimum(f, x0::AbstractVector, errors::AbstractVector; up::Real = 1.
 Data-resampling basin-hopping search for a **deeper** minimum on a multi-basin
 data-fitting objective. Each round bootstrap-resamples `data` and re-fits each
 resample with `refit` (those drift toward whichever basin best explains that
-subset); the candidates are clustered with `find_solution_modes(...; refine=true)`
-and **re-evaluated on the ORIGINAL objective** (so the χ² comparison is honest);
+subset); the candidates are clustered with `find_solution_modes(...; whiten=:cov,
+refine=true)` (the anchor-fit metric — converged candidates are tight clumps at
+the fit's own scale) and **re-evaluated on the ORIGINAL objective** (so the χ²
+comparison is honest);
 the deepest valid new basin is adopted, and the loop repeats.
 
 **Constraints are honoured.** The re-fit/refinement runs through `Minuit(m.fcn.f, m)`
@@ -312,7 +314,14 @@ function find_deeper_minimum(m::Minuit, refit, data;
         end
         # find_solution_modes refines each mode through Minuit(m.fcn.f, m) — limits
         # + fixed flags preserved, fixed parameters pinned — on the ORIGINAL data.
-        md = find_solution_modes(disc, cur; refine = true, parallel = parallel)
+        # whiten=:cov is pinned deliberately (not the :auto cloud-MAD default):
+        # the candidates here are CONVERGED minima — tight clumps at the fit's
+        # own scale, far apart between basins — exactly the geometry the
+        # anchor-fit metric is right for, whereas a cloud-MAD scale on a few
+        # near-identical rows is ill-defined. (Falls back to :errors with a
+        # warning if cur's covariance is missing or untrustworthy.)
+        md = find_solution_modes(disc, cur; whiten = :cov, refine = true,
+                                 parallel = parallel)
 
         if iter == 1 && !any(x.new_min for x in md)
             @warn "find_deeper_minimum (resampling): round 1 — " *

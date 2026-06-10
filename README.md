@@ -94,10 +94,11 @@ common in coupled-channel / amplitude fits), JuMinuit adds:
 - **Bootstrap** and **jackknife** (`bootstrap`, `jackknife`) — data-resampling
   errors that don't trust the quoted `σ`; with full covariance + `correlation`.
 - **Multi-modal solution detection** (`find_solution_modes`) — cluster the
-  accepted samples (in whitened/Mahalanobis coordinates) into **statistically
-  distinct solutions**, with optional per-mode re-fit and a "deeper-than-global"
-  flag. Detects when a fit has several physically different solutions of
-  comparable χ² that a single error bar would hide.
+  accepted samples (in whitened coordinates — Mahalanobis for fit-scale clouds,
+  robust cloud-MAD for wide multi-basin scans, picked automatically) into
+  **statistically distinct solutions**, with optional budgeted per-mode re-fit
+  and a "deeper-than-global" flag. Detects when a fit has several physically
+  different solutions of comparable χ² that a single error bar would hide.
 - **Escaping a local basin** (`find_deeper_minimum`) — a basin-hopping search
   that climbs out of the basin a single MIGRAD lands in, by **parameter
   perturbation** (any objective) or **data resampling** (bootstrap-driven —

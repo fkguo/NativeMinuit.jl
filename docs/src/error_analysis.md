@@ -314,7 +314,7 @@ global best, the per-parameter **(min, max)** range over the cluster, the point
 count and **fraction**, and the member row indices. Modes are sorted by χ²
 (main = lowest first).
 
-### The error-normalized (whitened) distance is mandatory
+### The whitened (scale-normalized) distance is mandatory
 
 > **This is the single most important correctness point.** Clustering in raw
 > parameter coordinates is **wrong** and will silently merge distinct modes.
@@ -326,10 +326,24 @@ parameter look identical: their separation in that parameter is swamped by the
 ordinary within-mode spread of the large-scale parameter. The clusterer then
 **merges them**.
 
-The fix is to cluster in **whitened** (error-normalized) coordinates, so that
-distance is measured in units of σ and is dimensionless and scale-invariant:
+The fix is to cluster in **whitened** coordinates, so that distance is measured
+in units of σ and is dimensionless and scale-invariant. *Which* σ matters just
+as much — the fit's local scale, or the sample cloud's own scale:
 
-- **`whiten = :cov`** (default) — full **Mahalanobis** distance using the fit's
+- **`whiten = :sample`** — per-parameter **robust cloud scale**,
+  `z_k = x_k / (1.4826·MAD_k)` with `MAD_k` the median absolute deviation of
+  the sample column (1.4826 makes it a consistent σ for normal data). This is
+  the metric for **multi-basin clouds**: it measures the cloud with its own
+  yardstick, independent of any fit. The fit-local metrics below fail exactly
+  there — on a cloud spread over many fit-σ (a cross-basin scan, or scatter
+  not generated from this fit's errors), *every* point is isolated in fit-σ
+  units and the clustering reports **0 modes**. MAD (rather than the sample
+  covariance or standard deviation) is essential: between-basin separation
+  inflates a variance along the separation axis, compressing exactly the
+  direction that must stay resolved, while the MAD of a two-cluster cloud
+  stays at the half-separation scale.
+
+- **`whiten = :cov`** — full **Mahalanobis** distance using the fit's
   free-parameter covariance Σ. With the Cholesky factor Σ = L·Lᵀ, the whitened
   coordinate is `z = L⁻¹·x`, and the pairwise distance becomes
 
@@ -338,11 +352,23 @@ distance is measured in units of σ and is dimensionless and scale-invariant:
   ```
 
   This both **rescales** each parameter to σ units **and decorrelates** them —
-  the statistically correct metric.
+  the statistically tightest metric **when the cloud is a single-basin Δχ²
+  region sampled at the fit's own scale**. It falls back to `:errors` (with a
+  warning) when the covariance is unavailable, not positive-definite, or **not
+  trustworthy** — an invalid fit or a forced-positive-definite Hessian
+  (`m.accurate == false`); a patched-up covariance is not a metric, and using
+  it silently is how a real two-solution cloud quietly becomes "0 modes".
 
-- **`whiten = :errors`** — per-parameter scaling only, `z_k = x_k / σ_k`. Ignores
-  correlations; cheaper and needs no matrix inversion. A robust fallback (and the
-  automatic fallback if the covariance is unavailable or not positive-definite).
+- **`whiten = :errors`** — per-parameter fit scaling only, `z_k = x_k / σ_k`.
+  Ignores correlations; cheaper and needs no matrix inversion. The robust
+  fallback. Same local-metric caveat as `:cov` on wide clouds.
+
+- **`whiten = :auto`** (default) — picks the metric from the cloud/fit width
+  ratio: `:sample` when the cloud is wider than the fit's local scale in some
+  coordinate (`max_k σ_cloud_k / σ_fit_k > 4` — the multi-basin regime),
+  otherwise the `:cov` chain above. A Δχ² cloud sampled from the fit itself
+  keeps the Mahalanobis metric; a cross-basin scan automatically gets the
+  cloud metric instead of a useless all-noise result.
 
 A naive unwhitened Euclidean metric is **deliberately not offered** as an option.
 The contrast is real and reproducible — two modes separated by 5σ in a `1e-3`-scale
@@ -353,8 +379,23 @@ parameter but overlapping in a `~1`-scale parameter:
 | raw Euclidean (threshold 1) | **1 cluster** — modes merged (wrong) |
 | `:errors` / `:cov` (threshold 1) | **2 clusters** — modes resolved (correct) |
 
-(See `test/test_solution_modes.jl`, testset *"WHITENED metric resolves tiny-scale
-separation"*.)
+And on a **multi-basin** cloud whose spread is many fit-σ wide (a real
+9-parameter two-solution geometry from a coupled-channel fit):
+
+| metric | result |
+|--------|--------|
+| `:cov` / `:errors` (fit-local) | **0 modes** — every point isolated (wrong) |
+| `:sample` / `:auto` (cloud scale) | **2 clusters** — both solutions found (correct) |
+
+(See `test/test_solution_modes.jl`, testsets *"WHITENED metric resolves
+tiny-scale separation"* and *"two-bowl 9-par geometry"*.)
+
+When clustering finds **no modes** (or bins most samples as noise),
+`find_solution_modes` emits a diagnostic with the cloud's median
+nearest-neighbour whitened distance versus `threshold`, and suggests the
+concrete fix (`whiten = :sample`, or the threshold that would reconnect the
+cloud) — a 0-mode result on a sane cloud almost always means the metric, not
+the cloud.
 
 ### Step 2 (optional) — re-fit each mode: `refine = true`
 
@@ -390,6 +431,38 @@ a separated cluster can be exactly the basin a stiff cold-start fit failed to
 reach. Per-mode re-fits are parallelized across threads when the fit opts into
 threading (`m.threaded_gradient`, honoring the same FCN thread-safety contract as
 JuMinuit's threaded gradient).
+
+### Expensive cost functions: control every FCN call
+
+For an FCN costing seconds per call, the defaults matter: `find_solution_modes`
+evaluates the FCN at **every sample** (to pick min-χ² representatives and report
+Δχ²), and an unbudgeted re-fit can spend thousands of calls per mode. Every one
+of those calls is controllable:
+
+```julia
+# 0 FCN calls: cluster only; representatives = whitened-space medoids,
+# modes sorted by population (fval/delta_fval are NaN).
+modes = find_solution_modes(samples, m; fvals = :none)
+
+# K FCN calls (one per cluster): full χ²/Δχ² report at medoid representatives.
+modes = find_solution_modes(samples, m; fvals = :lazy)
+
+# Or pass the per-sample χ² you already have (get_contours_samples keeps them).
+modes = find_solution_modes(samples, m; fvals = my_chi2s)
+
+# Budgeted, checkpointed refine: ≤ refine_maxfcn calls per MIGRAD attempt,
+# triage strategy/tolerance, and a per-mode callback so a killed multi-hour
+# run loses at most the mode in flight (invocations are serialized — writing
+# to a file from the callback is safe).
+modes = find_solution_modes(samples, m; fvals = :lazy, refine = true,
+                            refine_maxfcn   = 500,
+                            refine_strategy = 0,
+                            refine_tol      = 1.0,
+                            refine_callback = r -> serialize("mode_$(r.k).jls", r))
+```
+
+Each refined mode reports `refined_nfcn` and `refined_walltime`, so the cost of
+a follow-up full-precision re-fit can be extrapolated before launching it.
 
 ### Escaping a local basin — `find_deeper_minimum`
 

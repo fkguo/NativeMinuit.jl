@@ -245,6 +245,15 @@ minos!(m_deep)                                         # error analysis HERE, at
 r     = get_contours_samples(m; nsamples = 30_000, cl = 1)
 modes = find_solution_modes(r.samples, m; refine = true)   # refine ⇒ re-fit each mode
 # mode.new_min == true ⇒ that cluster re-fit DEEPER than global best (main fit missed it)
+# whiten=:auto (default) picks the metric: fit-scale cloud → :cov (Mahalanobis);
+# cloud wider than the fit scale (multi-basin / cross-basin scan) → :sample
+# (robust cloud MAD — the fit-local metrics report 0 modes there). Force with
+# whiten=:sample/:cov/:errors. K=0 / mostly-noise emits a diagnostic (NN scale
+# + suggested fix). Expensive FCN: fvals=:none (0 FCN calls, medoid reps,
+# population-sorted) / :lazy (K calls) / fvals=<precomputed χ² vector>; budget
+# re-fits with refine_maxfcn=500, refine_strategy=0, refine_tol=…, and
+# checkpoint with refine_callback = r -> …  (serialized; r.k/r.K, r.refined_*,
+# r.walltime; per-mode refined_nfcn + refined_walltime are also on the result).
 ```
 `find_deeper_minimum` is a heuristic (finds *a* deeper min, not certified global);
 raise `n_restarts`/`perturb`/`n_discovery`/`max_rounds` and cross-check seeds.
