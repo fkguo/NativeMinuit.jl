@@ -109,7 +109,8 @@ answer is exactly the projection theorem `f̂ ± √(Δχ²·cᵀCc)`, full para
 correlations included). For `f(θ) = θ[i]` it reproduces the MINOS interval.
 
 [`profile_band`](@ref JuMinuit.profile_band) sweeps the same construction
-along a grid for a curve family `f(θ, x)` — the standard **pointwise**
+along a grid for a curve family `f(x, θ)` (`x` first, `θ` the full parameter
+vector — the same callback shape as `quantile_band`) — the standard **pointwise**
 profile-likelihood error band for figures. Each `x` carries its own `cl`
 statement, and the band **contains the best-fit curve by construction** —
 the marginal `quantile_band` need not, when a parameter sits on a limit and
@@ -128,9 +129,9 @@ r.diagnostics       # per-seed audit: convergence, acceptance, who won
 
 # pointwise 68.3 % band of a model curve on a grid, seeded from an
 # mcmc_sample ensemble's f-extreme members (the ready-made seed bank)
-S(θ) = model_moment(θ, 4420.0) - model_moment(θ, 4465.0)
+S(θ) = model_moment(4420.0, θ) - model_moment(4465.0, θ)
 ext = sort(collect(ens); by = S)
-band = profile_band(m, (θ, x) -> model_moment(θ, x), 4360.0:2.0:4520.0;
+band = profile_band(m, (x, θ) -> model_moment(x, θ), 4360.0:2.0:4520.0;
                     seeds = [ext[1], ext[end]])
 band.nfail == 0 || @warn "inspect band.diagnostics"
 # plot: ribbon between band.lo and band.hi, central curve band.fbest

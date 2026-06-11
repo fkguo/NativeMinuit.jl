@@ -292,7 +292,7 @@ end
 
 @testset "profile_band — analytic band, warm sweep, clamping" begin
     # χ² = (θ−μ)ᵀA(θ−μ) with strong correlations ⇒ C = A⁻¹ (up = 1), and
-    # for the curve family f(θ, x) = θ₁ + θ₂x + θ₃x² the pointwise band is
+    # for the curve family f(x, θ) = θ₁ + θ₂x + θ₃x² the pointwise band is
     # analytic: c(x) = (1, x, x²), band(x) = c·μ ± √(c'Cc).
     A = [2.0 0.8 0.3; 0.8 1.5 0.5; 0.3 0.5 1.0]
     μ = [0.5, -1.0, 2.0]
@@ -301,7 +301,7 @@ end
     migrad!(m3)
     hesse!(m3)
     C3 = inv(A)
-    fcurve(θ, x) = θ[1] + θ[2] * x + θ[3] * x^2
+    fcurve(x, θ) = θ[1] + θ[2] * x + θ[3] * x^2
     xs = range(-1.0, 2.0; length = 9)
 
     band = profile_band(m3, fcurve, xs)
@@ -375,7 +375,7 @@ end
     # Same trigger on the band: with include_best = false the failed edges
     # are NaN and every (point, side, pass) group is counted in nfail.
     xs5 = range(0.0, 4.0; length = 5)
-    fb(θ, x) = θ[1] + θ[2] * x
+    fb(x, θ) = θ[1] + θ[2] * x
     bfail = @test_logs (:warn, r"extremization group") match_mode = :any profile_band(m, fb, xs5; lambda = 1e-12, include_best = false, passes = 2)
     @test bfail.nfail == 2 * 2 * length(xs5)          # sides × passes × points
     @test all(isnan, bfail.lo) && all(isnan, bfail.hi)

@@ -215,8 +215,8 @@ r = extremize(m, θ -> θ[1] + θ[2]*15.0)          # cl=1 (68.3%); cl=2, cl=0.9
 r.lo, r.hi          # interval; r.plo / r.phi = extremal param vectors
 r.diagnostics       # PER-SEED audit: accepted? f? winner_min/max (0 = best-fit fallback)
 
-ext = sort(collect(mcmc_sample(m; seed = 1)); by = θ -> model(θ, 4.42))
-band = profile_band(m, (θ, x) -> model(θ, x), 4360.0:2.0:4520.0;
+ext = sort(collect(mcmc_sample(m; seed = 1)); by = θ -> model(4.42, θ))
+band = profile_band(m, (x, θ) -> model(x, θ), 4360.0:2.0:4520.0;   # f(x, θ): x first
                     seeds = [ext[1], ext[end]])  # ensemble f-extremes = seed bank
 band.lo, band.hi, band.fbest                     # ribbon + central curve
 band.nfail == 0 || @warn "inspect band.diagnostics"

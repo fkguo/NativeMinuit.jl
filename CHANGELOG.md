@@ -70,7 +70,9 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
   extremes via `seeds` and audit the diagnostics (regression-tested on a
   two-corridor toy where the default seed provably misses the far corridor).
 - **`profile_band(m, f, xs; cl, seeds, warm, passes, …)`** — the pointwise
-  profile-likelihood **error band** of a curve family `f(θ, x)`: per grid
+  profile-likelihood **error band** of a curve family `f(x, θ)` (`x` first,
+  `θ` the full parameter vector — the package-wide `model(x, …)` convention
+  and the same callback shape as `quantile_band`): per grid
   point the same Δχ²(`ndof = 1`) extremization, swept with warm starts
   (neighbour's extremal parameters seed the next point), alternating
   forward/reverse passes keeping the better envelope, and a

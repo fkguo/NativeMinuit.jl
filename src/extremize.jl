@@ -29,7 +29,7 @@
 # motivated this API — the fix was seeding from ensemble extremes). The
 # per-seed diagnostics exist so that failure mode stays auditable.
 #
-# `profile_band` sweeps `extremize` over a grid x ↦ f(θ, x) with warm starts
+# `profile_band` sweeps `extremize` over a grid x ↦ f(x, θ) with warm starts
 # (the previous point's extremal parameters seed the next point), forward +
 # reverse passes (keeping the better envelope), and a "band contains the
 # best fit" guarantee that holds by construction (θ̂ is in the region).
@@ -99,7 +99,7 @@ end
     ProfileBand
 
 Result of [`profile_band`](@ref): the pointwise profile-likelihood envelope
-of a curve family `f(θ, x)` on a grid.
+of a curve family `f(x, θ)` on a grid.
 
 # Fields
 - `x::Vector{Float64}` — the grid (a copy of `xs`).
@@ -112,7 +112,7 @@ of a curve family `f(θ, x)` on a grid.
   rejected.
 - `plo`, `phi` — per-point extremal parameter vectors (`nothing` exactly
   when the corresponding edge is `NaN`).
-- `fbest::Vector{Float64}` — the best-fit curve `f(θ̂, x)`; with
+- `fbest::Vector{Float64}` — the best-fit curve `f(x, θ̂)`; with
   `include_best = true` (default) `lo .≤ fbest .≤ hi` by construction.
 - `bound`, `delta`, `cl`, `up` — as in [`ExtremizeResult`](@ref).
 - `nfail::Int` — number of (point, side, pass) extremization groups in
@@ -655,9 +655,12 @@ end
     profile_band(m::Minuit, f, xs; cl=1, seeds=nothing, warm=true, passes=2,
                  include_best=true, kwargs...) -> ProfileBand
 
-Pointwise profile-likelihood **error band** of a curve family `f(θ, x)` on
-the grid `xs`: at each grid point, [`extremize`](@ref)s `θ -> f(θ, x)` over
-the same fixed region `{FCN ≤ m.fval + delta_chisq(cl, 1)·m.up}` (all free
+Pointwise profile-likelihood **error band** of a curve family `f(x, θ)` on
+the grid `xs` — `x` first, `θ` the full EXTERNAL parameter vector in `m`'s
+parameter order: the package-wide `model(x, …)` convention, and the same
+callback shape as [`quantile_band`](@ref). At each grid point,
+[`extremize`](@ref)s `θ -> f(x, θ)` over the same fixed region
+`{FCN ≤ m.fval + delta_chisq(cl, 1)·m.up}` (all free
 parameters varied, limits/fixed honoured). Returns a [`ProfileBand`](@ref)
 with the envelope (`lo`, `hi`), the per-point extremal parameter vectors
 (`plo`, `phi`), the best-fit curve (`fbest`), the failure count and
@@ -717,7 +720,7 @@ to control it.
 ```julia
 m = Minuit(chi2, x0; names = names); migrad!(m)
 mgrid = 4360.0:2.0:4520.0
-band  = profile_band(m, (θ, x) -> moment_P2(θ, x), mgrid;
+band  = profile_band(m, (x, θ) -> moment_P2(x, θ), mgrid;
                      seeds = ens_extremes)         # ensemble extreme members
 band.nfail == 0 || @warn "inspect band.diagnostics"
 # plot: fill between band.lo and band.hi, line at band.fbest
@@ -748,9 +751,9 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
     n = length(xv)
     fbest = Vector{Float64}(undef, n)
     for i in 1:n
-        fbest[i] = Float64(f(that, xv[i]))
+        fbest[i] = Float64(f(xv[i], that))
         isfinite(fbest[i]) || throw(ArgumentError(
-            "profile_band: f(best fit, x = $(xv[i])) is not finite"))
+            "profile_band: f(x = $(xv[i]), best fit) is not finite"))
     end
 
     lo = fill(NaN, n)
@@ -768,7 +771,7 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
         whi = nothing
         for i in idxs
             fi = let xi = xv[i]
-                θ -> f(θ, xi)
+                θ -> f(xi, θ)
             end
             # Per-point seed list: warm neighbour + current incumbent + the
             # full pool, duplicates skipped inside _extremize_dir. Seed
