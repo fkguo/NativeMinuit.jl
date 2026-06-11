@@ -5,9 +5,11 @@
 # repo2docker sets JULIA_PROJECT=${REPO_DIR}/.binder and runs this from the
 # repo root. We:
 #   1. Pkg.develop the in-repo (unregistered) JuMinuit into the .binder env.
-#   2. Build PyCall against a Julia-private Conda Python so PyPlot pulls in
-#      its own matplotlib (no reliance on the base image's Python).
-#   3. Precompile, and install a FIXED-name kernel `julia-juminuit` that
+#   2. Build PyCall against a Julia-private Conda Python so notebooks that
+#      still use PyPlot pull in their own matplotlib (no reliance on the base
+#      image's Python). IAM_2Pformfactor intentionally uses GR instead.
+#   3. Force headless-safe plotting settings for Binder.
+#   4. Precompile, and install a FIXED-name kernel `julia-juminuit` that
 #      points explicitly at the .binder env — so a notebook sitting next to
 #      its own Project.toml (e.g. IAM_2Pformfactor/Project.toml) cannot
 #      hijack the package environment via `@.` resolution.
@@ -19,6 +21,9 @@ binder = ENV["JULIA_PROJECT"]      # ${REPO_DIR}/.binder (set by repo2docker)
 repo   = dirname(binder)            # ${REPO_DIR} — the JuMinuit package root
 @info "postBuild: developing JuMinuit" repo binder
 
+ENV["MPLBACKEND"] = "Agg"
+ENV["GKSwstype"] = "100"
+
 Pkg.develop(path = repo)
 
 # PyPlot needs matplotlib; let Conda.jl manage a private Python for PyCall.
@@ -26,11 +31,16 @@ ENV["PYTHON"] = ""
 Pkg.build("PyCall")
 
 Pkg.instantiate()
+
 Pkg.precompile()
 
 # Stable, version-independent kernel name that the notebooks reference.
 using IJulia
-kp = installkernel("Julia JuMinuit", "--project=" * binder)
+kp = installkernel(
+    "Julia JuMinuit",
+    "--project=" * binder;
+    env = Dict("MPLBACKEND" => "Agg", "GKSwstype" => "100"),
+)
 fixed = joinpath(dirname(kp), "julia-juminuit")
 rm(fixed; force = true, recursive = true)
 cp(kp, fixed)
