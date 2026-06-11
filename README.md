@@ -333,7 +333,7 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
 
 ## Reliability
 
-- **Full test suite passes** (3,400+ tests) — including Aqua project-quality
+- **Full test suite passes** (4,400+ tests) — including Aqua project-quality
   checks (piracy, compat bounds, stale deps) and `@inferred` type-stability
   assertions on every public entry point. Run
   `julia --project=. -e 'using Pkg; Pkg.test()'`.
@@ -342,7 +342,7 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   bounded sin/upper/lower transforms, fixed parameters.
 - **Line-by-line C++-fidelity audit** — every algorithm was diffed against
   upstream Minuit2 v6.24.0 and reviewed against the source; the audit trail and
-  resolved findings live in [`docs/dev/`](docs/dev/).
+  resolved findings are archived in [`docs/dev/`](docs/dev/).
 
 ## Documentation
 
@@ -352,8 +352,10 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
 - **[Error-analysis guide](docs/src/error_analysis.md)** — which uncertainty method
   to use, when, and why (HESSE / MINOS / MC-Δχ² / MCMC ensemble / bootstrap /
   jackknife / multi-modal).
-- **[`docs/dev/`](docs/dev/)** — design notes, the C++-fidelity audit, the
-  roadmap, and the explicitly-deferred-features list.
+- **[`docs/dev/`](docs/dev/)** — development-history archive: design notes, the
+  C++-fidelity audit, the original roadmap, and the deferred-features list — a
+  point-in-time snapshot from the v0.3 era, kept for provenance (see the
+  [CHANGELOG](CHANGELOG.md) for everything since).
 - **[`docs/UPSTREAM.md`](docs/UPSTREAM.md)** — upstream provenance and LGPL
   attribution.
 
