@@ -57,5 +57,10 @@ Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
+# NB: JET is intentionally NOT in the test target — it is a dev-only,
+# Julia-version-fragile optimization diagnostic whose precompile failure on a
+# new Julia point release would abort the whole `Pkg.test()`. It stays in
+# [extras]/[compat] so a developer can opt in (`]add JET`); test_aqua_jet.jl
+# loads it opportunistically and skips its check when absent.
 [targets]
-test = ["Aqua", "Clustering", "DataFrames", "ForwardDiff", "JET", "JSON", "Optim", "Plots", "Test"]
+test = ["Aqua", "Clustering", "DataFrames", "ForwardDiff", "JSON", "Optim", "Plots", "Test"]
