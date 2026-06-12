@@ -222,6 +222,12 @@ const BOUNDED_FCNS = Dict(
 const BOUNDED_TOL = (
     rtol_fval = 0.5, atol_fval = 1e-4,
     rtol_param = 1e-3, atol_param = 1e-3,
+    # Bounded ext_errors flow through the nonlinear two-sided `Int2extError`
+    # on the Strategy(0) DFP-approximate Hessian, so they carry more cross-impl
+    # variance than the parameter positions — a deliberately generous tolerance.
+    # Still far tighter than the √2 (~29–41%) under-reporting the missing
+    # errordef-scale bug produced, so it guards the regression.
+    rtol_err = 0.1, atol_err = 0.05,
     nfcn_slack = 30,
 )
 
@@ -258,6 +264,20 @@ const BOUNDED_TOL = (
                 @test isapprox(m.ext_values[ext_i], ref_params[k];
                                 rtol = BOUNDED_TOL.rtol_param,
                                 atol = BOUNDED_TOL.atol_param)
+            end
+
+            # External 1σ errors vs C++ (free params only, same mapping). This
+            # is the bounded int→ext error transform — C++ feeds the errordef-
+            # scaled internal error √(2·up·InvHessian) to the two-sided
+            # `Int2extError` (MnUserParameterState.cxx:142). Guards the missing-
+            # `2·up`-factor regression that under-reported bounded errors by √2.
+            if haskey(ref, "errors")
+                ref_errors = Float64.(ref["errors"])
+                for (k, ext_i) in enumerate(free_ext_indices)
+                    @test isapprox(m.ext_errors[ext_i], ref_errors[k];
+                                    rtol = BOUNDED_TOL.rtol_err,
+                                    atol = BOUNDED_TOL.atol_err)
+                end
             end
 
             ref_nfcn = Int(ref["nfcn"])

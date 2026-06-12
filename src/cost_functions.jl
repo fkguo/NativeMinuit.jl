@@ -574,14 +574,17 @@ from `fit` (which may have been built with a different cost type).
 function Minuit(cost::AbstractCost, fit::Minuit; kwargs...)
     # Recover the start config from `fit` (mirrors Minuit(fcn, ::Minuit)),
     # then route through Minuit(cost, x0) so up = errordef(cost) + ndata.
-    x0 = fit.fmin === nothing ? [p.value for p in fit.params.pars] :
+    # Names/steps/bounds come from the raw config (`fit.fmin` already supplies
+    # the fitted value/error vectors directly).
+    cfg = _init_params(fit)
+    x0 = fit.fmin === nothing ? [p.value for p in cfg.pars] :
                                 fit.fmin.ext_values
-    nm = [p.name for p in fit.params.pars]
-    er = fit.fmin === nothing ? [p.error for p in fit.params.pars] :
+    nm = [p.name for p in cfg.pars]
+    er = fit.fmin === nothing ? [p.error for p in cfg.pars] :
                                 fit.fmin.ext_errors
-    fx = [is_fixed(p) for p in fit.params.pars]
-    lim = Vector{Any}(undef, n_pars(fit.params))
-    for (i, p) in enumerate(fit.params.pars)
+    fx = [is_fixed(p) for p in cfg.pars]
+    lim = Vector{Any}(undef, n_pars(cfg))
+    for (i, p) in enumerate(cfg.pars)
         lo = isnan(p.lower) ? nothing : p.lower
         hi = isnan(p.upper) ? nothing : p.upper
         lim[i] = (lo === nothing && hi === nothing) ? nothing : (lo, hi)

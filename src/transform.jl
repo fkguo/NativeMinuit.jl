@@ -252,7 +252,12 @@ end
     int2ext_error(kind, val, err, lower, upper) -> Float64
 
 External (asymmetric-averaged) parameter error from the internal error
-`err = sqrt(V_int[i,i])`. Mirrors C++
+`err`. **`err` is the errordef-SCALED internal 1σ error**, i.e.
+`err = sqrt(cov(i,i)) = sqrt(2·up·V_int[i,i])` — NOT the raw
+`sqrt(V_int[i,i])`. The C++ comment is `err = sigma Value ==
+std::sqrt(cov(i,i))` and the caller passes
+`std::sqrt(2.*up*Error().InvHessian()(i,i))`
+(`reference/Minuit2_cpp/src/MnUserParameterState.cxx:142`). Mirrors C++
 `MnUserTransformation::Int2extError`
 (`reference/Minuit2_cpp/src/MnUserTransformation.cxx:115-141`).
 

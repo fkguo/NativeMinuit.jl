@@ -153,11 +153,15 @@ end
 # over the resample, gradient over the full data → inconsistent). Each resample
 # falls back to the numerical gradient, which is correct for its own data.
 function _fit_kwargs(m::Minuit)
-    nm = [p.name for p in m.params.pars]
-    er = [p.error for p in m.params.pars]
-    fx = [is_fixed(p) for p in m.params.pars]
-    lim = Vector{Any}(undef, n_pars(m.params))
-    for (i, p) in enumerate(m.params.pars)
+    # Clone the constructor-time config (raw step sizes), NOT the fit-overlaid
+    # `m.params`: a resample re-fit must seed each draw from the user's original
+    # steps, not the anchor fit's Hesse errors.
+    cfg = _init_params(m)
+    nm = [p.name for p in cfg.pars]
+    er = [p.error for p in cfg.pars]
+    fx = [is_fixed(p) for p in cfg.pars]
+    lim = Vector{Any}(undef, n_pars(cfg))
+    for (i, p) in enumerate(cfg.pars)
         lo = isnan(p.lower) ? nothing : p.lower
         hi = isnan(p.upper) ? nothing : p.upper
         lim[i] = (lo === nothing && hi === nothing) ? nothing : (lo, hi)
@@ -399,7 +403,7 @@ function bootstrap(model::Function, data::Data, start::Union{AbstractVector,Minu
     # Full-data anchor fit + cloned configuration.
     if start isa Minuit
         m_full = start.fmin === nothing ? migrad!(model_fit(model, data, start; kws...)) : start
-        cold = [p.value for p in start.params.pars]
+        cold = [p.value for p in _init_params(start).pars]  # raw initial config, not fit overlay
     else
         m_full = migrad!(model_fit(model, data, collect(Float64, start); kws...))
         cold = collect(Float64, start)
@@ -551,7 +555,7 @@ function jackknife(model::Function, data::Data, start::Union{AbstractVector,Minu
 
     if start isa Minuit
         m_full = start.fmin === nothing ? migrad!(model_fit(model, data, start; kws...)) : start
-        cold = [p.value for p in start.params.pars]
+        cold = [p.value for p in _init_params(start).pars]  # raw initial config, not fit overlay
     else
         m_full = migrad!(model_fit(model, data, collect(Float64, start); kws...))
         cold = collect(Float64, start)
@@ -683,7 +687,7 @@ _cost_param(c::AbstractCost, θ_anchor) = _assert_parametric_cost(c)
 function _cost_anchor(cost::AbstractCost, start, warm_start, kws)
     if start isa Minuit
         m_full = start.fmin === nothing ? migrad!(Minuit(cost, start; kws...)) : start
-        cold = [p.value for p in start.params.pars]
+        cold = [p.value for p in _init_params(start).pars]  # raw initial config, not fit overlay
     else
         m_full = migrad!(Minuit(cost, collect(Float64, start); kws...))
         cold = collect(Float64, start)

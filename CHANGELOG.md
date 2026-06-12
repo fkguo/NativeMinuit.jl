@@ -3,6 +3,36 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] — 2026-06-13
+
+### Fixed
+
+- **Bounded-parameter Hesse errors were under-reported by √(2·up)** (errordef
+  scale). The bounded int→ext error transform fed `int2ext_error` the raw
+  `√V_int[i,i]` instead of the errordef-scaled internal 1σ error
+  `√cov(i,i) = √(2·up·V_int[i,i])` that C++ Minuit2 uses
+  (`MnUserParameterState.cxx:142` passes `√(2·up·InvHessian(i,i))`). For a χ²
+  fit (`up = 1`) every **bounded** parameter's reported error (`m.errors`,
+  `m.params.pars[i].error`) was a factor of √2 too small; the unbounded path was
+  always correct. Now matches C++/iminuit (e.g. the issue-#38 example's bounded
+  `a` goes from 0.7046 to ≈0.993). The C++ JSON oracle test now also asserts
+  `ext_errors`, which would have caught this. MINOS/contour errors were
+  unaffected (they already used the `2·up·inv_hessian` scaling).
+
+- **`m.params` now reflects the fit** ([#38](https://github.com/fkguo/JuMinuit.jl/issues/38)).
+  After `migrad!` (and `minos!`/`hesse!`), `m.params.pars[i]` exposed the
+  *initial* value/step instead of the fitted ones, silently disagreeing with
+  the already-correct `m.values[i]` / `m.errors[i]` views. The public
+  `m.params` property now returns a fit-overlaid `Parameters` whenever a fit is
+  cached, so `m.params.pars[i].value == m.values[i]` and
+  `m.params.pars[i].error == m.errors[i]` (iminuit parity, where `m.params`
+  reflects the converged state). Structure (names, bounds, fixed flags, index
+  maps) is unchanged, and a fresh — or `reset(m)`'d — `Minuit` still reports the
+  constructor-time configuration. Internal seed / retry / resume / cold-start /
+  mutator code reads the raw constructor config via a new private
+  `_init_params(m)`, so MIGRAD resume, the retry length scale, `reset(m)`, and
+  resample / `contour_grid` clones keep using the user's original step sizes.
+
 ## [0.5.1] — 2026-06-11
 
 ### Added

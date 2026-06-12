@@ -285,7 +285,13 @@ function _internal_to_external_results(
             par = params.pars[ext_idx]
             if has_limits(par) || has_upper_limit(par) || has_lower_limit(par)
                 kind = bound_kind(par.lower, par.upper)
-                int_err = sqrt(max(V_int[int_idx, int_idx], 0.0))
+                # `int2ext_error` expects the errordef-SCALED internal 1σ
+                # error, i.e. √cov(i,i) = √(2·up·V_int[i,i]) — NOT the raw
+                # √V_int[i,i]. C++ Minuit2 feeds exactly this:
+                # `std::sqrt(2.*up*Error().InvHessian()(i,i))` at
+                # `MnUserParameterState.cxx:142`. Dropping the `2·up` factor
+                # under-reported every bounded χ² (up=1) error by √2.
+                int_err = sqrt(max(c_int_scale * V_int[int_idx, int_idx], 0.0))
                 ext_errors_vec[ext_idx] = int2ext_error(
                     kind, int_x[int_idx], int_err, par.lower, par.upper)
             else

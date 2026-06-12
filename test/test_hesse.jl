@@ -287,4 +287,29 @@
         @test m.errors[1] > 0
         @test m.errors[2] > 0
     end
+
+    @testset "Bounded Hesse error includes the errordef (2·up) scale" begin
+        # Regression for the bounded int→ext error transform dropping the
+        # 2·up factor: `int2ext_error` must receive the errordef-SCALED
+        # internal 1σ error √(2·up·V_int[i,i]) (C++ MnUserParameterState.cxx:142
+        # passes √(2·up·InvHessian(i,i))), NOT the raw √V_int[i,i]. Dropping it
+        # under-reported every bounded χ² (up=1) error by √2.
+        #
+        # f = (a-1)² + (b-2)², errordef=1 ⇒ analytic 1σ = 1.0 for both. The
+        # minimum a*≈1 sits ~4σ from either bound of (-5,5), so the sin-
+        # transform Jacobian is essentially flat there and the bounded error
+        # must match the unbounded one (≈1.0, what C++/iminuit report ≈0.993),
+        # NOT the buggy 1/√2 ≈ 0.707. Strategy-independent (well-conditioned).
+        f = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
+        mb = Minuit(f, [0.0, 0.0]; names = ["a", "b"], errors = [0.1, 0.1],
+                     limits = [(-5.0, 5.0), nothing])
+        migrad!(mb)
+        mu = Minuit(f, [0.0, 0.0]; names = ["a", "b"], errors = [0.1, 0.1])
+        migrad!(mu)
+        @test mb.valid && mu.valid
+        # The bound is far from the optimum ⇒ bounded error ≈ unbounded error.
+        @test mb.errors[1] ≈ mu.errors[1] rtol = 1e-2
+        @test mb.errors[1] ≈ 1.0 atol = 2e-2     # NOT the buggy 0.707
+        @test mb.errors[1] > 0.9
+    end
 end

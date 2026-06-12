@@ -752,11 +752,15 @@ function mnprofile(m::Minuit, par::Integer;
     # fixedness on the OTHER parameters are preserved. The user's
     # gradient (m.cfwg.g) is forwarded so each inner MIGRAD also
     # benefits from analytical differentiation — review NICE-TO-HAVE #8.
-    nm  = [p.name for p in m.params.pars]
-    er  = [p.error for p in m.params.pars]
-    fx  = [is_fixed(p) for p in m.params.pars]
-    lim = Vector{Any}(undef, n_pars(m.params))
-    for (i, p) in enumerate(m.params.pars)
+    # Raw config (original user steps), NOT the fit-overlaid `m.params`: each
+    # grid point clones this config and re-runs MIGRAD, so the step sizes must
+    # stay the constructor's, not the anchor fit's Hesse errors.
+    cfg = _init_params(m)
+    nm  = [p.name for p in cfg.pars]
+    er  = [p.error for p in cfg.pars]
+    fx  = [is_fixed(p) for p in cfg.pars]
+    lim = Vector{Any}(undef, n_pars(cfg))
+    for (i, p) in enumerate(cfg.pars)
         lo = isnan(p.lower) ? nothing : p.lower
         hi = isnan(p.upper) ? nothing : p.upper
         lim[i] = (lo === nothing && hi === nothing) ? nothing : (lo, hi)

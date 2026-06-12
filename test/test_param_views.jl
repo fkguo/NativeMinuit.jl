@@ -268,4 +268,60 @@
         @test m.values[2] ≈ 2.0 atol = 1e-4   # y now floats to the minimum
         @test m.fval < fixed_fval             # the fit improved → observable
     end
+
+    @testset "issue #38: m.params reflects the fit (parity with m.values)" begin
+        m = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
+                    names = ["a", "b"], errors = [0.1, 0.1],
+                    limits = [(-5.0, 5.0), nothing])
+
+        # Before any fit, `m.params` is the constructor-time config.
+        @test m.params.pars[1].value == 0.0
+        @test m.params.pars[2].value == 0.0
+        @test m.params.pars[1].error == 0.1
+
+        migrad!(m)
+        minos!(m)
+        @test m.valid
+
+        # The whole bug: `m.params.pars[i]` must show the FITTED value/error,
+        # exactly agreeing with the `m.values` / `m.errors` views.
+        for i in 1:2
+            @test m.params.pars[i].value == m.values[i]
+            @test m.params.pars[i].error == m.errors[i]
+        end
+        @test m.params.pars[1].value > 0.9               # not the 0.0 initial
+        @test m.params.pars[2].value ≈ 2.0 atol = 1e-6
+
+        # Structure (names, bounds, fixed flags, index maps) is untouched.
+        @test m.params.pars[1].name == "a"
+        @test (m.params.pars[1].lower, m.params.pars[1].upper) == (-5.0, 5.0)
+        @test isnan(m.params.pars[2].lower) && isnan(m.params.pars[2].upper)
+        @test all(!p.fixed for p in m.params.pars)
+        @test m.params.ext_of_int == [1, 2]
+
+        # A fixed parameter overlays its (unmoved) value and keeps the flag.
+        mf = quad2()
+        mf.fixed["y"] = true
+        mf.values["y"] = 0.5
+        migrad!(mf)
+        @test mf.params.pars[2].fixed
+        @test mf.params.pars[2].value == mf.values[2] == 0.5
+
+        # `reset(m)` drops the fit → `m.params` returns to the initial config.
+        reset(m)
+        @test m.fmin === nothing
+        @test m.params.pars[1].value == 0.0
+        @test m.params.pars[1].error == 0.1
+
+        # A re-`migrad!` after a fit must still seed from the user's original
+        # step (the retry length scale reads the raw config, not the overlay):
+        # converges to the same optimum, byte-equal to a cold fit.
+        m2 = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
+                     names = ["a", "b"], errors = [0.1, 0.1],
+                     limits = [(-5.0, 5.0), nothing])
+        migrad!(m2)
+        v_cold = collect(m2.values)
+        migrad!(m2)               # resume: must not drift
+        @test collect(m2.values) ≈ v_cold atol = 1e-8
+    end
 end

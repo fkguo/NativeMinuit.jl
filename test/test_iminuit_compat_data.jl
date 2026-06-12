@@ -181,17 +181,25 @@ using Test
         @test m.values ≈ [5.0, 7.0] atol = 1e-6
     end
 
-    @testset "m.params NOT mutated by carry-forward (round-2 B2)" begin
-        # m.params is the user's original config — must stay
-        # unchanged so reset() returns to initial values.
+    @testset "carry-forward does not mutate the stored config (round-2 B2)" begin
+        # The implicit-resume carry-forward must not clobber the user's
+        # original config, so reset() still returns to the initial values.
+        # Since issue #38 the PUBLIC `m.params` overlays the fit (it reflects
+        # the converged value/error, matching `m.values`/`m.errors`); the
+        # config invariant lives on the raw field (`_init_params`).
         f = x -> (x[1] - 5.0)^2
         m = Minuit(f, [0.0]; name = ["a"], error = [0.1])
-        x0_original = m.params.pars[1].value
+        x0_original = m.params.pars[1].value      # fmin===nothing ⇒ raw config
         err_original = m.params.pars[1].error
         migrad(m)
-        # After migrad, params.pars[i].value/error must still equal
-        # the originals (m.values returns the converged values via
-        # m.fmin, NOT via m.params).
+        # Public `m.params` now reflects the fit (#38) ...
+        @test m.params.pars[1].value ≈ 5.0 atol = 1e-6
+        @test m.params.pars[1].value == m.values[1]
+        # ... but the carry-forward leaves the underlying config field untouched
+        @test JuMinuit._init_params(m).pars[1].value == x0_original
+        @test JuMinuit._init_params(m).pars[1].error == err_original
+        # ... and reset(m) restores the initial values through the public API.
+        reset(m)
         @test m.params.pars[1].value == x0_original
         @test m.params.pars[1].error == err_original
     end

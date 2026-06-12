@@ -237,7 +237,7 @@ function _use_threads(m::Minuit, mode::Union{Bool,Symbol} = m.threaded_gradient)
     Threads.nthreads() == 1 && return false
     cached = m._auto_threads[]
     if cached === nothing
-        x0 = [p.value for p in m.params.pars]
+        x0 = [p.value for p in _init_params(m).pars]
         # Probe a fresh CostFunction view (own nfcn Ref) so the safety check's
         # FCN evaluations don't pollute the user's call counter.
         cached = is_thread_safe(CostFunction(m.fcn.f, m.fcn.up), x0)
@@ -485,12 +485,15 @@ end
 function Minuit(fcn, m::Minuit; kwargs...)
     # Use the latest values (post-MIGRAD if available) as new starting
     # point, preserving param names and bound config unless overridden.
-    x0 = m.fmin === nothing ? [p.value for p in m.params.pars] : m.fmin.ext_values
-    nm = [p.name for p in m.params.pars]
-    er = m.fmin === nothing ? [p.error for p in m.params.pars] : m.fmin.ext_errors
-    fx = [is_fixed(p) for p in m.params.pars]
-    lim = Vector{Any}(undef, n_pars(m.params))
-    for (i, p) in enumerate(m.params.pars)
+    # Names/steps/bounds come from the raw config (`m.fmin` already supplies the
+    # fitted value/error vectors directly); avoids rebuilding the fit overlay.
+    cfg = _init_params(m)
+    x0 = m.fmin === nothing ? [p.value for p in cfg.pars] : m.fmin.ext_values
+    nm = [p.name for p in cfg.pars]
+    er = m.fmin === nothing ? [p.error for p in cfg.pars] : m.fmin.ext_errors
+    fx = [is_fixed(p) for p in cfg.pars]
+    lim = Vector{Any}(undef, n_pars(cfg))
+    for (i, p) in enumerate(cfg.pars)
         lo = isnan(p.lower) ? nothing : p.lower
         hi = isnan(p.upper) ? nothing : p.upper
         lim[i] = (lo === nothing && hi === nothing) ? nothing : (lo, hi)
@@ -662,7 +665,9 @@ function migrad!(m::Minuit;
     nf_total = bfm.internal.n_nonfinite_calls
     # The user's per-parameter step on m.params is the stable, pass-invariant
     # length scale for both the fixed-point tolerance and the growth ceiling.
-    base_errs = [p.error for p in m.params.pars]
+    # Use the raw config (NOT the fit-overlaid `m.params`): on a re-`migrad!`
+    # the overlay would yield the prior fit's Hesse errors, drifting the scale.
+    base_errs = [p.error for p in _init_params(m).pars]
     visited = Tuple{Vector{Float64},Float64}[(copy(bfm.ext_values), fval(bfm))]
     for _pass in 2:Int(iterate)
         (is_valid(bfm.internal) || bfm.internal.reached_call_limit) && break
@@ -811,6 +816,7 @@ function _retry_scaled_params(m::Minuit, params_next::Parameters,
                                factor::Float64, base_errs::Vector{Float64})
     factor <= 1.0 && return params_next
     n = n_pars(params_next)
+    cfg = _init_params(m)
     new_pars = Vector{MinuitParameter}(undef, n)
     @inbounds for i in 1:n
         p = params_next.pars[i]
@@ -818,7 +824,7 @@ function _retry_scaled_params(m::Minuit, params_next::Parameters,
             new_pars[i] = p
             continue
         end
-        range_i = _retry_param_range(m.params.pars[i], base_errs[i])
+        range_i = _retry_param_range(cfg.pars[i], base_errs[i])
         grown = p.error * factor
         # Bound GROWTH so the simplex edge (10·step) ≤ range, but never
         # shrink below the carried base step `p.error`. So `10·step ≤ range`
@@ -846,8 +852,9 @@ end
 # selector, not this predicate, protects the published fval.
 function _retry_perturb_saturated(m::Minuit, factor::Float64,
                                     base_errs::Vector{Float64})
-    @inbounds for i in 1:n_pars(m.params)
-        p = m.params.pars[i]
+    cfg = _init_params(m)
+    @inbounds for i in 1:n_pars(cfg)
+        p = cfg.pars[i]
         is_fixed(p) && continue
         range_i = _retry_param_range(p, base_errs[i])
         10.0 * factor * max(abs(base_errs[i]), eps()) < range_i && return false
@@ -931,9 +938,12 @@ end
 # at the top of `migrad!` and in `simplex(m::Minuit)`.
 function _build_resume_params(m::Minuit, bfm::BoundedFunctionMinimum;
                                floor_errors::Bool = true)
-    new_pars = Vector{MinuitParameter}(undef, n_pars(m.params))
-    @inbounds for i in 1:n_pars(m.params)
-        p_old = m.params.pars[i]
+    # Raw config: `p_old.error` is the user's ORIGINAL step (the `floor_errors`
+    # floor), which must not pick up the fit-overlaid Hesse error.
+    cfg = _init_params(m)
+    new_pars = Vector{MinuitParameter}(undef, n_pars(cfg))
+    @inbounds for i in 1:n_pars(cfg)
+        p_old = cfg.pars[i]
         e_fit = bfm.ext_errors[i]
         # `floor_errors = true` (migrad! retry loop): never resume with a
         # step smaller than the user's original — the historical retry
@@ -1442,20 +1452,23 @@ _view_eltype(::Val{:limits}) = Tuple{Float64,Float64}
 ParameterView(m::Minuit, kind::Symbol) =
     ParameterView{kind,_view_eltype(Val(kind))}(m)
 
-# All views span every (free AND fixed) parameter, like iminuit.
-Base.size(v::ParameterView) = (n_pars(v.m.params),)
+# All views span every (free AND fixed) parameter, like iminuit. Read the raw
+# config field directly: the view's count/structure is fit-independent, and
+# routing through the fit-overlaid `m.params` property would rebuild a
+# `Parameters` on every `size`/index call.
+Base.size(v::ParameterView) = (n_pars(_init_params(v.m)),)
 Base.IndexStyle(::Type{<:ParameterView}) = IndexLinear()
 
 # ── reads (live; mirror the old getproperty branches exactly) ────────────────
 # `:values`/`:errors` prefer the post-fit external vector when a fit is
 # cached, else the stored initial value/step.
 _view_get(::Val{:values}, m::Minuit, i::Int) =
-    m.fmin === nothing ? m.params.pars[i].value : m.fmin.ext_values[i]
+    m.fmin === nothing ? _init_params(m).pars[i].value : m.fmin.ext_values[i]
 _view_get(::Val{:errors}, m::Minuit, i::Int) =
-    m.fmin === nothing ? m.params.pars[i].error : m.fmin.ext_errors[i]
-_view_get(::Val{:fixed}, m::Minuit, i::Int) = is_fixed(m.params.pars[i])
+    m.fmin === nothing ? _init_params(m).pars[i].error : m.fmin.ext_errors[i]
+_view_get(::Val{:fixed}, m::Minuit, i::Int) = is_fixed(_init_params(m).pars[i])
 _view_get(::Val{:limits}, m::Minuit, i::Int) =
-    (m.params.pars[i].lower, m.params.pars[i].upper)
+    (_init_params(m).pars[i].lower, _init_params(m).pars[i].upper)
 
 @inline function Base.getindex(v::ParameterView{kind}, i::Int) where {kind}
     @boundscheck checkbounds(v, i)
@@ -1465,7 +1478,7 @@ end
 # Name indexing: `m.values["x"]`. `ext_index` throws `KeyError` for an
 # unknown name (same as the explicit mutators).
 Base.getindex(v::ParameterView, name::AbstractString) =
-    v[ext_index(v.m.params, String(name))]
+    v[ext_index(_init_params(v.m), String(name))]
 
 # ── writes (route through the per-parameter mutators) ────────────────────────
 _view_set!(::Val{:values}, m::Minuit, i::Int, val) = set_value!(m, i, val)
@@ -1496,11 +1509,58 @@ end
 end
 
 Base.setindex!(v::ParameterView, val, name::AbstractString) =
-    setindex!(v, val, ext_index(v.m.params, String(name)))
+    setindex!(v, val, ext_index(_init_params(v.m), String(name)))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Config vs. fit-overlaid parameters (issue #38)
+#
+# `Minuit` deliberately never mutates its stored `Parameters` field: it holds
+# the constructor-time configuration — the initial values, the user's per-
+# parameter step sizes, bounds, and fixed flags — and the fit result lives in
+# `m.fmin`. The `m.values`/`m.errors` views already overlay the converged
+# external vectors on top of that config. Before the fix for issue #38,
+# `m.params.pars` exposed the RAW config, so `m.params.pars[i].value` still
+# showed the *initial* value after `migrad!`, silently disagreeing with
+# `m.values[i]`. iminuit's `m.params` reflects the fit, so JuMinuit now does
+# too: the PUBLIC `m.params` property returns a fit-overlaid copy when a fit is
+# cached (see `getproperty`).
+#
+# Internal seed / retry / resume / cold-start / mutator code must still read the
+# UNMODIFIED config (e.g. the retry length scale and `reset(m)` semantics depend
+# on the original user step, not the post-fit Hesse error). Those call sites use
+# `_init_params(m)` — the raw field — instead of the `m.params` property.
+# ─────────────────────────────────────────────────────────────────────────────
+
+"`_init_params(m)` — the raw constructor-time `Parameters` (never fit-overlaid)."
+_init_params(m::Minuit) = getfield(m, :params)
+
+# Same structure as `cfg` (names, bounds, fixed flags, int↔ext maps, precision)
+# but each parameter's value/error replaced by the converged external
+# value/error from `bfm`. Guarantees `m.params.pars[i].value == m.values[i]`
+# and `m.params.pars[i].error == m.errors[i]`. Only `pars` is rebuilt; the
+# index maps and precision are reused (they are unchanged by a fit).
+function _fit_overlaid_params(cfg::Parameters, bfm::BoundedFunctionMinimum)
+    n = length(cfg.pars)
+    new_pars = Vector{MinuitParameter}(undef, n)
+    @inbounds for i in 1:n
+        p = cfg.pars[i]
+        new_pars[i] = MinuitParameter(p.name, bfm.ext_values[i], bfm.ext_errors[i],
+                                      p.lower, p.upper, p.fixed)
+    end
+    return Parameters(new_pars, cfg.ext_of_int, cfg.int_of_ext,
+                      cfg.name_to_ext, cfg.prec)
+end
 
 function Base.getproperty(m::Minuit, name::Symbol)
     if name === :values
         return ParameterView(m, :values)
+    elseif name === :params
+        # iminuit parity (issue #38): reflect the fit when one is cached, so
+        # `m.params.pars[i].value/.error` agree with `m.values`/`m.errors`.
+        # Internal config consumers call `_init_params(m)` for the raw field.
+        cfg = getfield(m, :params)
+        fmin = getfield(m, :fmin)
+        return fmin === nothing ? cfg : _fit_overlaid_params(cfg, fmin)
     elseif name === :errors
         return ParameterView(m, :errors)
     elseif name === :fval
@@ -1520,13 +1580,15 @@ function Base.getproperty(m::Minuit, name::Symbol)
     elseif name === :covariance
         return m.fmin === nothing ? nothing : ext_covariance(m.fmin)
     elseif name === :ndim
-        return n_pars(m.params)
+        # Count/names/maps are fit-independent — read the raw field so we don't
+        # rebuild the fit-overlaid `m.params` just to size it.
+        return n_pars(_init_params(m))
     elseif name === :npar
-        return n_free(m.params)
+        return n_free(_init_params(m))
     # ── IMinuit.jl property aliases ───────────────────────────────
     elseif name === :parameters
         # iminuit's `parameters` is a tuple of parameter names
-        return Tuple(p.name for p in m.params.pars)
+        return Tuple(p.name for p in _init_params(m).pars)
     elseif name === :fixed
         return ParameterView(m, :fixed)
     elseif name === :limits
@@ -1539,7 +1601,7 @@ function Base.getproperty(m::Minuit, name::Symbol)
         # iminuit's MINOS errors dict, keyed by parameter name
         out = Dict{String,MinosError}()
         for (i, e) in m.minos_errors
-            out[m.params.pars[i].name] = e
+            out[_init_params(m).pars[i].name] = e
         end
         return out
     elseif name === :accurate
@@ -1554,7 +1616,7 @@ function Base.getproperty(m::Minuit, name::Symbol)
         return matrix(m)
     elseif name === :nfit
         # iminuit-compatible: total degrees of free parameters
-        return n_free(m.params)
+        return n_free(_init_params(m))
     elseif name === :ngrad
         # IMinuit.jl/iminuit-compatible: gradient call counter (only
         # nonzero when `grad=...` was supplied)
@@ -1638,8 +1700,9 @@ end
 @inline function _check_par_index(m::Minuit, i::Integer)
     i isa Bool &&
         throw(ArgumentError("parameter index must be an Integer, got Bool"))
-    1 <= i <= n_pars(m.params) ||
-        throw(BoundsError(m.params.pars, i))
+    cfg = _init_params(m)
+    1 <= i <= n_pars(cfg) ||
+        throw(BoundsError(cfg.pars, i))
     return nothing
 end
 
@@ -1655,8 +1718,11 @@ function _replace_all_params!(m::Minuit, new_pars::Vector{MinuitParameter})
 end
 
 # Per-parameter pivot: clone the current vector, swap one entry, commit.
+# Clones the raw config (NOT the fit-overlaid `m.params`): a mutation must keep
+# the other parameters at their constructor-time config so `reset(m)` still
+# returns to the initial values and the user step sizes survive the edit.
 function _replace_one_param!(m::Minuit, i::Int, new_p::MinuitParameter)
-    new_pars = collect(m.params.pars)
+    new_pars = collect(_init_params(m).pars)
     new_pars[i] = new_p
     return _replace_all_params!(m, new_pars)
 end
@@ -1727,7 +1793,7 @@ fix!(m::Minuit, par::AbstractString) =
 function fix!(m::Minuit, i::Integer)
     _check_par_index(m, i)
     return _replace_one_param!(m, Int(i),
-        _build_fixed_par(m.params.pars[i], true))
+        _build_fixed_par(_init_params(m).pars[i], true))
 end
 
 """
@@ -1749,7 +1815,7 @@ release!(m::Minuit, par::AbstractString) =
 function release!(m::Minuit, i::Integer)
     _check_par_index(m, i)
     return _replace_one_param!(m, Int(i),
-        _build_fixed_par(m.params.pars[i], false))
+        _build_fixed_par(_init_params(m).pars[i], false))
 end
 
 """
@@ -1769,7 +1835,7 @@ set_value!(m::Minuit, par::AbstractString, v::Real) =
 function set_value!(m::Minuit, i::Integer, v::Real)
     _check_par_index(m, i)
     return _replace_one_param!(m, Int(i),
-        _build_value_par(m.params.pars[i], v))
+        _build_value_par(_init_params(m).pars[i], v))
 end
 
 """
@@ -1788,7 +1854,7 @@ set_error!(m::Minuit, par::AbstractString, e::Real) =
 function set_error!(m::Minuit, i::Integer, e::Real)
     _check_par_index(m, i)
     return _replace_one_param!(m, Int(i),
-        _build_error_par(m.params.pars[i], e))
+        _build_error_par(_init_params(m).pars[i], e))
 end
 
 """
@@ -1809,7 +1875,7 @@ set_limits!(m::Minuit, par::AbstractString, lo, up) =
 function set_limits!(m::Minuit, i::Integer, lo, up)
     _check_par_index(m, i)
     return _replace_one_param!(m, Int(i),
-        _build_limits_par(m.params.pars[i], lo, up))
+        _build_limits_par(_init_params(m).pars[i], lo, up))
 end
 
 """
@@ -1826,7 +1892,7 @@ remove_limits!(m::Minuit, par::AbstractString) =
 function remove_limits!(m::Minuit, i::Integer)
     _check_par_index(m, i)
     return _replace_one_param!(m, Int(i),
-        _build_limits_par(m.params.pars[i], nothing, nothing))
+        _build_limits_par(_init_params(m).pars[i], nothing, nothing))
 end
 
 """
@@ -1853,7 +1919,7 @@ function set_upper_limit!(m::Minuit, i::Integer, hi::Real)
         throw(ArgumentError("set_upper_limit!: upper bound must be finite, got $hi"))
     # C++ SetUpperLimit clears the lower bound (fLoLimValid=false).
     return _replace_one_param!(m, Int(i),
-        _build_limits_par(m.params.pars[i], nothing, hi))
+        _build_limits_par(_init_params(m).pars[i], nothing, hi))
 end
 
 """
@@ -1880,7 +1946,7 @@ function set_lower_limit!(m::Minuit, i::Integer, lo::Real)
         throw(ArgumentError("set_lower_limit!: lower bound must be finite, got $lo"))
     # C++ SetLowerLimit clears the upper bound (fUpLimValid=false).
     return _replace_one_param!(m, Int(i),
-        _build_limits_par(m.params.pars[i], lo, nothing))
+        _build_limits_par(_init_params(m).pars[i], lo, nothing))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1894,53 +1960,53 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function _bulk_set_values!(m::Minuit, vals::AbstractVector)
-    n = n_pars(m.params)
+    n = n_pars(_init_params(m))
     length(vals) == n ||
         throw(DimensionMismatch("expected $n values, got $(length(vals))"))
     new_pars = Vector{MinuitParameter}(undef, n)
     @inbounds for i in 1:n
-        new_pars[i] = _build_value_par(m.params.pars[i], vals[i])
+        new_pars[i] = _build_value_par(_init_params(m).pars[i], vals[i])
     end
     _replace_all_params!(m, new_pars)
     return nothing
 end
 
 function _bulk_set_errors!(m::Minuit, errs::AbstractVector)
-    n = n_pars(m.params)
+    n = n_pars(_init_params(m))
     length(errs) == n ||
         throw(DimensionMismatch("expected $n values, got $(length(errs))"))
     new_pars = Vector{MinuitParameter}(undef, n)
     @inbounds for i in 1:n
-        new_pars[i] = _build_error_par(m.params.pars[i], errs[i])
+        new_pars[i] = _build_error_par(_init_params(m).pars[i], errs[i])
     end
     _replace_all_params!(m, new_pars)
     return nothing
 end
 
 function _bulk_set_fixed!(m::Minuit, fx::AbstractVector)
-    n = n_pars(m.params)
+    n = n_pars(_init_params(m))
     length(fx) == n ||
         throw(DimensionMismatch("expected $n fixed flags, got $(length(fx))"))
     new_pars = Vector{MinuitParameter}(undef, n)
     @inbounds for i in 1:n
-        new_pars[i] = _build_fixed_par(m.params.pars[i], Bool(fx[i]))
+        new_pars[i] = _build_fixed_par(_init_params(m).pars[i], Bool(fx[i]))
     end
     _replace_all_params!(m, new_pars)
     return nothing
 end
 
 function _bulk_set_limits!(m::Minuit, lim::AbstractVector)
-    n = n_pars(m.params)
+    n = n_pars(_init_params(m))
     length(lim) == n ||
         throw(DimensionMismatch("expected $n limit tuples, got $(length(lim))"))
     new_pars = Vector{MinuitParameter}(undef, n)
     @inbounds for i in 1:n
         l = lim[i]
         new_pars[i] = if l === nothing
-            _build_limits_par(m.params.pars[i], nothing, nothing)
+            _build_limits_par(_init_params(m).pars[i], nothing, nothing)
         else
             lo_raw, up_raw = l
-            _build_limits_par(m.params.pars[i], lo_raw, up_raw)
+            _build_limits_par(_init_params(m).pars[i], lo_raw, up_raw)
         end
     end
     _replace_all_params!(m, new_pars)
