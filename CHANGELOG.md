@@ -3,7 +3,7 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.4] — 2026-06-13
 
 ### Fixed
 
