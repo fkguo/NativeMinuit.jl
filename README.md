@@ -87,6 +87,14 @@ access, and Jupyter-first rich output (`to_latex`, HTML tables, plot recipes).
 When MINOS can't close a contour (flat or strongly non-Gaussian likelihoods —
 common in coupled-channel / amplitude fits), JuMinuit adds:
 
+- **Derived-quantity intervals & profile bands** (`extremize`, `profile_band`)
+  — MINOS for an arbitrary scalar `f(θ)` (a peak position, an amplitude ratio,
+  a model curve at one energy): the exact `[min, max]` of `f` over the
+  `Δχ² ≤ delta_chisq(cl, 1)` region, and the pointwise error band of a whole
+  curve family. `mode = :directional` adds a fast linear-Gaussian boundary
+  crossing (≈ `n_free + 15` evaluations, ~50× cheaper) for expensive FCNs;
+  `:full` handles non-linear / multi-corridor regions. The first leg of the
+  profile-extremization ↔ ensemble-quantiles ↔ MINOS triangulation.
 - **Monte-Carlo Δχ² regions** (`get_contours_samples`) — sample the true
   `Δχ² ≤ delta_chisq(cl, ndof)` region; captures non-Gaussian and joint
   multi-parameter shapes. Over-coverage-aware (inflation, adaptive widening,

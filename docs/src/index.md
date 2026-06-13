@@ -68,9 +68,11 @@ m.merrors       # asymmetric ±σ per parameter (name-keyed Dict)
   exported aliases of [`Minuit`](@ref).
 - **[Cost functions](cost_functions.md)** — a Julia-native family
   (`LeastSquares`, `UnbinnedNLL`, `BinnedNLL`, …) composable with `CostSum`.
-- **[Error analysis](error_analysis.md) beyond HESSE/MINOS** — Monte-Carlo
-  Δχ² regions, bootstrap, jackknife, and multi-modal solution detection, for
-  the flat or strongly non-Gaussian likelihoods where MINOS struggles.
+- **[Error analysis](error_analysis.md) beyond HESSE/MINOS** — derived-quantity
+  intervals & profile bands (`extremize`/`profile_band`), Monte-Carlo Δχ²
+  regions, likelihood-ensemble MCMC, bootstrap, jackknife, and multi-modal
+  solution detection, for the flat or strongly non-Gaussian likelihoods where
+  MINOS struggles.
 - **AD & threaded gradients** — a ForwardDiff extension and an opt-in
   threaded numerical gradient — plus an `Optim.jl` alternative-minimizer
   bridge (`optim`).
