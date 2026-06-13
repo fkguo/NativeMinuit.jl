@@ -402,7 +402,7 @@ upstream Minuit algorithms it ports. JuMinuit.jl ships a
 for APA / BibTeX, or:
 
 > F.-K. Guo, *JuMinuit.jl: a native-Julia port of Minuit2*,
-> v0.3.0, https://github.com/fkguo/JuMinuit.jl (2026).
+> https://github.com/fkguo/JuMinuit.jl (2026).
 >
 > F. James and M. Roos, "MINUIT: A system for function minimization and analysis
 > of the parameter errors and correlations", Comput. Phys. Commun. **10** (1975)
