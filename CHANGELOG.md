@@ -3,6 +3,43 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] — 2026-06-13
+
+### Added
+
+- **`extremize`: expensive-FCN support** (driven by a production field report
+  where one FCN/`f` evaluation costs seconds and the default algorithm
+  livelocked). All additive; the default `mode = :full` path is unchanged.
+  - **`mode = :directional`** — a fast alternative to the multi-seed penalty
+    extremization for the common near-linear case: it forms the
+    Lagrange/projection direction `d = C·∇f` at the best fit (numerically, or
+    via a supplied `grad_f`), secant/bisects the **true** FCN to the Δχ²
+    boundary on each side, and reports the **true** `f` at the crossings.
+    ≈ `n_free + ~15` paired evaluations (~50× cheaper than `:full`), exact in
+    the linear-Gaussian limit. `r.mode` flags the result; `r.diagnostics`
+    carries the direction, `∇fᵀC∇f`, the crossings, and `f_failed_lo/hi`. It
+    ignores `seeds`/limits and does not chase non-linear corridors — warns when
+    free parameters are bounded; use `:full` when the two disagree.
+  - **`iterate`** keyword forwarded to each penalty `migrad!` (default `5`;
+    set `1` for the cheapest run on an expensive FCN), and **`on_unit`**, a
+    per-penalty-MIGRAD progress/checkpoint callback (also on `profile_band`,
+    where its record carries the grid point), enabling external checkpointing
+    of a long run on a kill-prone machine.
+
+### Fixed
+
+- **`extremize`/`profile_band`: a non-finite or throwing `f` is now always
+  safe.** A throwing/non-finite `f` at an infeasible θ becomes a finite penalty
+  plateau the optimizer steers around (never a `NaN` into MIGRAD's gradient),
+  tallied as `f_nonfinite` in the diagnostics — closing the trap where users
+  returned a `0.0` sentinel that silently biased the endpoint toward the
+  centre. (Previously a non-finite `f` returned `NaN` to MIGRAD.)
+
+### Changed
+
+- `ExtremizeResult` gained a `mode::Symbol` field (before `diagnostics`); a
+  back-compatible positional constructor defaulting `mode = :full` is provided.
+
 ## [0.5.2] — 2026-06-13
 
 ### Fixed

@@ -64,13 +64,19 @@ audit trail.
 - `cl::Float64` — the confidence-level argument as given (`NaN` when an
   explicit `delta` override was used).
 - `up::Float64` — the fit's error definition (`m.up`).
-- `diagnostics::NamedTuple` — `(min, max, winner_min, winner_max,
+- `mode::Symbol` — `:full` (the multi-seed penalty extremization) or
+  `:directional` (the fast linear-direction crossing; see [`extremize`](@ref)).
+  The `diagnostics` schema differs between the two modes.
+- `diagnostics::NamedTuple` — **for `mode = :full`:** `(min, max, winner_min,
+  winner_max,
   naccepted_min, naccepted_max, fcn_min, fcn_max)`. `min`/`max` are per-seed
   record vectors, one row per penalty fit, with fields `seed` (index into
   the seed pool; seed 1 is always the best fit), `converged` (MIGRAD
   validity), `accepted` (passed the `bound + accept_tol·up` gate),
   `projected` (was pulled back onto the boundary), `fcn` (FCN at the raw
-  penalty optimum), `f_raw`/`f` (`f` before/after the pull-back) and `nfcn`.
+  penalty optimum), `f_raw`/`f` (`f` before/after the pull-back), `nfcn`, and
+  `f_nonfinite` (count of probes where `f` threw or returned non-finite and was
+  steered around — see the `f`-failure contract under [`extremize`](@ref)).
   `winner_min`/`winner_max` give the seed index whose candidate won each
   side — `0` means no penalty fit beat the best-fit value itself, which has
   two very different readings, disambiguated by `naccepted_*`: with
@@ -80,7 +86,11 @@ audit trail.
   `fcn_min`/`fcn_max` are the FCN values at `plo`/`phi`: compare with
   `bound` to certify each endpoint's feasibility directly. Inspect these to
   audit seed coverage (the multi-corridor failure mode described in the
-  docstring).
+  docstring). **For `mode = :directional`:** `(grad, dir, gCg, alpha_lin,
+  alpha_lo, alpha_hi, fcn_lo, fcn_hi, nfcn, nf)` — the `f`-gradient and search
+  direction `C·∇f` at θ̂, the linear step `√(delta/gᵀCg)`, the two true-FCN
+  boundary crossings `alpha_lo`/`alpha_hi` (`±` along `dir`) with their FCN
+  values (`≤ bound`), and the FCN/`f` call counts.
 """
 struct ExtremizeResult{D<:NamedTuple}
     lo::Float64
@@ -92,8 +102,17 @@ struct ExtremizeResult{D<:NamedTuple}
     delta::Float64
     cl::Float64
     up::Float64
+    mode::Symbol
     diagnostics::D
 end
+
+# Backward-compatible positional constructor: pre-0.6.0 `ExtremizeResult` had no
+# `mode` field. Code that built one positionally with the old 10-arg arity keeps
+# working and is tagged `:full`. (`ExtremizeResult` is exported; the field was
+# inserted before `diagnostics`.)
+ExtremizeResult(lo, hi, plo, phi, fbest, bound, delta, cl, up,
+                diagnostics::NamedTuple) =
+    ExtremizeResult(lo, hi, plo, phi, fbest, bound, delta, cl, up, :full, diagnostics)
 
 """
     ProfileBand
@@ -217,19 +236,29 @@ end
 # sgn = −1 minimizes it). The constraint excess is normalized by `up` so
 # `lambda` means the same thing for a χ² (up = 1) and a −lnL (up = 0.5) fit.
 #
-# The objective is TOTAL — it never throws and never returns ±Inf:
+# The objective is TOTAL — it never throws and never returns ±Inf or NaN:
 # - an FCN throw / non-finite value (a probe far outside the FCN's domain)
 #   becomes a finite high plateau via the excess cap, not an Inf cliff. An
 #   Inf reaching MIGRAD's numerical gradient turns the curvature matrix
 #   into NaNs and aborts the whole fit from inside LinearAlgebra (observed
 #   on a soft λ = 1 stage wandering up the Rosenbrock valley); a finite
 #   plateau is simply never accepted by the line search.
-# - a non-finite/throwing `f` maps to NaN, which MIGRAD rejects as a
-#   candidate point (a non-finite fval can never look like a minimum).
+# - a non-finite/throwing `f` ALSO maps to the SAME finite plateau (NOT NaN —
+#   field report E4): a NaN returned to MIGRAD poisons the numerical-gradient
+#   curvature exactly like the Inf-FCN case, and it tempts users with a
+#   failure-prone `f` (e.g. an off-basin pole search) into returning a sentinel
+#   like `0.0`, which SILENTLY BIASES the endpoint toward the centre. A finite
+#   plateau makes the probe simply unattractive — MIGRAD steers around the
+#   non-finite-`f` region — so the contract is: **`f` may throw OR return
+#   non-finite at infeasible θ; both are safe (no NaN into MIGRAD, no `0.0`-
+#   sentinel CENTERING bias)**. A genuinely non-finite-`f` region may still
+#   legitimately NARROW the interval (the optimizer cannot reach past it) —
+#   that is safe and correct, not a bias. Each such probe is tallied via
+#   `nonfinite` (surfaced as `f_nonfinite` in the per-seed diagnostics records).
 function _penalty_obj(fcnraw, f, sgn::Int, bound::Float64, up::Float64,
-                      lambda::Float64)
+                      lambda::Float64, nonfinite::Base.RefValue{Int})
     return let fcnraw = fcnraw, f = f, s = Float64(sgn), bound = bound,
-               up = up, lambda = lambda
+               up = up, lambda = lambda, nonfinite = nonfinite
         θ -> begin
             c = _fcn_or_inf(fcnraw, θ)              # throw / non-finite → Inf
             excess = min((c - bound) / up, 1e8)
@@ -238,9 +267,13 @@ function _penalty_obj(fcnraw, f, sgn::Int, bound::Float64, up::Float64,
                 f(θ)
             catch err
                 err isa _EXTREMIZE_CATCH || rethrow()
-                return NaN
+                nonfinite[] += 1
+                return lambda * 1e16               # finite plateau, never NaN
             end
-            (fv isa Real && isfinite(fv)) || return NaN
+            if !(fv isa Real && isfinite(fv))
+                nonfinite[] += 1
+                return lambda * 1e16               # finite plateau, never NaN
+            end
             -s * Float64(fv) + (excess > 0.0 ? lambda * excess * excess : 0.0)
         end
     end
@@ -321,7 +354,9 @@ function _extremize_dir(m::Minuit, f, sgn::Int, bound::Float64,
                         pool::Vector{Vector{Float64}}, fhat::Float64,
                         that::Vector{Float64};
                         lambda::Float64, accept_tol::Float64,
-                        strategy, maxfcn, include_best::Bool, rounds::Int)
+                        strategy, maxfcn, include_best::Bool, rounds::Int,
+                        iterate::Int = 5, on_unit = nothing,
+                        side::Symbol = :unknown)
     fcnraw = m.fcn.f
     up = Float64(m.up)
     ladder = _penalty_ladder(lambda)
@@ -333,8 +368,8 @@ function _extremize_dir(m::Minuit, f, sgn::Int, bound::Float64,
     naccepted = 0
 
     records = NamedTuple{(:seed, :converged, :accepted, :projected,
-                          :fcn, :f_raw, :f, :nfcn),
-                         Tuple{Int,Bool,Bool,Bool,Float64,Float64,Float64,Int}}[]
+                          :fcn, :f_raw, :f, :nfcn, :f_nonfinite),
+                         Tuple{Int,Bool,Bool,Bool,Float64,Float64,Float64,Int,Int}}[]
     seen = Vector{Vector{Float64}}()
     for (k, raw) in enumerate(pool)
         x = _usable_seed(m, raw)
@@ -347,6 +382,15 @@ function _extremize_dir(m::Minuit, f, sgn::Int, bound::Float64,
         v_raw = NaN
         v = NaN
         nf = 0
+        # Tally of non-finite/throwing `f` probes the penalty objective steered
+        # around (field report E4 / P4); shared across this seed's stages+rounds.
+        nonfinite = Ref(0)
+        # `on_unit` records are BUFFERED here and fired only AFTER the outer
+        # try/catch below — the catch swallows `_EXTREMIZE_CATCH` (DomainError,
+        # ArgumentError, …), so firing the user callback inside it would
+        # silently eat a throwing checkpoint callback. Buffering keeps per-unit
+        # granularity while letting callback exceptions propagate.
+        pending = on_unit === nothing ? nothing : NamedTuple[]
         try
             # Each ladder stage gets its own Minuit clone of `m`: names,
             # limits, fixed flags, step sizes (post-fit errors), strategy and
@@ -378,20 +422,40 @@ function _extremize_dir(m::Minuit, f, sgn::Int, bound::Float64,
             cur_best = x
             v_best = NaN
             local mm = nothing
-            for _ in 1:rounds
-                for lam in ladder
-                    obj = _penalty_obj(fcnraw, f, sgn, bound, up, lam)
+            for ri in 1:rounds
+                for (si, lam) in enumerate(ladder)
+                    obj = _penalty_obj(fcnraw, f, sgn, bound, up, lam, nonfinite)
+                    # The MIGRAD subfit and its domain-edge failures are caught
+                    # here; the `on_unit` hook is fired OUTSIDE this try (below)
+                    # so a throwing user callback is NEVER swallowed by the
+                    # `_EXTREMIZE_CATCH` net (which includes ArgumentError /
+                    # DomainError — a broken checkpoint must surface).
+                    unit_mmk = nothing
                     try
                         mmk = Minuit(obj, m; up = 1.0)
                         mmk.values = cur
                         Logging.with_logger(Logging.NullLogger()) do
-                            migrad!(mmk; strategy = strategy, maxfcn = maxfcn)
+                            migrad!(mmk; strategy = strategy, maxfcn = maxfcn,
+                                    iterate = iterate)
                         end
                         cur = collect(Float64, mmk.values)
                         nf += mmk.nfcn
                         mm = mmk
+                        unit_mmk = mmk
                     catch err
                         err isa _EXTREMIZE_CATCH || rethrow()
+                    end
+                    # P5: buffer one record per completed penalty-MIGRAD unit
+                    # (the resumable-journal granularity). The raw FCN at `cur`
+                    # is only evaluated when a hook is attached, so the default
+                    # path pays nothing. `_fcn_or_inf` never throws. The actual
+                    # `on_unit` call happens after the outer try (see below).
+                    if pending !== nothing && unit_mmk !== nothing
+                        push!(pending, (side = side, seed = k, round = ri,
+                                        stage = si, cur = copy(cur),
+                                        nfcn = unit_mmk.nfcn,
+                                        fcn = _fcn_or_inf(fcnraw, cur),
+                                        valid = unit_mmk.valid))
                     end
                 end
                 # Guarded like the in-objective f: a throw here means the
@@ -457,9 +521,16 @@ function _extremize_dir(m::Minuit, f, sgn::Int, bound::Float64,
         catch err
             err isa _EXTREMIZE_CATCH || rethrow()
         end
+        # Fire the progress hook OUTSIDE the catch above: a throwing checkpoint
+        # callback must surface, not be swallowed by the domain-error net.
+        if pending !== nothing
+            for u in pending
+                on_unit(u)
+            end
+        end
         push!(records, (seed = k, converged = converged, accepted = accepted,
                         projected = projected, fcn = c, f_raw = v_raw, f = v,
-                        nfcn = nf))
+                        nfcn = nf, f_nonfinite = nonfinite[]))
     end
     return (value = best_v, params = best_p, fcn = best_c, winner = winner,
             naccepted = naccepted, records = records)
@@ -474,8 +545,14 @@ function _extremize_setup(m::Minuit, cl, delta, lambda, accept_tol, seeds,
     m.npar >= 1 ||
         throw(ArgumentError("$fname: needs ≥ 1 free parameter " *
                             "(all parameters are fixed — nothing to vary)"))
+    # Upper bound keeps the `lambda · 1e16` penalty plateau finite (the
+    # f-failure / FCN-domain plateau in `_penalty_obj`) — `lambda ≤ 1e100`
+    # ⇒ plateau ≤ 1e116 ≪ floatmax; far above any useful stiffness (default 1e4).
     (isfinite(lambda) && lambda > 0) ||
         throw(ArgumentError("$fname: lambda must be finite and > 0"))
+    lambda <= 1e100 ||
+        throw(ArgumentError("$fname: lambda must be ≤ 1e100 (the penalty plateau " *
+                            "would overflow); the default 1e4 is ample"))
     (isfinite(accept_tol) && accept_tol >= 0) ||
         throw(ArgumentError("$fname: accept_tol must be finite and ≥ 0"))
     m.valid || @warn "$fname: the input fit is NOT valid — the Δχ² region is " *
@@ -493,6 +570,174 @@ function _extremize_setup(m::Minuit, cl, delta, lambda, accept_tol, seeds,
         throw(ArgumentError("$fname: the FCN bound is not finite (m.fval = $(m.fval))"))
     pool = _seed_pool(m, seeds, fname)
     return δ, up, bound, pool
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Directional (fast linear-direction) mode — field report P2.
+#
+# The exact extremum of the Δχ² region for a derived scalar lies, in the
+# linear-Gaussian limit, along d = C·∇f (the Lagrange/projection condition the
+# file header quotes): max f = f̂ + √(Δχ²·∇fᵀC∇f). Instead of the multi-seed
+# penalty machinery, walk that one ray and secant/bisect the TRUE FCN to its
+# `bound` crossing on each side, then report the TRUE f there. Cost ≈ n_free
+# (gradient) + ~2×(bracket+bisection) FCN calls + 2 f calls — ~50× cheaper than
+# `:full` on the common near-linear case, and it uses the true FCN/f at the
+# crossing so first-order direction error is the only approximation. It does
+# NOT chase non-linear corridors or honour limits that bind before the
+# crossing — use `:full` (optionally seeded) when the two disagree.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Forward-difference ∇f at θ̂ over the FREE parameters (fixed slots → 0). Only
+# sets the search DIRECTION and linear step; the true-FCN root + true-f at the
+# crossing correct any inaccuracy. n_free extra f-evals (tallied in `nf`).
+function _grad_forward(m::Minuit, f, that::Vector{Float64}, fhat::Float64,
+                       nf::Base.RefValue{Int})
+    n = n_pars(m.params)
+    g = zeros(Float64, n)
+    @inbounds for i in 1:n
+        is_fixed(m.params.pars[i]) && continue
+        ei = m.errors[i]
+        scale = (isfinite(ei) && ei > 0) ? ei : max(1.0, abs(that[i]))
+        h = max(1e-10, 1e-6 * scale)
+        xp = copy(that); xp[i] += h
+        fp = f(xp); nf[] += 1
+        (fp isa Real && isfinite(fp)) || throw(ArgumentError(
+            "extremize(mode=:directional): f is non-finite at a gradient probe of " *
+            "parameter $i — supply `grad_f`, or use mode=:full."))
+        g[i] = (Float64(fp) - fhat) / h
+    end
+    return g
+end
+
+# Smallest α ≥ 0 with FCN(θ̂ + α·dir) crossing `bound`, returned on the FEASIBLE
+# side (FCN ≤ bound) — the directional analogue of `_project_to_bound`. Linear
+# guess `α_lin`, geometric bracket expansion, then a SECANT (regula-falsi) root
+# with a bisection safeguard so it converges in a handful of FCN calls (the
+# pure-bisection ladder cost ~40/side; secant ~5–8). Converges on the FCN
+# residual `bound − FCN ≤ ftol·up` on the feasible side — α to machine ε is
+# unnecessary (the endpoint `f` is evaluated there anyway). A throwing /
+# non-finite FCN (outside the domain) counts as infeasible (c > bound).
+function _root_on_ray(fcnraw, that::Vector{Float64}, dir::Vector{Float64},
+                      bound::Float64, α_lin::Float64, up::Float64,
+                      nf::Base.RefValue{Int};
+                      ftol::Float64 = 1e-4, maxiter::Int = 40, expand_max::Int = 80)
+    evalc(α) = (nf[] += 1; _fcn_or_inf(fcnraw, that .+ α .* dir))
+    α_lo, c_lo = 0.0, evalc(0.0)                    # c(0) = m.fval < bound
+    α_hi = α_lin > 0 ? α_lin : 1.0
+    c_hi = evalc(α_hi)
+    nexp = 0
+    while c_hi <= bound && nexp < expand_max
+        α_lo, c_lo = α_hi, c_hi
+        α_hi *= 1.6
+        c_hi = evalc(α_hi)
+        nexp += 1
+    end
+    # Never left the region (flat/unbounded ray within budget): best feasible α.
+    c_hi <= bound && return (alpha = α_lo, fcn = c_lo)
+    for _ in 1:maxiter
+        # Converged: feasible side within ftol·up below the boundary.
+        (bound - c_lo) <= ftol * up && break
+        h_lo = c_lo - bound
+        h_hi = c_hi - bound
+        # Secant/regula-falsi step from the bracket; bisect if it would leave
+        # the bracket or hug an endpoint (the classic regula-falsi stall).
+        αs = α_hi - h_hi * (α_hi - α_lo) / (h_hi - h_lo)
+        if !(α_lo < αs < α_hi) || min(αs - α_lo, α_hi - αs) < 1e-3 * (α_hi - α_lo)
+            αs = 0.5 * (α_lo + α_hi)
+        end
+        cs = evalc(αs)
+        if cs <= bound
+            α_lo, c_lo = αs, cs
+        else
+            α_hi, c_hi = αs, cs
+        end
+        (α_hi - α_lo) <= 1e-12 * max(1.0, α_hi) && break
+    end
+    return (alpha = α_lo, fcn = c_lo)               # feasible by construction
+end
+
+function _extremize_directional(m::Minuit, f, grad_f, δ::Float64, up::Float64,
+                                bound::Float64, that::Vector{Float64},
+                                fhat::Float64, cl::Real, delta)
+    C = m.covariance
+    C === nothing && throw(ArgumentError(
+        "extremize(mode=:directional): no covariance is available — run `migrad!(m)` " *
+        "(and `hesse!(m)` for a reliable C) so `m.covariance` is set."))
+    n = n_pars(m.params)
+    fcnraw = m.fcn.f
+    nf_fcn = Ref(0)
+    nf_f = Ref(0)
+    # Directional walks θ̂ ± α·Cg ignoring parameter limits, so a crossing past a
+    # binding limit yields `plo`/`phi` OUTSIDE the limited set — warn if any free
+    # parameter is bounded (use :full when a limit is near-binding).
+    if any(!is_fixed(p) && has_limits(p) for p in m.params.pars)
+        @warn "extremize(mode=:directional): the fit has bounded free parameters; " *
+              "the directional ray ignores limits, so a boundary crossing (and the " *
+              "returned plo/phi) may lie outside them. Use mode=:full if a limit binds."
+    end
+    g = if grad_f === nothing
+        _grad_forward(m, f, that, fhat, nf_f)
+    else
+        gg = collect(Float64, grad_f(that))
+        length(gg) == n || throw(ArgumentError(
+            "extremize(mode=:directional): grad_f returned length $(length(gg)), " *
+            "expected $n (full external gradient)"))
+        @inbounds for i in 1:n
+            is_fixed(m.params.pars[i]) && (gg[i] = 0.0)
+        end
+        gg
+    end
+    Cg = C * g                                  # = C·∇f; fixed slots stay 0
+    gCg = 0.0
+    @inbounds for i in 1:n
+        gCg += g[i] * Cg[i]
+    end
+    gCg > 0 || throw(ArgumentError(
+        "extremize(mode=:directional): ∇fᵀC∇f = $gCg is not positive — f is flat " *
+        "along the covariance (or C is degenerate); use mode=:full."))
+    α_lin = sqrt(δ / gCg)
+    rp = _root_on_ray(fcnraw, that, Cg, bound, α_lin, up, nf_fcn)   # +dir: f increases
+    rm = _root_on_ray(fcnraw, that, -Cg, bound, α_lin, up, nf_fcn)  # −dir: f decreases
+    θp = that .+ rp.alpha .* Cg
+    θm = that .- rm.alpha .* Cg
+    # `f` at each crossing — guarded exactly like the `:full` path's f-failure
+    # contract (review: a throw here must NOT crash `:directional` either). A
+    # throwing OR non-finite `f` maps to NaN and is dropped from the candidate
+    # set; the per-side `f_failed_*` flag below makes the resulting collapse to
+    # the best-fit value detectable (it is otherwise silent).
+    evalf(θ) = (nf_f[] += 1; v = try
+                    f(θ)
+                catch err
+                    err isa _EXTREMIZE_CATCH || rethrow()
+                    NaN
+                end;
+                (v isa Real && isfinite(v)) ? Float64(v) : NaN)
+    fp = evalf(θp)
+    fm = evalf(θm)
+    # contains-best-fit by construction: min/max over {f̂, f₊, f₋} (f̂ finite).
+    cands = Tuple{Float64,Vector{Float64}}[(fhat, copy(that))]
+    isnan(fp) || push!(cands, (fp, θp))
+    isnan(fm) || push!(cands, (fm, θm))
+    hitem = argmax(c -> c[1], cands)
+    loitem = argmin(c -> c[1], cands)
+    # A non-finite `f` at a crossing collapses that side onto the best fit —
+    # warn (mirroring the `:full` `naccepted == 0` warning) so a degenerate
+    # `lo == hi == fbest` is never mistaken for a genuinely tight interval.
+    if isnan(fp) || isnan(fm)
+        @warn "extremize(mode=:directional): f is non-finite at the " *
+              (isnan(fp) && isnan(fm) ? "lower AND upper" : isnan(fm) ? "lower" : "upper") *
+              " boundary crossing — that side falls back to the best-fit value " *
+              "(the interval is degenerate there). Use mode=:full, or check f " *
+              "near the Δχ² boundary."
+    end
+    diag = (grad = g, dir = Cg, gCg = gCg, alpha_lin = α_lin,
+            alpha_lo = -rm.alpha, alpha_hi = rp.alpha,
+            fcn_lo = rm.fcn, fcn_hi = rp.fcn,
+            f_failed_lo = isnan(fm), f_failed_hi = isnan(fp),
+            nfcn = nf_fcn[], nf = nf_f[])
+    return ExtremizeResult(loitem[1], hitem[1], loitem[2], hitem[2], fhat,
+                           bound, δ, delta === nothing ? Float64(cl) : NaN, up,
+                           :directional, diag)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -539,10 +784,43 @@ representatives) via `seeds`, and **audit `r.diagnostics`**: per-seed
 acceptance and `f` values, and which seed won each side (`winner_* == 0`
 means no penalty fit beat the best-fit value itself).
 
+# Cheap mode for expensive FCNs, and the `f`-failure contract
+
+For an FCN/`f` that costs seconds, the default `:full` algorithm (multi-seed ×
+ladder × rounds MIGRADs) can be hours per call — use `mode = :directional`
+(below) for the common near-linear case (≈ `n_free + ~15` paired calls, ~50×
+cheaper), and on the `:full` path set `rounds = 1`, a small `maxfcn`, and
+`strategy = 0`. **`f` may throw OR return a non-finite value at infeasible θ —
+both are safe**: such probes become a finite high plateau the optimizer steers
+around (never `NaN` into MIGRAD), tallied as `f_nonfinite` in the diagnostics.
+A genuinely non-finite-`f` region may legitimately NARROW the interval (the
+optimizer cannot reach past it) — that is safe, not a bias. Do NOT instead
+return a sentinel like `0.0` from a failing `f`: that *centers* the endpoint
+(a silent bias). In `mode = :directional`, a non-finite `f` at a boundary
+crossing collapses that side onto the best fit, with a warning and a
+`f_failed_lo`/`f_failed_hi` diagnostic flag.
+
 # Keyword arguments
 - `cl::Real = 1` — confidence level, [`delta_chisq`](@ref) convention:
   `cl ≥ 1` is **nσ** (1 → 68.27 %, 2 → 95.45 %), `0 < cl < 1` a
   **probability** (0.95 → 95 %). Threshold: `Δχ² = delta_chisq(cl, 1)`.
+- `mode::Symbol = :full` — `:full` is the multi-seed penalty extremization
+  (handles non-linear / multi-corridor regions). `:directional` is the fast
+  linear-direction crossing: it forms `d = C·∇f` at θ̂ (the Lagrange/projection
+  direction this docstring's formula uses), secant/bisects the **true** FCN to
+  its `bound` crossing on each side, and reports the **true** `f` there. Cost ≈
+  `n_free` (gradient) + ~2× a dozen FCN calls + 2 `f` calls — exact in the
+  linear-Gaussian limit, and `r.mode === :directional` flags it so it is not
+  mistaken for the full profile. It ignores `seeds`, does not chase non-linear
+  corridors, and does not honour parameter limits that bind before the crossing
+  — `r.plo`/`r.phi` may then lie OUTSIDE the limits (it warns when free
+  parameters are bounded). The recommended workflow is `:directional` first,
+  then `:full` (optionally seeded) only if you suspect non-linearity, a binding
+  limit, or the two disagree. Requires `m.covariance` (run `migrad!`/`hesse!`
+  first).
+- `grad_f = nothing` — optional `θ -> ∇f(θ)` (full external length) for
+  `mode = :directional`; replaces the `n_free`-call forward-difference
+  gradient. Ignored by `mode = :full`.
 - `seeds = nothing` — extra start points: a vector of full external
   parameter vectors, the **rows** of a matrix, or a single vector. The best
   fit is always prepended as seed 1. Fixed coordinates are re-pinned and
@@ -571,7 +849,19 @@ means no penalty fit beat the best-fit value itself).
   it. Iteration stops as soon as a round no longer improves `f` (a smooth
   problem therefore runs 2 rounds: one to converge, one to confirm).
 - `strategy = m.strategy`, `maxfcn = nothing` — per-penalty-fit MIGRAD
-  strategy and call budget.
+  strategy and call budget. For an expensive FCN, `strategy = 0` (no inner
+  HESSE) and a modest `maxfcn` cut the cost sharply.
+- `iterate::Integer = 5` — the per-penalty-MIGRAD retry budget forwarded to
+  [`migrad!`](@ref) (its `_robust_low_level_fit` parity). The default helps a
+  stiff-penalty stage that stalls invalid recover; for an expensive FCN set
+  `iterate = 1` to forbid retries (the cheapest setting — combine with
+  `rounds = 1`).
+- `on_unit = nothing` — a callback `u -> …` fired once per completed penalty-
+  MIGRAD unit with `u = (side, seed, round, stage, cur, nfcn, fcn, valid)` —
+  the granularity of one MIGRAD (≈ one expensive step). Use it for live
+  progress or to checkpoint partial work externally (a kill then only loses
+  the in-flight unit). Attaching it adds one FCN evaluation per unit (to report
+  `fcn`); the default `nothing` pays nothing. Ignored by `mode = :directional`.
 
 # Cost & guarantees
 
@@ -608,12 +898,17 @@ See also [`profile_band`](@ref) (pointwise band of a curve family),
 and `docs/src/error_analysis.md` for the full decision guide.
 """
 function extremize(m::Minuit, f; cl::Real = 1, seeds = nothing,
+                   mode::Symbol = :full, grad_f = nothing,
                    lambda::Real = 1e4, accept_tol::Real = 0.05,
                    delta::Union{Real,Nothing} = nothing,
                    rounds::Integer = 4,
                    strategy = m.strategy,
-                   maxfcn::Union{Integer,Nothing} = nothing)
+                   maxfcn::Union{Integer,Nothing} = nothing,
+                   iterate::Integer = 5, on_unit = nothing)
+    mode === :full || mode === :directional ||
+        throw(ArgumentError("extremize: mode must be :full or :directional, got :$mode"))
     rounds >= 1 || throw(ArgumentError("extremize: rounds must be ≥ 1"))
+    iterate >= 1 || throw(ArgumentError("extremize: iterate must be ≥ 1"))
     δ, up, bound, pool = _extremize_setup(m, cl, delta, lambda, accept_tol,
                                           seeds, "extremize")
     that = pool[1]
@@ -621,16 +916,25 @@ function extremize(m::Minuit, f; cl::Real = 1, seeds = nothing,
     isfinite(fhat) ||
         throw(ArgumentError("extremize: f(best fit) is not finite"))
 
+    if mode === :directional
+        seeds === nothing ||
+            @warn "extremize(mode=:directional): `seeds` are ignored (the " *
+                  "directional mode walks the single C·∇f ray, not a seed pool)."
+        return _extremize_directional(m, f, grad_f, δ, up, bound, that, fhat, cl, delta)
+    end
+
     λ = Float64(lambda)
     tolacc = Float64(accept_tol)
     lo = _extremize_dir(m, f, -1, bound, pool, fhat, that;
                         lambda = λ, accept_tol = tolacc, strategy = strategy,
                         maxfcn = maxfcn, include_best = true,
-                        rounds = Int(rounds))
+                        rounds = Int(rounds), iterate = Int(iterate),
+                        on_unit = on_unit, side = :lower)
     hi = _extremize_dir(m, f, +1, bound, pool, fhat, that;
                         lambda = λ, accept_tol = tolacc, strategy = strategy,
                         maxfcn = maxfcn, include_best = true,
-                        rounds = Int(rounds))
+                        rounds = Int(rounds), iterate = Int(iterate),
+                        on_unit = on_unit, side = :upper)
     for (side, r) in (("min", lo), ("max", hi))
         r.naccepted == 0 &&
             @warn "extremize: no penalty fit was accepted on the $side side — " *
@@ -644,7 +948,7 @@ function extremize(m::Minuit, f; cl::Real = 1, seeds = nothing,
             fcn_min = lo.fcn, fcn_max = hi.fcn)
     return ExtremizeResult(lo.value, hi.value, lo.params, hi.params, fhat,
                            bound, δ, delta === nothing ? Float64(cl) : NaN,
-                           up, diag)
+                           up, :full, diag)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -713,6 +1017,11 @@ to control it.
   band even where every penalty fit failed (such failures are still counted
   in `nfail`/diagnostics). With `false`, a fully-failed side is `NaN` —
   useful when benchmarking the optimizer itself.
+- `iterate::Integer = 5` — per-penalty-MIGRAD retry budget (see
+  [`extremize`](@ref)); `iterate = 1` is the cheapest for an expensive FCN.
+- `on_unit = nothing` — per-MIGRAD-unit progress callback (see
+  [`extremize`](@ref)); the record additionally carries `(x, point, pass)` for
+  the grid point. Enables external checkpointing of a long band sweep.
 - `verbose::Bool = false` — `@info` one line per pass.
 
 # Example
@@ -737,10 +1046,12 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
                       rounds::Integer = 1,
                       strategy = m.strategy,
                       maxfcn::Union{Integer,Nothing} = nothing,
+                      iterate::Integer = 5, on_unit = nothing,
                       verbose::Bool = false)
     isempty(xs) && throw(ArgumentError("profile_band: xs is empty"))
     passes >= 1 || throw(ArgumentError("profile_band: passes must be ≥ 1"))
     rounds >= 1 || throw(ArgumentError("profile_band: rounds must be ≥ 1"))
+    iterate >= 1 || throw(ArgumentError("profile_band: iterate must be ≥ 1"))
     δ, up, bound, pool = _extremize_setup(m, cl, delta, lambda, accept_tol,
                                           seeds, "profile_band")
     that = pool[1]
@@ -773,6 +1084,11 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
             fi = let xi = xv[i]
                 θ -> f(xi, θ)
             end
+            # Per-point progress hook: inject the grid point `x`/index/pass into
+            # the unit record (P5); `nothing` when no hook is attached.
+            ou = on_unit === nothing ? nothing : let xi = xv[i], ii = i, pp = pass
+                u -> on_unit(merge(u, (x = xi, point = ii, pass = pp)))
+            end
             # Per-point seed list: warm neighbour + current incumbent + the
             # full pool, duplicates skipped inside _extremize_dir. Seed
             # indices in the records refer to THIS list.
@@ -784,7 +1100,8 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
                                  lambda = λ, accept_tol = tolacc,
                                  strategy = strategy, maxfcn = maxfcn,
                                  include_best = include_best,
-                                 rounds = Int(rounds))
+                                 rounds = Int(rounds), iterate = Int(iterate),
+                                 on_unit = ou, side = :lower)
             shi = Vector{Vector{Float64}}()
             warm && whi !== nothing && push!(shi, whi)
             phi[i] === nothing || push!(shi, phi[i])
@@ -793,7 +1110,8 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
                                  lambda = λ, accept_tol = tolacc,
                                  strategy = strategy, maxfcn = maxfcn,
                                  include_best = include_best,
-                                 rounds = Int(rounds))
+                                 rounds = Int(rounds), iterate = Int(iterate),
+                                 on_unit = ou, side = :upper)
 
             fits_lo[i] += length(rlo.records); acc_lo[i] += rlo.naccepted
             fits_hi[i] += length(rhi.records); acc_hi[i] += rhi.naccepted
@@ -848,10 +1166,17 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", r::ExtremizeResult)
     d = r.diagnostics
-    println(io, "extremize: f ∈ [", _fmt_num(r.lo), ", ", _fmt_num(r.hi),
-            "]   (", _extremize_level(r.delta, r.cl), ", up = ", r.up, ")")
+    println(io, "extremize [", r.mode, "]: f ∈ [", _fmt_num(r.lo), ", ",
+            _fmt_num(r.hi), "]   (", _extremize_level(r.delta, r.cl),
+            ", up = ", r.up, ")")
     println(io, "  best fit f̂ = ", _fmt_num(r.fbest), "   (inside by construction)")
-    # winner 0 is benign when fits were accepted (the best fit IS the
+    if r.mode === :directional
+        print(io, "  direction C·∇f, ∇fᵀC∇f = ", _fmt_num(d.gCg),
+              ";  crossings α ∈ [", _fmt_num(d.alpha_lo), ", ",
+              _fmt_num(d.alpha_hi), "]   (", d.nfcn, " FCN, ", d.nf, " f calls)")
+        return
+    end
+    # :full — winner 0 is benign when fits were accepted (the best fit IS the
     # extremum for that side) and a failure when none were.
     wname(w, nacc) = w != 0 ? "seed $w" :
                      nacc > 0 ? "best fit (genuinely extremal)" :

@@ -158,6 +158,23 @@ values, so feasibility can be checked rather than trusted.
 For a genuinely **joint** statement (e.g. tracing a 2-D support function),
 override the threshold explicitly: `extremize(m, f; delta = delta_chisq(cl, 2))`.
 
+**Expensive FCN / `f` (seconds per evaluation).** The default `:full` algorithm
+runs `2 sides × seeds × ladder-stages × rounds` MIGRADs and can be hours per
+call — for the common **near-linear** case use `mode = :directional`, which
+walks the single projection direction `C·∇f`, secant-roots the *true* FCN to
+the `Δχ²` boundary on each side, and reports the *true* `f` there (≈ `n_free +
+~15` paired evaluations, ~50× cheaper, exact in the linear-Gaussian limit). The
+recommended workflow is **directional first, `:full` only if you suspect
+non-linearity or the two disagree**. On the `:full` path, cut cost with
+`rounds = 1`, `iterate = 1`, `strategy = 0`, and a modest `maxfcn`. For a long
+run on a shared/kill-prone machine, attach `on_unit = …` (fired once per
+penalty-MIGRAD unit) to checkpoint partial work externally. Finally, **`f` may
+throw or return a non-finite value at infeasible θ — both are safe** (the probe
+becomes a finite plateau the optimizer steers around, never a `NaN` into
+MIGRAD); a genuinely non-finite-`f` region may legitimately *narrow* the
+interval, which is safe — but do **not** return a sentinel like `0.0`, which
+*centres* the endpoint (a silent bias).
+
 When the band goes into a figure, write **pointwise** in the caption: each
 `x` is its own 68 % statement, and the whole true curve lies inside the band
 everywhere-at-once with lower probability.

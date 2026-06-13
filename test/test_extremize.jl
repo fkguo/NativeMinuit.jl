@@ -2,6 +2,7 @@
 using JuMinuit
 using Test
 using LinearAlgebra
+using Logging
 
 # extremize / profile_band — Δχ²-region extremization of derived quantities
 # and the pointwise profile-likelihood band. The validation targets:
@@ -441,11 +442,193 @@ end
     r = extremize(m, f15)
     @test occursin("ExtremizeResult", repr(r))
     plain = sprint(show, MIME"text/plain"(), r)
-    @test occursin("extremize: f ∈ [", plain)
+    @test occursin("extremize [full]: f ∈ [", plain)
     @test occursin("winner seed 1", plain)
     band = profile_band(m, fb, xs5)
     @test occursin("ProfileBand(5 points)", repr(band))
     bplain = sprint(show, MIME"text/plain"(), band)
     @test occursin("pointwise profile envelope", bplain)
     @test occursin("group failures: 0", bplain)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Expensive-FCN features (f1(1420) field report): mode=:directional, the
+#    f-failure contract (P4), iterate pass-through, and the on_unit hook (P5).
+# ─────────────────────────────────────────────────────────────────────────────
+
+@testset "extremize — mode=:directional (fast linear-direction crossing)" begin
+    m = _ex_linear_fit()
+    # Exact in the linear-Gaussian limit: directional must reproduce the
+    # projection-theorem interval (and the :full result) to high accuracy, at a
+    # tiny fraction of the FCN cost.
+    ncall = Ref(0)
+    counting(θ) = (ncall[] += 1; _ex_chi2(θ))
+    mc = Minuit(counting, [0.0, 0.0]; errors = [0.1, 0.1]); migrad!(mc); hesse!(mc)
+    for x0 in (15.0, -3.0, 0.0), cl in (1, 2)
+        c = [1.0, x0]
+        σf = sqrt(c' * _ex_C * c); f̂ = c' * _ex_θ̂; hw = sqrt(delta_chisq(cl, 1)) * σf
+        fcall = Ref(0)
+        fx(θ) = (fcall[] += 1; θ[1] + θ[2] * x0)
+        ncall[] = 0
+        r = extremize(mc, fx; cl = cl, mode = :directional)
+        @test r.mode === :directional
+        @test r.lo ≈ f̂ - hw atol = 1e-3 * hw
+        @test r.hi ≈ f̂ + hw atol = 1e-3 * hw
+        @test r.lo <= r.fbest <= r.hi
+        # endpoints feasible on the boundary
+        @test _ex_chi2(r.plo) <= r.bound + 1e-6
+        @test _ex_chi2(r.phi) <= r.bound + 1e-6
+        # cost ceiling: ≤ n_free + ~30 of each of FCN and f (field report budget)
+        @test ncall[] <= mc.npar + 60
+        @test fcall[] <= mc.npar + 30
+        # directional diagnostics present
+        @test haskey(r.diagnostics, :gCg) && r.diagnostics.gCg > 0
+        @test haskey(r.diagnostics, :alpha_lo) && haskey(r.diagnostics, :alpha_hi)
+    end
+
+    # user-supplied grad_f reproduces the numerical-gradient result
+    rnum = extremize(mc, θ -> θ[1] + θ[2] * 15.0; mode = :directional)
+    rana = extremize(mc, θ -> θ[1] + θ[2] * 15.0; mode = :directional,
+                     grad_f = θ -> [1.0, 15.0])
+    @test rana.lo ≈ rnum.lo atol = 1e-6
+    @test rana.hi ≈ rnum.hi atol = 1e-6
+
+    # :full and :directional agree on this (linear) target
+    rfull = extremize(mc, θ -> θ[1] + θ[2] * 15.0)
+    @test rana.lo ≈ rfull.lo atol = 1e-3 * (rfull.hi - rfull.lo)
+    @test rana.hi ≈ rfull.hi atol = 1e-3 * (rfull.hi - rfull.lo)
+
+    # seeds are ignored (with a warning) in directional mode
+    @test_logs (:warn, r"seeds.* ignored") match_mode = :any extremize(
+        mc, θ -> θ[1]; mode = :directional, seeds = [[0.9, 1.9]])
+
+    # a flat-along-C direction (∇fᵀC∇f = 0) is rejected, not silently wrong
+    @test_throws ArgumentError extremize(mc, θ -> 1.0; mode = :directional)
+    @test_throws ArgumentError extremize(mc, θ -> θ[1]; mode = :bogus)
+
+    # non-finite f at the boundary crossings (finite only in a tiny ball around
+    # θ̂, so the gradient still succeeds) collapses both sides onto the best fit
+    # — but DETECTABLY: a warning fires and the f_failed_* flags are set, so
+    # lo == hi == fbest is never mistaken for a genuinely tight interval. A
+    # throwing f at the crossing is equally safe (no crash).
+    mthat = collect(mc.values)
+    fcross(θ) = norm(θ .- mthat) < 1e-3 ? (θ[1] + θ[2] * 15.0) : NaN
+    rcol = @test_logs (:warn, r"non-finite at the") match_mode = :any extremize(
+        mc, fcross; mode = :directional)
+    @test rcol.diagnostics.f_failed_lo && rcol.diagnostics.f_failed_hi
+    @test rcol.lo == rcol.hi == rcol.fbest
+    fthrow(θ) = norm(θ .- mthat) < 1e-3 ? (θ[1] + θ[2] * 15.0) : throw(DomainError(θ))
+    @test Logging.with_logger(Logging.NullLogger()) do
+        try; extremize(mc, fthrow; mode = :directional); true; catch; false; end
+    end
+
+    # a bounded free parameter ⇒ directional warns (it ignores limits)
+    mb = Minuit(_ex_chi2, [0.0, 0.0]; errors = [0.1, 0.1], limits = [(-5.0, 5.0), nothing])
+    migrad!(mb); hesse!(mb)
+    @test_logs (:warn, r"bounded free parameters") match_mode = :any extremize(
+        mb, θ -> θ[1] + θ[2] * 15.0; mode = :directional)
+end
+
+@testset "extremize — f-failure contract (P4): non-finite f is safe" begin
+    m = _ex_linear_fit()
+    that = collect(m.values)
+    f15(θ) = θ[1] + θ[2] * 15.0
+    rclean = extremize(m, f15)
+
+    # f that returns NaN at ~30% of probes (but is finite at the anchor): the
+    # call must neither error nor silently bias the endpoints, and the
+    # rejections are tallied. A failing side may legitimately *warn*
+    # (`naccepted == 0`) — that is the opposite of a silent bias — so we assert
+    # no THROW (the safety contract), not no-warning. A deterministic failure
+    # pattern keyed on θ keeps it stable. Logs are muted to keep the suite quiet.
+    bad(θ) = (isapprox(θ, that; atol = 1e-9) ? f15(θ) :
+              (hash(round.(θ; digits = 6)) % 10 < 3 ? NaN : f15(θ)))
+    local r = nothing
+    @test Logging.with_logger(Logging.NullLogger()) do
+        try; r = extremize(m, bad); true; catch; false; end
+    end
+    @test isfinite(r.lo) && isfinite(r.hi)
+    @test r.lo <= r.fbest <= r.hi               # brackets the best fit
+    @test r.lo <= rclean.fbest <= r.hi          # brackets the true best-fit value
+    # NOT collapsed to [fbest, fbest]: a non-finite-f region may narrow the
+    # interval, but with only ~30% of probes failing it must retain a
+    # substantial width (≥ 30% of the clean interval) — this is the assertion
+    # that actually rules out the silent-centre-collapse failure mode.
+    @test (r.hi - r.lo) >= 0.3 * (rclean.hi - rclean.lo)
+    nnf = sum(rec.f_nonfinite for rec in vcat(r.diagnostics.min, r.diagnostics.max))
+    @test nnf > 0                                # rejections recorded, not hidden
+    @test all(haskey(rec, :f_nonfinite) for rec in r.diagnostics.min)
+
+    # f that THROWS (a different failure mode) is equally safe (no throw escapes).
+    thrower(θ) = (isapprox(θ, that; atol = 1e-9) ? f15(θ) :
+                  (hash(round.(θ; digits = 6)) % 10 < 3 ? throw(DomainError(θ)) : f15(θ)))
+    @test Logging.with_logger(Logging.NullLogger()) do
+        try; extremize(m, thrower); true; catch; false; end
+    end
+end
+
+@testset "extremize/profile_band — iterate pass-through + on_unit hook (P5)" begin
+    m = _ex_linear_fit()
+    f15(θ) = θ[1] + θ[2] * 15.0
+
+    # iterate must be ≥ 1; iterate=1 forbids the per-MIGRAD retry and is the
+    # cheapest setting (still a valid, best-fit-bracketing interval).
+    @test_throws ArgumentError extremize(m, f15; iterate = 0)
+    r1 = extremize(m, f15; rounds = 1, iterate = 1, strategy = 0)
+    @test r1.lo <= r1.fbest <= r1.hi
+    @test isfinite(r1.lo) && isfinite(r1.hi)
+
+    # on_unit fires once per completed penalty-MIGRAD unit with the documented
+    # record; count > 0 and every payload carries the unit key.
+    units = NamedTuple[]
+    extremize(m, f15; rounds = 1, on_unit = u -> push!(units, u))
+    @test !isempty(units)
+    for u in units
+        @test u.side === :lower || u.side === :upper
+        @test haskey(u, :seed) && haskey(u, :round) && haskey(u, :stage)
+        @test haskey(u, :cur) && length(u.cur) == 2
+        @test haskey(u, :nfcn) && haskey(u, :fcn) && haskey(u, :valid)
+    end
+
+    # A throwing on_unit callback must PROPAGATE — even when it throws one of
+    # the domain-failure types the internal MIGRAD guard catches (DomainError ∈
+    # _EXTREMIZE_CATCH). A swallowed checkpoint exception would be a silent
+    # data-loss bug; the hook is deliberately fired outside that catch.
+    @test_throws DomainError extremize(
+        m, f15; rounds = 1, on_unit = u -> throw(DomainError(0.0, "checkpoint failed")))
+
+    # profile_band forwards both; the band hook record additionally carries the
+    # grid point.
+    fb(x, θ) = θ[1] + θ[2] * x
+    bunits = NamedTuple[]
+    band = profile_band(m, fb, 0.0:2.0:8.0; passes = 1, iterate = 1,
+                        on_unit = u -> push!(bunits, u))
+    @test band.nfail == 0
+    @test !isempty(bunits)
+    @test all(haskey(u, :x) && haskey(u, :point) && haskey(u, :pass) for u in bunits)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Directional with a fixed parameter; ExtremizeResult back-compat ctor.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@testset "extremize — directional fixed params + back-compat constructor" begin
+    # A FIXED parameter must stay pinned and contribute nothing to the
+    # direction (its gradient/Cg slot is zero); the interval still forms.
+    mfix = Minuit(_ex_chi2, [0.0, 0.0]; errors = [0.1, 0.1], fixed = [false, true])
+    migrad!(mfix); hesse!(mfix)
+    rfix = extremize(mfix, θ -> θ[1] + θ[2] * 15.0; mode = :directional)
+    @test rfix.diagnostics.grad[2] == 0.0                 # fixed slot zeroed
+    @test rfix.plo[2] == mfix.values[2] == rfix.phi[2]    # fixed coord pinned
+    @test rfix.lo <= rfix.fbest <= rfix.hi
+    @test rfix.lo < rfix.hi                                # non-degenerate
+
+    # Pre-0.5.3 positional construction (10 args, no `mode`) still works and
+    # defaults to :full — the exported result type stays backward-compatible.
+    diag0 = (min = NamedTuple[], max = NamedTuple[], winner_min = 0,
+             winner_max = 0, naccepted_min = 0, naccepted_max = 0,
+             fcn_min = NaN, fcn_max = NaN)
+    rc = ExtremizeResult(1.0, 2.0, [0.0], [0.0], 1.5, 3.0, 1.0, 1.0, 1.0, diag0)
+    @test rc.mode === :full
+    @test rc.lo == 1.0 && rc.hi == 2.0 && rc.fbest == 1.5
 end
