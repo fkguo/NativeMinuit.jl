@@ -408,7 +408,7 @@ function simplex(m::Minuit;
     # when they shrank below the constructor steps (error=1.0 bowl:
     # 2nd-run seed must use 0.25, not max(0.25, 1.0) — that's what lands
     # on iminuit's final [0.5, 0.5]).
-    params_to_use = m.fmin === nothing ? m.params :
+    params_to_use = m.fmin === nothing ? _init_params(m) :
                     _build_resume_params(m; floor_errors = false)
     m.fmin = simplex(m.fcn, params_to_use;
                       maxfcn = eff, minedm = minedm,
@@ -453,13 +453,15 @@ function scan(m::Minuit, par::AbstractString; kwargs...)
 end
 
 # The base Parameters a Minuit-level scan / profile operates on: the current
-# best-fit values when a fit exists (`m.fmin`), else the constructor
-# `m.params`. `m.params` is NOT mutated — this mirrors how migrad / simplex
-# leave the user's initial params intact and report current values via
-# `m.fmin`. Without this, a post-fit `scan` would scan around (and reset the
-# held params to) the stale constructor values, discarding the fit.
+# best-fit values when a fit exists (`m.fmin`), else the stored constructor
+# config (`_init_params(m)` — internal consumers read the raw field, never
+# the fit-overlaid `m.params` property). The stored config is NOT mutated —
+# this mirrors how migrad / simplex leave the user's initial params intact
+# and report current values via `m.fmin`. Without this, a post-fit `scan`
+# would scan around (and reset the held params to) the stale constructor
+# values, discarding the fit.
 _scan_base_params(m::Minuit) =
-    m.fmin === nothing ? m.params : _build_resume_params(m, m.fmin)
+    m.fmin === nothing ? _init_params(m) : _build_resume_params(m, m.fmin)
 
 # Leave `m` at the lowest-FINITE-fval grid point found by a scan, holding the
 # other parameters at their `base` (current) values. The central point (index

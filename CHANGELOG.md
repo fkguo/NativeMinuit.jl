@@ -43,6 +43,11 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
 - `ExtremizeResult` and `ProfileBand` each gained a `mode::Symbol` field (before
   `diagnostics`); back-compatible positional constructors defaulting
   `mode = :full` are provided, so existing positional construction is unaffected.
+- Internal: `simplex(m)` and the Minuit-level `scan`/`profile` base now read the
+  cold-start parameters via `_init_params(m)` (the raw config), completing the
+  v0.5.2 `_init_params` invariant for those two sites. Behavior-neutral — the
+  cold-start read only runs when no fit is cached, where `m.params` already
+  returns the raw field.
 
 ## [0.5.2] — 2026-06-13
 
