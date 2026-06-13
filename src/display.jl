@@ -518,13 +518,27 @@ function _render_heatmap_html(io::IO, m::Minuit)
     print(io, "</table></div>")
 end
 
+# A parameter-name (or literal-value) reference shown inside the amber "⚠ …"
+# warning banners under the fit table. A *bare* <code> inherits the banner's
+# amber text colour but also picks up whatever background the host renderer
+# gives <code> by default; on a dark Jupyter/Pluto/VS Code theme that default
+# is a pale wash that drops the contrast until the name is barely legible
+# against the page (user report, 2026-06). Override it with a fully
+# self-contained, theme-neutral style — transparent background, amber border,
+# amber text — so the chip reads the same on light and dark backgrounds, the
+# same recipe the validity chips above the table use.
+_warn_code_chip(s::AbstractString) = string(
+    """<code style="background:transparent;border:1px solid #bf8700;""",
+    """border-radius:4px;padding:0 0.35em;color:#bf8700">""",
+    _html_escape(s), "</code>")
+
 function _render_corr_warning_html(io::IO, m::Minuit)
     pairs = _strong_corr_pairs(m)
     isempty(pairs) && return
     print(io, """<div style="color:#bf8700;margin-top:0.4em">""")
     for (a, b, ρ) in pairs
-        print(io, "⚠ <code>", _html_escape(a), "</code> ↔ <code>", _html_escape(b),
-              "</code> strongly correlated (ρ = ", _fmt_rho(ρ),
+        print(io, "⚠ ", _warn_code_chip(a), " ↔ ", _warn_code_chip(b),
+              " strongly correlated (ρ = ", _fmt_rho(ρ),
               ") — fit may be poorly conditioned.<br>")
     end
     print(io, "</div>")
@@ -578,12 +592,12 @@ function _render_minos_warning_html(io::IO, m::Minuit)
     failed = _minos_failed(m)
     isempty(failed) && return
     parts = [s == "both" ?
-             string("<code>", _html_escape(nm), "</code>") :
-             string("<code>", _html_escape(nm), "</code> (", s, " side)")
+             _warn_code_chip(nm) :
+             string(_warn_code_chip(nm), " (", s, " side)")
              for (nm, s) in failed]
     print(io, """<div style="color:#bf8700;margin-top:0.4em">""")
     print(io, "⚠ MINOS did not converge for ", join(parts, ", "),
-          " — failed sides are marked <code>invalid</code> in the MINOS column;",
+          " — failed sides are marked ", _warn_code_chip("invalid"), " in the MINOS column;",
           " use the HESSE error for them.")
     print(io, "</div>")
 end

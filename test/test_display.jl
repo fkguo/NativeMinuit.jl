@@ -101,6 +101,11 @@ plain(m) = (io = IOBuffer(); show(io, MIME"text/plain"(), m); String(take!(io)))
         @test !isempty(_D._strong_corr_pairs(mc))
         @test occursin("strongly correlated", plain(mc))
         @test occursin("strongly correlated", html(mc))
+        # Parameter names are rendered as self-contained styled chips (transparent
+        # background + amber border + amber text) so they stay legible on dark
+        # Jupyter/Pluto/VS Code themes; a bare <code> picks up the renderer's
+        # pale default background and washes out (user report, 2026-06).
+        @test occursin("<code style=", html(mc))
         # No spurious warning for a well-conditioned, independent fit.
         miquad = Minuit(p -> (p[1] - 1.0)^2 + (p[2] - 2.0)^2, [0.0, 0.0];
                         names = ["u", "v"])
@@ -134,7 +139,10 @@ plain(m) = (io = IOBuffer(); show(io, MIME"text/plain"(), m); String(take!(io)))
         @test occursin("MINOS did not converge", p)
         @test occursin("`x`", p)
         @test occursin("MINOS did not converge", h)
-        @test occursin("<code>x</code>", h)
+        # The failed name is a self-contained styled chip (transparent bg +
+        # amber border), not a bare <code> that washes out on dark themes.
+        @test occursin("<code style=", h)
+        @test occursin(">x</code>", h)
         # "y" still validated → stays asymmetric in the table (sup/sub present).
         @test occursin("<sup>+", h)
 

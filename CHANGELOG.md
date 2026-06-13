@@ -3,6 +3,20 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Rich HTML display: parameter-name chips in the amber warning banners are now
+  legible on dark themes.** The strong-correlation, MINOS-failure, and at-limit
+  warnings rendered parameter names in a bare `<code>`, which inherited the
+  banner's amber text but picked up the host renderer's pale default `<code>`
+  background — on a dark Jupyter/Pluto/VS Code theme that washed the names out
+  until they were barely readable against the page. Each name (and the literal
+  `invalid` marker) is now a self-contained chip — transparent background, amber
+  border, amber text — so it reads the same on light and dark backgrounds, the
+  same recipe the validity chips above the table already use.
+
 ## [0.5.3] — 2026-06-13
 
 ### Added

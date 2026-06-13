@@ -548,7 +548,10 @@
         show(buf, MIME"text/html"(), m_lim)
         s_lim = String(take!(buf))
         @test occursin("⚠", s_lim)
-        @test occursin("<code>a</code>", s_lim)
+        # The at-limit parameter name is a self-contained styled chip (not a
+        # bare <code>, which washes out on dark themes — user report 2026-06).
+        @test occursin("<code style=", s_lim)
+        @test occursin(">a</code>", s_lim)
 
         # HTML escape — parameter name with `<`, `&`, `"` must be
         # entity-encoded (review IMPORTANT). Without this, IJulia /

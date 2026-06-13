@@ -2588,8 +2588,8 @@ function Base.show(io::IO, ::MIME"text/html", m::Minuit)
             else
                 "lower"
             end
-            print(io, "⚠ Parameter <code>", _html_escape(p.name),
-                  "</code> is at its ", side,
+            print(io, "⚠ Parameter ", _warn_code_chip(p.name),
+                  " is at its ", side,
                   " limit — Hesse/MINOS error is unreliable.<br>")
         end
         print(io, "</div>")
