@@ -632,3 +632,116 @@ end
     @test rc.mode === :full
     @test rc.lo == 1.0 && rc.hi == 2.0 && rc.fbest == 1.5
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. profile_band mode=:directional (per-point fast C·∇f crossing).
+# ─────────────────────────────────────────────────────────────────────────────
+
+@testset "profile_band — mode=:directional (per-point fast crossing)" begin
+    m = _ex_linear_fit()
+    that = collect(m.values)
+    fb(x, θ) = θ[1] + θ[2] * x
+    grid = collect(0.0:1.5:9.0)
+
+    bfull = profile_band(m, fb, grid; passes = 1)
+    bdir  = profile_band(m, fb, grid; mode = :directional)
+    @test bdir.mode === :directional && bfull.mode === :full
+    @test bdir.nfail == 0
+    @test length(bdir.x) == length(grid)
+
+    # Per-point exactness vs the analytic projection-theorem band, + feasibility.
+    for (i, x) in enumerate(grid)
+        c = [1.0, x]; σ = sqrt(c' * _ex_C * c); f̂ = c' * _ex_θ̂
+        @test bdir.lo[i] ≈ f̂ - σ atol = 1e-3 * σ
+        @test bdir.hi[i] ≈ f̂ + σ atol = 1e-3 * σ
+        @test bdir.lo[i] <= bdir.fbest[i] <= bdir.hi[i]
+        @test _ex_chi2(bdir.plo[i]) <= bdir.bound + 1e-6
+        @test _ex_chi2(bdir.phi[i]) <= bdir.bound + 1e-6
+    end
+    @test bdir.lo ≈ bfull.lo atol = 1e-2     # agrees with the :full band
+    @test bdir.hi ≈ bfull.hi atol = 1e-2
+
+    # Much cheaper than :full (counted FCN evaluations).
+    nc = Ref(0)
+    cf2(θ) = (nc[] += 1; _ex_chi2(θ))
+    m2 = Minuit(cf2, [0.0, 0.0]; errors = [0.1, 0.1]); migrad!(m2); hesse!(m2)
+    nc[] = 0; profile_band(m2, fb, grid; passes = 1); nfull = nc[]
+    nc[] = 0; profile_band(m2, fb, grid; mode = :directional); ndir = nc[]
+    @test ndir < nfull ÷ 5                    # observed ~48×; this is a safe floor
+
+    # grad_f path reproduces the numeric-gradient band.
+    bg = profile_band(m, fb, grid; mode = :directional, grad_f = (x, θ) -> [1.0, x])
+    @test bg.lo ≈ bdir.lo atol = 1e-8
+    @test bg.hi ≈ bdir.hi atol = 1e-8
+
+    # Constant f (∇f = 0) ⇒ every point's direction is un-computable: all sides
+    # flagged failed, edges fall back to fbest, NO crash, ONE aggregate warning.
+    bc = @test_logs (:warn, r"un-computable direction") match_mode = :any profile_band(
+        m, (x, θ) -> 1.0, grid; mode = :directional)
+    @test bc.nfail == 2 * length(grid)
+    @test all(bc.lo .== bc.fbest) && all(bc.hi .== bc.fbest)
+    @test all(d.failed_lo && d.failed_hi for d in bc.diagnostics)
+
+    # Bounded free params ⇒ exactly the one sweep-level warning.
+    mb = Minuit(_ex_chi2, [0.0, 0.0]; errors = [0.1, 0.1], limits = [(-5.0, 5.0), nothing])
+    migrad!(mb); hesse!(mb)
+    @test_logs (:warn, r"bounded free parameters") match_mode = :any profile_band(
+        mb, fb, grid; mode = :directional)
+
+    @test_throws ArgumentError profile_band(m, fb, grid; mode = :bogus)
+    @test occursin("profile_band [directional]:", sprint(show, MIME"text/plain"(), bdir))
+
+    # A genuinely BUGGY grad_f (a programming error, here an out-of-bounds index)
+    # must PROPAGATE — not be silently swallowed into a collapsed band. This is
+    # the review's MAJOR: the per-point catch is narrowed to the internal
+    # "direction un-computable" sentinel, so real bugs surface (in BOTH the band
+    # and the single-scalar path), while a legitimately-degenerate direction
+    # (constant f, above) still falls back.
+    buggy(x, θ) = [1.0, θ[3]]                 # θ[3] out of bounds on a 2-param fit
+    @test_throws BoundsError profile_band(m, fb, grid; mode = :directional, grad_f = buggy)
+    @test_throws BoundsError extremize(m, θ -> θ[1]; mode = :directional,
+                                       grad_f = θ -> [1.0, θ[3]])
+    # endpoint vectors are independent objects (no plo === phi aliasing)
+    @test bdir.plo[1] !== bdir.phi[1]
+
+    # f finite at the anchor (so the gradient succeeds) but non-finite at the
+    # boundary crossings ⇒ per point both sides fall back to fbest and are
+    # flagged — no crash, counted in nfail (band analogue of the extremize test).
+    fcross(x, θ) = norm(θ .- collect(m.values)) < 1e-3 ? (θ[1] + θ[2] * x) : NaN
+    bx = @test_logs (:warn, r"non-finite f or an un-computable") match_mode = :any profile_band(
+        m, fcross, grid; mode = :directional)
+    @test bx.nfail == 2 * length(grid)
+    @test all(bx.lo .== bx.fbest) && all(bx.hi .== bx.fbest)
+    @test bx.plo[1] !== bx.phi[1]            # distinct copies even on fallback
+
+    # Round-2 review: a *throwing* f at the gradient probe (an f-DOMAIN failure,
+    # not a NaN return) is the documented-safe case — `profile_band` must
+    # gracefully flag the point (no whole-sweep abort), `extremize` must surface
+    # a clean ArgumentError. The probe sits ~1e-7 from θ̂, so gating the throw on
+    # distance-from-θ̂ makes f throw AT the probe while the anchor stays finite.
+    thr_at_probe(x, θ) = isapprox(θ, that; atol = 1e-12) ? (θ[1] + θ[2] * x) :
+                         throw(DomainError(θ, "f domain"))
+    bthr = @test_logs (:warn, r"non-finite f or an un-computable") match_mode = :any profile_band(
+        m, thr_at_probe, grid; mode = :directional)
+    @test bthr.nfail == 2 * length(grid)      # graceful, NOT an aborted sweep
+    @test all(bthr.lo .== bthr.fbest)
+    @test_throws ArgumentError extremize(m, θ -> θ[1] == that[1] ? θ[1] :
+                                         throw(DomainError(θ)); mode = :directional)
+
+    # Round-2 review: a SUPPLIED grad_f returning a non-finite gradient is a user
+    # bug (NOT an f-domain degeneracy) ⇒ propagate as ArgumentError in BOTH
+    # paths, never swallowed into a collapsed band.
+    @test_throws ArgumentError profile_band(m, fb, grid; mode = :directional,
+                                            grad_f = (x, θ) -> [NaN, 1.0])
+    @test_throws ArgumentError extremize(m, θ -> θ[1]; mode = :directional,
+                                         grad_f = θ -> [NaN, 1.0])
+
+    # Back-compat: the pre-0.5.3 11-arg positional ProfileBand constructor
+    # (no `mode`) still works and tags :full (parity with the ExtremizeResult one).
+    d0 = [(x = 0.0, failed_lo = false, failed_hi = false, accepted_lo = 1,
+           accepted_hi = 1, nfits_lo = 1, nfits_hi = 1, fcn_lo = 0.0, fcn_hi = 0.0)]
+    pbc = ProfileBand([0.0], [0.9], [1.1], Union{Nothing,Vector{Float64}}[[0.0]],
+                      Union{Nothing,Vector{Float64}}[[0.0]], [1.0], 1.0, 1.0, 1.0,
+                      1.0, 0, d0)
+    @test pbc.mode === :full
+end

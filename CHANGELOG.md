@@ -10,21 +10,24 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
 - **`extremize`: expensive-FCN support** (driven by a production field report
   where one FCN/`f` evaluation costs seconds and the default algorithm
   livelocked). All additive; the default `mode = :full` path is unchanged.
-  - **`mode = :directional`** — a fast alternative to the multi-seed penalty
-    extremization for the common near-linear case: it forms the
-    Lagrange/projection direction `d = C·∇f` at the best fit (numerically, or
-    via a supplied `grad_f`), secant/bisects the **true** FCN to the Δχ²
-    boundary on each side, and reports the **true** `f` at the crossings.
-    ≈ `n_free + ~15` paired evaluations (~50× cheaper than `:full`), exact in
-    the linear-Gaussian limit. `r.mode` flags the result; `r.diagnostics`
-    carries the direction, `∇fᵀC∇f`, the crossings, and `f_failed_lo/hi`. It
+  - **`mode = :directional`** (on both `extremize` and `profile_band`) — a fast
+    alternative to the multi-seed penalty extremization for the common
+    near-linear case: it forms the Lagrange/projection direction `d = C·∇f` at
+    the best fit (numerically, or via a supplied `grad_f`), secant/bisects the
+    **true** FCN to the Δχ² boundary on each side, and reports the **true** `f`
+    at the crossings. ≈ `n_free + ~15` paired evaluations per scalar (~50×
+    cheaper than `:full`; a band sweep is `npoints×` that), exact in the
+    linear-Gaussian limit. `r.mode`/`b.mode` flags the result; the diagnostics
+    carry the direction, `∇fᵀC∇f`, the crossings, and `f_failed_lo/hi`. It
     ignores `seeds`/limits and does not chase non-linear corridors — warns when
-    free parameters are bounded; use `:full` when the two disagree.
+    free parameters are bounded, and (in `profile_band`) flags any point whose
+    `f` is non-finite or whose direction is un-computable, falling back to the
+    best-fit value there. Use `:full` when the two disagree.
   - **`iterate`** keyword forwarded to each penalty `migrad!` (default `5`;
     set `1` for the cheapest run on an expensive FCN), and **`on_unit`**, a
     per-penalty-MIGRAD progress/checkpoint callback (also on `profile_band`,
-    where its record carries the grid point), enabling external checkpointing
-    of a long run on a kill-prone machine.
+    where its record carries the grid point) for live progress and optional
+    external checkpointing of a long run.
 
 ### Fixed
 
@@ -37,8 +40,9 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
 
 ### Changed
 
-- `ExtremizeResult` gained a `mode::Symbol` field (before `diagnostics`); a
-  back-compatible positional constructor defaulting `mode = :full` is provided.
+- `ExtremizeResult` and `ProfileBand` each gained a `mode::Symbol` field (before
+  `diagnostics`); back-compatible positional constructors defaulting
+  `mode = :full` are provided, so existing positional construction is unaffected.
 
 ## [0.5.2] — 2026-06-13
 

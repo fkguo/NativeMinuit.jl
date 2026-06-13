@@ -106,7 +106,7 @@ struct ExtremizeResult{D<:NamedTuple}
     diagnostics::D
 end
 
-# Backward-compatible positional constructor: pre-0.6.0 `ExtremizeResult` had no
+# Backward-compatible positional constructor: pre-0.5.3 `ExtremizeResult` had no
 # `mode` field. Code that built one positionally with the old 10-arg arity keeps
 # working and is tagged `:full`. (`ExtremizeResult` is exported; the field was
 # inserted before `diagnostics`.)
@@ -134,16 +134,21 @@ of a curve family `f(x, θ)` on a grid.
 - `fbest::Vector{Float64}` — the best-fit curve `f(x, θ̂)`; with
   `include_best = true` (default) `lo .≤ fbest .≤ hi` by construction.
 - `bound`, `delta`, `cl`, `up` — as in [`ExtremizeResult`](@ref).
-- `nfail::Int` — number of (point, side, pass) extremization groups in
-  which NO penalty fit passed the acceptance gate (the best-fit fallback
-  still keeps the band finite when `include_best = true`); `0` on a
-  healthy sweep.
-- `diagnostics` — per-point NamedTuples `(x, failed_lo, failed_hi,
-  accepted_lo, accepted_hi, nfits_lo, nfits_hi, fcn_lo, fcn_hi)`:
+- `mode::Symbol` — `:full` (per-point multi-seed penalty extremization) or
+  `:directional` (per-point fast `C·∇f` crossing; see [`profile_band`](@ref)).
+  The per-point `diagnostics` schema differs between the two modes.
+- `nfail::Int` — number of failed (point, side) groups: for `:full`, (point,
+  side, pass) extremization groups in which NO penalty fit passed the
+  acceptance gate; for `:directional`, (point, side) crossings where `f` was
+  non-finite or the direction was un-computable. The best-fit fallback still
+  keeps the band finite when `include_best = true`; `0` on a healthy sweep.
+- `diagnostics` — per-point NamedTuples. **`:full`:** `(x, failed_lo,
+  failed_hi, accepted_lo, accepted_hi, nfits_lo, nfits_hi, fcn_lo, fcn_hi)` —
   cumulative accepted / attempted penalty-fit counts over all passes,
-  `failed_*` flags for a side that NEVER had an accepted fit at that
-  point, and the FCN values at the stored extremal points (= `m.fval` for
-  a best-fit-fallback edge; `NaN` exactly when the edge is `NaN`).
+  `failed_*` flags for a side that NEVER had an accepted fit, and the FCN
+  values at the stored extremal points. **`:directional`:** `(x, failed_lo,
+  failed_hi, fcn_lo, fcn_hi, gCg, nfcn, nf)` — the per-point feasibility flags,
+  boundary FCNs, `∇fᵀC∇f`, and FCN/`f` call counts.
 """
 struct ProfileBand{D<:NamedTuple}
     x::Vector{Float64}
@@ -156,9 +161,17 @@ struct ProfileBand{D<:NamedTuple}
     delta::Float64
     cl::Float64
     up::Float64
+    mode::Symbol
     nfail::Int
     diagnostics::Vector{D}
 end
+
+# Backward-compatible positional constructor (pre-0.5.3 ProfileBand had no
+# `mode` field); old 11-arg positional construction keeps working as `:full`.
+ProfileBand(x, lo, hi, plo, phi, fbest, bound, delta, cl, up, nfail::Integer,
+            diagnostics::Vector) =
+    ProfileBand(x, lo, hi, plo, phi, fbest, bound, delta, cl, up, :full,
+                nfail, diagnostics)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
@@ -170,6 +183,17 @@ end
 # region: log of a negative, a singular matrix, …).
 const _EXTREMIZE_CATCH =
     Union{DomainError,BoundsError,SingularException,ArgumentError,DivideError}
+
+# Internal sentinel raised DELIBERATELY by the directional core when the search
+# direction is genuinely un-computable at a point — `∇fᵀC∇f ≤ 0` (f flat along
+# the covariance) or a non-finite `f` at a gradient probe. It is NOT a member of
+# `_EXTREMIZE_CATCH`, so `profile_band(mode=:directional)` can catch ONLY this
+# (falling back to the best fit for that point) while a genuinely buggy user
+# `grad_f` — a `BoundsError`/`MethodError`/etc. — still propagates, exactly as
+# it does in `extremize`. `extremize` re-surfaces it as a clear `ArgumentError`.
+struct _DirectionUncomputable <: Exception
+    msg::String
+end
 
 # FCN value at θ with the throw-guard: a probe outside the FCN's domain
 # counts as infeasible (+Inf); it does not abort the extremization.
@@ -600,10 +624,26 @@ function _grad_forward(m::Minuit, f, that::Vector{Float64}, fhat::Float64,
         scale = (isfinite(ei) && ei > 0) ? ei : max(1.0, abs(that[i]))
         h = max(1e-10, 1e-6 * scale)
         xp = copy(that); xp[i] += h
-        fp = f(xp); nf[] += 1
-        (fp isa Real && isfinite(fp)) || throw(ArgumentError(
-            "extremize(mode=:directional): f is non-finite at a gradient probe of " *
-            "parameter $i — supply `grad_f`, or use mode=:full."))
+        # An f-DOMAIN failure at the probe — a throw in `_EXTREMIZE_CATCH` OR a
+        # non-finite return — is the documented "f may fail at infeasible θ"
+        # case: map BOTH to the sentinel (→ ArgumentError in `extremize`,
+        # per-point fallback in `profile_band`). A non-domain throw (a genuine
+        # bug, e.g. MethodError) still propagates. Symmetric with the crossing
+        # `evalf` guard and the `:full` path's f-contract.
+        nf[] += 1                              # count the ATTEMPT (incl. a
+        # throwing/non-finite probe), consistent with the crossing `evalf` and
+        # the `nfcn` counter, which both tally attempts not just completions.
+        fp = try
+            f(xp)
+        catch err
+            err isa _EXTREMIZE_CATCH || rethrow()
+            throw(_DirectionUncomputable(
+                "f threw a domain error at a gradient probe of parameter $i — " *
+                "supply `grad_f`, or use mode=:full."))
+        end
+        (fp isa Real && isfinite(fp)) || throw(_DirectionUncomputable(
+            "f is non-finite at a gradient probe of parameter $i — supply " *
+            "`grad_f`, or use mode=:full."))
         g[i] = (Float64(fp) - fhat) / h
     end
     return g
@@ -656,25 +696,33 @@ function _root_on_ray(fcnraw, that::Vector{Float64}, dir::Vector{Float64},
     return (alpha = α_lo, fcn = c_lo)               # feasible by construction
 end
 
-function _extremize_directional(m::Minuit, f, grad_f, δ::Float64, up::Float64,
-                                bound::Float64, that::Vector{Float64},
-                                fhat::Float64, cl::Real, delta)
-    C = m.covariance
-    C === nothing && throw(ArgumentError(
-        "extremize(mode=:directional): no covariance is available — run `migrad!(m)` " *
-        "(and `hesse!(m)` for a reliable C) so `m.covariance` is set."))
-    n = n_pars(m.params)
-    fcnraw = m.fcn.f
-    nf_fcn = Ref(0)
-    nf_f = Ref(0)
-    # Directional walks θ̂ ± α·Cg ignoring parameter limits, so a crossing past a
-    # binding limit yields `plo`/`phi` OUTSIDE the limited set — warn if any free
-    # parameter is bounded (use :full when a limit is near-binding).
+# One warning per call (not per grid point) when directional is used with a
+# bounded fit — the ray ignores limits, so `plo`/`phi` may exit the limited set.
+function _directional_limits_warn(m::Minuit, fname::String)
     if any(!is_fixed(p) && has_limits(p) for p in m.params.pars)
-        @warn "extremize(mode=:directional): the fit has bounded free parameters; " *
-              "the directional ray ignores limits, so a boundary crossing (and the " *
+        @warn "$fname(mode=:directional): the fit has bounded free parameters; the " *
+              "directional ray ignores limits, so a boundary crossing (and the " *
               "returned plo/phi) may lie outside them. Use mode=:full if a limit binds."
     end
+end
+
+# Core of `mode = :directional` for ONE scalar `f`, SHARED by `extremize` and
+# `profile_band` so the algorithm is implemented (and reviewed) exactly once:
+# g = ∇f(θ̂) (free slots; fixed → 0), d = C·g, α_lin = √(δ/gᵀCg), then
+# secant/bisect the TRUE FCN to `bound` on each ±d ray and take the TRUE `f` at
+# the crossings; the interval is min/max over {f̂, f₊, f₋} (contains the best
+# fit by construction). Returns `(lo, hi, plo, phi, diag, f_failed_lo,
+# f_failed_hi)`. THROWS `ArgumentError` (∈ `_EXTREMIZE_CATCH`) when the
+# direction is un-computable — `grad_f` wrong length, a non-finite gradient
+# probe, or ∇fᵀC∇f ≤ 0 — so `extremize` propagates it while `profile_band`
+# catches it to flag that point. Does NOT warn; `C`/`nf_fcn`/`nf_f` are passed
+# in so a band computes `C` once and tallies costs across points.
+function _directional_interval(m::Minuit, f, grad_f, δ::Float64, up::Float64,
+                               bound::Float64, that::Vector{Float64},
+                               fhat::Float64, C, nf_fcn::Base.RefValue{Int},
+                               nf_f::Base.RefValue{Int})
+    n = n_pars(m.params)
+    fcnraw = m.fcn.f
     g = if grad_f === nothing
         _grad_forward(m, f, that, fhat, nf_f)
     else
@@ -685,6 +733,15 @@ function _extremize_directional(m::Minuit, f, grad_f, δ::Float64, up::Float64,
         @inbounds for i in 1:n
             is_fixed(m.params.pars[i]) && (gg[i] = 0.0)
         end
+        # A non-finite SUPPLIED gradient (in a free slot) is a user grad_f BUG,
+        # not an f-domain degeneracy: raise a plain ArgumentError so it
+        # PROPAGATES in both `extremize` and `profile_band` (NOT the sentinel,
+        # which `profile_band` would swallow as a per-point fallback). Fixed
+        # slots were just zeroed, so a NaN there is harmless and ignored.
+        all(isfinite, gg) || throw(ArgumentError(
+            "extremize(mode=:directional): grad_f returned a non-finite gradient " *
+            "$gg — fix grad_f (a non-finite gradient is a user error, not an " *
+            "f-domain degeneracy)."))
         gg
     end
     Cg = C * g                                  # = C·∇f; fixed slots stay 0
@@ -692,19 +749,19 @@ function _extremize_directional(m::Minuit, f, grad_f, δ::Float64, up::Float64,
     @inbounds for i in 1:n
         gCg += g[i] * Cg[i]
     end
-    gCg > 0 || throw(ArgumentError(
-        "extremize(mode=:directional): ∇fᵀC∇f = $gCg is not positive — f is flat " *
-        "along the covariance (or C is degenerate); use mode=:full."))
+    gCg > 0 || throw(_DirectionUncomputable(
+        "∇fᵀC∇f = $gCg is not positive — f is flat along the covariance (or C is " *
+        "degenerate); use mode=:full."))
     α_lin = sqrt(δ / gCg)
     rp = _root_on_ray(fcnraw, that, Cg, bound, α_lin, up, nf_fcn)   # +dir: f increases
     rm = _root_on_ray(fcnraw, that, -Cg, bound, α_lin, up, nf_fcn)  # −dir: f decreases
     θp = that .+ rp.alpha .* Cg
     θm = that .- rm.alpha .* Cg
     # `f` at each crossing — guarded exactly like the `:full` path's f-failure
-    # contract (review: a throw here must NOT crash `:directional` either). A
-    # throwing OR non-finite `f` maps to NaN and is dropped from the candidate
-    # set; the per-side `f_failed_*` flag below makes the resulting collapse to
-    # the best-fit value detectable (it is otherwise silent).
+    # contract (a throw here must NOT crash `:directional`). A throwing OR
+    # non-finite `f` maps to NaN, is dropped from the candidate set, and the
+    # per-side `f_failed_*` flag makes the resulting collapse to the best-fit
+    # value detectable (it is otherwise silent).
     evalf(θ) = (nf_f[] += 1; v = try
                     f(θ)
                 catch err
@@ -720,24 +777,52 @@ function _extremize_directional(m::Minuit, f, grad_f, δ::Float64, up::Float64,
     isnan(fm) || push!(cands, (fm, θm))
     hitem = argmax(c -> c[1], cands)
     loitem = argmin(c -> c[1], cands)
-    # A non-finite `f` at a crossing collapses that side onto the best fit —
-    # warn (mirroring the `:full` `naccepted == 0` warning) so a degenerate
-    # `lo == hi == fbest` is never mistaken for a genuinely tight interval.
-    if isnan(fp) || isnan(fm)
-        @warn "extremize(mode=:directional): f is non-finite at the " *
-              (isnan(fp) && isnan(fm) ? "lower AND upper" : isnan(fm) ? "lower" : "upper") *
-              " boundary crossing — that side falls back to the best-fit value " *
-              "(the interval is degenerate there). Use mode=:full, or check f " *
-              "near the Δχ² boundary."
-    end
     diag = (grad = g, dir = Cg, gCg = gCg, alpha_lin = α_lin,
             alpha_lo = -rm.alpha, alpha_hi = rp.alpha,
             fcn_lo = rm.fcn, fcn_hi = rp.fcn,
             f_failed_lo = isnan(fm), f_failed_hi = isnan(fp),
             nfcn = nf_fcn[], nf = nf_f[])
-    return ExtremizeResult(loitem[1], hitem[1], loitem[2], hitem[2], fhat,
+    # Distinct `copy`s so `plo` and `phi` are never the SAME object even when
+    # the best fit wins both sides (a degenerate `lo == hi == f̂`) — downstream
+    # mutation of one endpoint must not corrupt the other.
+    return (lo = loitem[1], hi = hitem[1],
+            plo = copy(loitem[2]), phi = copy(hitem[2]),
+            diag = diag, f_failed_lo = isnan(fm), f_failed_hi = isnan(fp))
+end
+
+function _extremize_directional(m::Minuit, f, grad_f, δ::Float64, up::Float64,
+                                bound::Float64, that::Vector{Float64},
+                                fhat::Float64, cl::Real, delta)
+    C = m.covariance
+    C === nothing && throw(ArgumentError(
+        "extremize(mode=:directional): no covariance is available — run `migrad!(m)` " *
+        "(and `hesse!(m)` for a reliable C) so `m.covariance` is set."))
+    _directional_limits_warn(m, "extremize")
+    nf_fcn = Ref(0)
+    nf_f = Ref(0)
+    # An un-computable direction surfaces to the user as a clear `ArgumentError`
+    # (the sentinel is internal); a genuinely buggy `f`/`grad_f` propagates.
+    r = try
+        _directional_interval(m, f, grad_f, δ, up, bound, that, fhat, C, nf_fcn, nf_f)
+    catch err
+        err isa _DirectionUncomputable &&
+            throw(ArgumentError("extremize(mode=:directional): " * err.msg))
+        rethrow()
+    end
+    # A non-finite `f` at a crossing collapses that side onto the best fit —
+    # warn (mirroring the `:full` `naccepted == 0` warning) so a degenerate
+    # `lo == hi == fbest` is never mistaken for a genuinely tight interval.
+    if r.f_failed_lo || r.f_failed_hi
+        @warn "extremize(mode=:directional): f is non-finite at the " *
+              (r.f_failed_lo && r.f_failed_hi ? "lower AND upper" :
+               r.f_failed_lo ? "lower" : "upper") *
+              " boundary crossing — that side falls back to the best-fit value " *
+              "(the interval is degenerate there). Use mode=:full, or check f " *
+              "near the Δχ² boundary."
+    end
+    return ExtremizeResult(r.lo, r.hi, r.plo, r.phi, fhat,
                            bound, δ, delta === nothing ? Float64(cl) : NaN, up,
-                           :directional, diag)
+                           :directional, r.diag)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1002,6 +1087,19 @@ to control it.
 
 `cl`, `seeds`, `lambda`, `accept_tol`, `delta`, `strategy`, `maxfcn` as in
 [`extremize`](@ref), plus:
+- `mode::Symbol = :full` — `:full` runs the multi-seed penalty extremization at
+  every grid point; `:directional` runs the fast `C·∇f` crossing at every
+  point (see [`extremize`](@ref)'s `mode`). For an expensive FCN and a
+  near-linear curve family, `:directional` makes the whole sweep
+  orders-of-magnitude cheaper (≈ `npoints × (n_free + ~15)` evaluations) and is
+  exact in the linear-Gaussian limit; it ignores `seeds`/`warm`/`passes`/
+  `rounds`/`iterate`/`on_unit`, does not honour limits, and flags a point that
+  fails (non-finite `f` or un-computable direction) in `nfail`/`diagnostics`
+  with a best-fit fallback. `b.mode` records which was used. Requires
+  `m.covariance`.
+- `grad_f = nothing` — optional `(x, θ) -> ∇_θ f(x, θ)` (full external length)
+  for `mode = :directional`; replaces the per-point forward-difference
+  gradient. Ignored by `mode = :full`.
 - `rounds::Integer = 1` — per-point penalty-ladder repeats (see
   [`extremize`](@ref)). The band default is 1 because the sweep itself
   iterates each point: the warm seed, the stored incumbent and the
@@ -1039,7 +1137,8 @@ See also [`extremize`](@ref), [`mnprofile`](@ref) (profile of a single
 *parameter*), and `docs/src/error_analysis.md`.
 """
 function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
-                      seeds = nothing, warm::Bool = true, passes::Integer = 2,
+                      seeds = nothing, mode::Symbol = :full, grad_f = nothing,
+                      warm::Bool = true, passes::Integer = 2,
                       include_best::Bool = true,
                       lambda::Real = 1e4, accept_tol::Real = 0.05,
                       delta::Union{Real,Nothing} = nothing,
@@ -1048,6 +1147,8 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
                       maxfcn::Union{Integer,Nothing} = nothing,
                       iterate::Integer = 5, on_unit = nothing,
                       verbose::Bool = false)
+    mode === :full || mode === :directional ||
+        throw(ArgumentError("profile_band: mode must be :full or :directional, got :$mode"))
     isempty(xs) && throw(ArgumentError("profile_band: xs is empty"))
     passes >= 1 || throw(ArgumentError("profile_band: passes must be ≥ 1"))
     rounds >= 1 || throw(ArgumentError("profile_band: rounds must be ≥ 1"))
@@ -1060,11 +1161,17 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
 
     xv = collect(Float64, xs)
     n = length(xv)
+    cl_rec = delta === nothing ? Float64(cl) : NaN
     fbest = Vector{Float64}(undef, n)
     for i in 1:n
         fbest[i] = Float64(f(xv[i], that))
         isfinite(fbest[i]) || throw(ArgumentError(
             "profile_band: f(x = $(xv[i]), best fit) is not finite"))
+    end
+
+    if mode === :directional
+        return _profile_band_directional(m, f, grad_f, xv, fbest, δ, up, bound,
+                                         that, cl_rec, seeds)
     end
 
     lo = fill(NaN, n)
@@ -1148,8 +1255,87 @@ function profile_band(m::Minuit, f, xs::AbstractVector{<:Real}; cl::Real = 1,
                               " (those edges are NaN)") *
               " — inspect `.diagnostics`, and consider more seeds or a larger " *
               "accept_tol."
-    return ProfileBand(xv, lo, hi, plo, phi, fbest, bound, δ,
-                       delta === nothing ? Float64(cl) : NaN, up, nfail, diags)
+    return ProfileBand(xv, lo, hi, plo, phi, fbest, bound, δ, cl_rec, up,
+                       :full, nfail, diags)
+end
+
+# Directional band: per grid point, the shared `_directional_interval` core on
+# θ -> f(x_i, θ). C and the limits-warning are computed/emitted ONCE for the
+# whole sweep; an un-computable direction or non-finite-`f` crossing flags that
+# point (nfail) and falls back to the best-fit value rather than aborting. The
+# gradient is recomputed per point (its direction varies with x); warm-starting
+# it across adjacent points is a possible future micro-opt. `seeds`, `warm`,
+# `passes`, `rounds`, `iterate`, `on_unit` do not apply to the directional path.
+function _profile_band_directional(m::Minuit, f, grad_f, xv::Vector{Float64},
+                                   fbest::Vector{Float64}, δ::Float64,
+                                   up::Float64, bound::Float64,
+                                   that::Vector{Float64}, cl_rec::Float64, seeds)
+    seeds === nothing ||
+        @warn "profile_band(mode=:directional): `seeds` are ignored (the directional " *
+              "mode walks the single C·∇f ray per point, not a seed pool)."
+    C = m.covariance
+    C === nothing && throw(ArgumentError(
+        "profile_band(mode=:directional): no covariance is available — run " *
+        "`migrad!(m)` (and `hesse!(m)` for a reliable C) so `m.covariance` is set."))
+    _directional_limits_warn(m, "profile_band")
+    n = length(xv)
+    lo = fill(NaN, n)
+    hi = fill(NaN, n)
+    plo = Vector{Union{Nothing,Vector{Float64}}}(nothing, n)
+    phi = Vector{Union{Nothing,Vector{Float64}}}(nothing, n)
+    fcn_lo = fill(NaN, n); fcn_hi = fill(NaN, n)
+    gcg = fill(NaN, n)
+    nfcn = zeros(Int, n); nfev = zeros(Int, n)
+    failed_lo = falses(n); failed_hi = falses(n)
+    nfail = 0
+    for i in 1:n
+        fi = let xi = xv[i]
+            θ -> f(xi, θ)
+        end
+        gfi = grad_f === nothing ? nothing : let xi = xv[i]
+            θ -> grad_f(xi, θ)
+        end
+        nf_fcn = Ref(0); nf_f = Ref(0)
+        ok = true
+        local r
+        try
+            r = _directional_interval(m, fi, gfi, δ, up, bound, that, fbest[i],
+                                      C, nf_fcn, nf_f)
+        catch err
+            # ONLY the deliberate "direction un-computable here" sentinel is a
+            # per-point fallback; a genuinely buggy f/grad_f (BoundsError,
+            # MethodError, a non-domain ArgumentError, …) PROPAGATES — same as
+            # `extremize(mode=:directional)` — so a real bug is never silently
+            # collapsed into the band.
+            err isa _DirectionUncomputable || rethrow()
+            ok = false
+        end
+        nfcn[i] = nf_fcn[]; nfev[i] = nf_f[]
+        if ok
+            lo[i] = r.lo; hi[i] = r.hi
+            plo[i] = r.plo; phi[i] = r.phi
+            fcn_lo[i] = r.diag.fcn_lo; fcn_hi[i] = r.diag.fcn_hi
+            gcg[i] = r.diag.gCg
+            failed_lo[i] = r.f_failed_lo; failed_hi[i] = r.f_failed_hi
+        else
+            # degenerate point: fall back to the best fit on both sides
+            # (distinct copies so plo[i] !== phi[i]).
+            lo[i] = hi[i] = fbest[i]
+            plo[i] = copy(that); phi[i] = copy(that)
+            failed_lo[i] = failed_hi[i] = true
+        end
+        failed_lo[i] && (nfail += 1)
+        failed_hi[i] && (nfail += 1)
+    end
+    diags = [(x = xv[i], failed_lo = failed_lo[i], failed_hi = failed_hi[i],
+              fcn_lo = fcn_lo[i], fcn_hi = fcn_hi[i], gCg = gcg[i],
+              nfcn = nfcn[i], nf = nfev[i]) for i in 1:n]
+    nfail == 0 ||
+        @warn "profile_band(mode=:directional): $nfail (point, side) crossing(s) had " *
+              "a non-finite f or an un-computable direction (those edges fall back to " *
+              "the best-fit value) — inspect `.diagnostics`, or use mode=:full there."
+    return ProfileBand(xv, lo, hi, plo, phi, fbest, bound, δ, cl_rec, up,
+                       :directional, nfail, diags)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1193,8 +1379,9 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", b::ProfileBand)
     nbad = count(d -> d.failed_lo || d.failed_hi, b.diagnostics)
-    println(io, "profile_band: pointwise profile envelope, ", length(b.x),
-            " points   (", _extremize_level(b.delta, b.cl), ", up = ", b.up, ")")
+    println(io, "profile_band [", b.mode, "]: pointwise profile envelope, ",
+            length(b.x), " points   (", _extremize_level(b.delta, b.cl),
+            ", up = ", b.up, ")")
     print(io, "  group failures: ", b.nfail,
-          "; points with a never-accepted side: ", nbad)
+          "; points with a failed side: ", nbad)
 end
