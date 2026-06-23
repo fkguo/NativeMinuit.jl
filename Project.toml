@@ -1,7 +1,7 @@
 name = "JuMinuit"
 uuid = "5523a57a-07f4-4aae-a9fd-d526bcb5d194"
 license = "LGPL-2.1-or-later"
-version = "0.5.4"
+version = "0.5.5"
 authors = ["Feng-Kun Guo"]
 
 [deps]

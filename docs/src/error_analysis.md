@@ -56,7 +56,7 @@ or when you want a model-light cross-check before quoting a result.
 |---|---|---|---|---|
 | **HESSE** | parameters (analytic 2nd-derivative covariance at the minimum) | a converged fit with a positive-definite covariance | a fast, symmetric error on a near-Gaussian, near-linear fit; the default | wrong when the cost surface is non-parabolic (nonlinear model); requires a valid, pos-def covariance — a `made_pos_def` status (the covariance had to be *forced* positive-definite) ⇒ treat with suspicion |
 | **MINOS** | parameters (profiles each one, re-minimising the rest) | a converged, valid fit (`fmin` = the fit-minimum result; must be valid) | reporting **asymmetric** errors under mild–moderate nonlinearity | fails / misleads on an invalid `fmin`, strong nonlinearity, or a multimodal surface; one inner-minimisation per scan point (costlier than HESSE) |
-| **extremize / profile_band** | parameters (constrained extremization of a derived `f(θ)` over the `Δχ²` region) | a converged, valid fit; seeds covering every low-χ² corridor | an interval on a **derived quantity** (a scalar `f(θ)` that is not a parameter), or the pointwise **error band** of a curve family — "MINOS for a function" | likelihood method (trusts the error model); a single seed can stop at a *local* tangency on a multi-corridor region and silently under-cover — pass `seeds`, audit `.diagnostics` |
+| **extremize / profile_band** | parameters (constrained extremization of a derived `f(θ)` over the `Δχ²` region) | a converged, valid fit; seeds covering every low-χ² corridor | an interval on a **derived quantity** (a scalar `f(θ)` that is not a parameter), or the pointwise **error band** of a curve family — "MINOS for a function" | likelihood method (trusts the error model); `extremize` floors/ceils by the directional endpoints by default (fixes ill-conditioned single-seed under-coverage; `profile_band` does not — use its `mode=:directional` there), but a *disconnected multi-corridor* region still needs `seeds` — audit `.diagnostics` |
 | **MC-Δχ² region** | parameters (fixed data), using the **true** `Δχ²` not a quadratic | the `χ²`/`−2lnL` plus a proposal (the fit covariance, or an explicit parameter range) | mapping a **non-Gaussian** confidence region, or a **joint** N-D region, where MINOS' 1-D profile is not enough | the proposal must **over-cover** when the covariance is unreliable, or the region is clipped; still *trusts the error model* (it is a likelihood method) |
 | **Likelihood-ensemble MCMC** | parameters (fixed data): a Metropolis chain on the **true** likelihood `∝ exp(−fcn/(2·up))` | a fit to start from (HESSE helps the proposal); an FCN cheap enough for ~10⁴–10⁵ evaluations | **marginal quantiles & pointwise bands of derived quantities** (curves, ratios, …) under non-Gaussianity or active parameter limits; a reusable, likelihood-weighted error set | the quantile band is a *marginal* construction: at an active limit it can legitimately exclude the best fit (mode ≠ median — a property, not a failure); single chain — watch the acceptance and mixing; trusts the error model |
 | **Bootstrap** | **data** (resample with replacement, then re-fit) | a resamplable dataset and many cheap re-fits | the error model is **uncertain or misspecified**; you want the estimator's empirical sampling distribution and robust, possibly asymmetric, CIs | expensive (`nresample` full re-fits); needs enough independent points; weak for binned / heavily-aggregated / strongly-correlated data |
@@ -139,16 +139,25 @@ band.nfail == 0 || @warn "inspect band.diagnostics"
 
 **Seed coverage is load-bearing, not a tuning knob.** Each endpoint comes
 from an exterior-penalty MIGRAD (a stiffening `λ`-continuation ladder with
-warm restarts) run from every seed. A single seed finds a **local** tangency:
-when the `Δχ²` region has several disconnected low-χ² corridors (multi-basin
-fits; a parameter pinned at a limit feeding a monotone map), a single-seed
-interval comes out **silently too narrow** — under-extremization. Pass
-everything that touches other corridors via `seeds` (`mcmc_sample` ensemble
-members extreme in `f` — see the MCMC section below — and
-`find_solution_modes` representatives) and audit `r.diagnostics`: per-seed
-acceptance and `f` records, plus the winning seed per side (`winner_* == 0`
-with `naccepted_* > 0` means the best fit is genuinely extremal; with
-`naccepted_* == 0` it means that side FAILED).
+warm restarts) run from every seed. A best-fit-only run can come out
+**silently too narrow** — under-extremization — in two ways: (i) on a strongly
+correlated / **ill-conditioned** region it stalls on the flat axis at a
+feasible but non-extremal boundary point, and (ii) when the `Δχ²` region has
+several disconnected low-χ² **corridors** (multi-basin fits; a parameter pinned
+at a limit feeding a monotone map) the penalty cannot cross the barrier between
+them. By default the result is **floored/ceiled by the directional
+(HESSE-ellipse) endpoints** `θ̂ ± √δ·C∇f/σ_f` (feasible, exact in the
+linear-Gaussian limit), so the interval is never narrower than the directional
+one — removing case (i) automatically at the cost of one extra directional probe
+(no extra penalty seeds; `directional_floor = false` opts out). Case (ii) still
+needs you: pass everything that touches other corridors via `seeds`
+(`mcmc_sample` ensemble members extreme in `f` — see the MCMC section below —
+and `find_solution_modes` representatives). Audit `r.diagnostics`: per-seed
+acceptance and `f` records, `directional_floor` (whether the floor supplied each
+endpoint), plus
+the winning seed per side (`winner_* == 0` with `naccepted_* > 0` means the
+best fit is genuinely extremal; with `naccepted_* == 0` it means that side
+FAILED).
 
 Every reported endpoint is gate-certified: `FCN ≤ bound + accept_tol·up`
 always, and `FCN ≤ bound` exactly whenever the local boundary pull-back

@@ -69,7 +69,8 @@ audit trail.
   The `diagnostics` schema differs between the two modes.
 - `diagnostics::NamedTuple` — **for `mode = :full`:** `(min, max, winner_min,
   winner_max,
-  naccepted_min, naccepted_max, fcn_min, fcn_max)`. `min`/`max` are per-seed
+  naccepted_min, naccepted_max, fcn_min, fcn_max, directional_floor)`.
+  `min`/`max` are per-seed
   record vectors, one row per penalty fit, with fields `seed` (index into
   the seed pool; seed 1 is always the best fit), `converged` (MIGRAD
   validity), `accepted` (passed the `bound + accept_tol·up` gate),
@@ -86,7 +87,9 @@ audit trail.
   `fcn_min`/`fcn_max` are the FCN values at `plo`/`phi`: compare with
   `bound` to certify each endpoint's feasibility directly. Inspect these to
   audit seed coverage (the multi-corridor failure mode described in the
-  docstring). **For `mode = :directional`:** `(grad, dir, gCg, alpha_lin,
+  docstring). `directional_floor` is `(lo::Bool, hi::Bool)` — whether the
+  directional floor/ceiling (not the penalty) supplied that endpoint.
+  **For `mode = :directional`:** `(grad, dir, gCg, alpha_lin,
   alpha_lo, alpha_hi, fcn_lo, fcn_hi, nfcn, nf)` — the `f`-gradient and search
   direction `C·∇f` at θ̂, the linear step `√(delta/gᵀCg)`, the two true-FCN
   boundary crossings `alpha_lo`/`alpha_hi` (`±` along `dir`) with their FCN
@@ -254,6 +257,21 @@ function _usable_seed(m::Minuit, s::Vector{Float64})
         isnan(hi) || (x[i] = min(x[i], hi - inset))
     end
     return x
+end
+
+# True iff θ respects every parameter limit (within a tiny tolerance). Fixed
+# parameters are pinned by the directional construction, so only free, bounded
+# coordinates can stray — the directional ray ignores limits, so an endpoint may
+# leave the box and is then NOT a member of the constrained Δχ² region.
+function _within_limits(m::Minuit, θ::Vector{Float64})
+    @inbounds for i in eachindex(θ)
+        p = m.params.pars[i]
+        is_fixed(p) && continue
+        lo, hi = p.lower, p.upper                  # NaN = absent
+        isnan(lo) || θ[i] >= lo - 1e-9 * max(1.0, abs(lo)) || return false
+        isnan(hi) || θ[i] <= hi + 1e-9 * max(1.0, abs(hi)) || return false
+    end
+    return true
 end
 
 # The exterior-penalty objective for one direction (sgn = +1 maximizes f,
@@ -859,15 +877,29 @@ an explicit `delta` — e.g. tracing a 2-D support function with
 Each direction is an exterior-penalty minimization
 (`obj = ∓f + λ·max(0, (FCN−bound)/up)²`, solved as a short penalty-
 continuation ladder of MIGRADs, `λ = 1 → 100 → lambda` warm-started) run
-**from every seed**; a
-single-seed run can stop at a *local* tangency and silently report a
-too-narrow interval when the region has several low-χ² corridors (e.g. a
-parameter against its limit feeding a monotone map). Default seeds = the
-best fit only — pass everything you have that touches other corridors
+**from every seed**; a single-seed run can stop short of the extremum and
+report a too-narrow interval in two distinct ways: (i) on a strongly
+correlated / **ill-conditioned** region the best-fit-anchored penalty stalls
+on the flat axis at a feasible but NON-extremal boundary point, and (ii) when
+the region splits into several disconnected low-χ² **corridors** the penalty
+cannot cross the barrier between them.
+
+To cure (i) at no user effort, the result is, by default, floored/ceiled by the
+**directional (HESSE-ellipse) endpoints** `θ̂ ± √δ·C∇f/σ_f` (the `:directional`
+construction below): they are feasible and exact in the linear-Gaussian limit,
+so the reported interval is **never narrower than the directional one**, no
+matter what the penalty did (including a degenerate `lambda` that accepts
+nothing). It costs ONE extra directional probe (≈ `n_free` gradient + a dozen
+FCN + 2 `f` evaluations), NOT extra penalty seeds. Disable with
+`directional_floor = false`. If the direction is un-computable (`∇fᵀC∇f ≤ 0`,
+degenerate `C`, non-finite `f` at the probe) the floor is silently skipped. The
+floor does NOT cure case (ii): disconnected corridors are unreachable from a
+straight ray, so **pass everything you have that touches other corridors**
 (MCMC/ensemble members extreme in `f`, other `find_solution_modes`
-representatives) via `seeds`, and **audit `r.diagnostics`**: per-seed
-acceptance and `f` values, and which seed won each side (`winner_* == 0`
-means no penalty fit beat the best-fit value itself).
+representatives) via `seeds`. **Audit `r.diagnostics`**: per-seed acceptance and
+`f` values, which seed won each side (`winner_* == 0` means no penalty fit beat
+the best-fit value), and `directional_floor.lo/.hi` (whether the floor supplied
+that endpoint).
 
 # Cheap mode for expensive FCNs, and the `f`-failure contract
 
@@ -910,6 +942,11 @@ crossing collapses that side onto the best fit, with a warning and a
   parameter vectors, the **rows** of a matrix, or a single vector. The best
   fit is always prepended as seed 1. Fixed coordinates are re-pinned and
   free ones clamped into limits before fitting.
+- `directional_floor::Bool = true` (`mode = :full` only) — floor/ceil the
+  result by the directional (HESSE-ellipse) endpoints so it is never narrower
+  than the linear-Gaussian interval (see "Multiple seeds are load-bearing").
+  Uses a numerical gradient (ignores `grad_f`, like the rest of `:full`); set
+  `false` to skip the extra directional probe.
 - `lambda::Real = 1e4` — FINAL penalty stiffness; the continuation ladder
   is `unique([min(lambda,1), min(lambda,100), lambda])`. The raw optimum
   overshoots the boundary by `O(1/lambda)` and is then pulled back onto it.
@@ -984,6 +1021,7 @@ and `docs/src/error_analysis.md` for the full decision guide.
 """
 function extremize(m::Minuit, f; cl::Real = 1, seeds = nothing,
                    mode::Symbol = :full, grad_f = nothing,
+                   directional_floor::Bool = true,
                    lambda::Real = 1e4, accept_tol::Real = 0.05,
                    delta::Union{Real,Nothing} = nothing,
                    rounds::Integer = 4,
@@ -1020,18 +1058,70 @@ function extremize(m::Minuit, f; cl::Real = 1, seeds = nothing,
                         maxfcn = maxfcn, include_best = true,
                         rounds = Int(rounds), iterate = Int(iterate),
                         on_unit = on_unit, side = :upper)
-    for (side, r) in (("min", lo), ("max", hi))
+    # Certified directional floor/ceiling (default; `directional_floor = false`
+    # to disable). On a strongly correlated / ill-conditioned Δχ² region the
+    # best-fit-anchored penalty can stall at a feasible but NON-extremal boundary
+    # point — silently under-covering (observed 30–60 % of the true interval at
+    # κ(C) ≳ 1e10, the endpoints sitting exactly on Δχ²=1 yet far from the
+    # tangency) — or, with a degenerate `lambda`, accept nothing and fall back to
+    # f̂. The directional endpoints θ̂ ± √δ·C∇f/σ_f are FEASIBLE (the ray is
+    # root-found to the FCN bound) and exact in the linear-Gaussian limit, so we
+    # fold them in as GUARANTEED candidates: the reported interval is then never
+    # narrower than the directional one, whatever the penalty did. This is ONE
+    # extra directional probe (≈ n_free gradient + ~a dozen FCN + 2 f calls),
+    # NOT extra penalty seeds. Best-effort: an un-computable direction
+    # (∇fᵀC∇f ≤ 0, degenerate C) or an f-domain probe failure simply skips the
+    # floor, reproducing the prior penalty-only result (a swallowed error can
+    # only COST the floor, never corrupt the answer). A directional endpoint that
+    # leaves the parameter limits (the ray ignores limits) is not a region member
+    # and is not folded.
+    lo_v, lo_p, lo_c, lo_fl = lo.value, lo.params, lo.fcn, false
+    hi_v, hi_p, hi_c, hi_fl = hi.value, hi.params, hi.fcn, false
+    if directional_floor && m.covariance !== nothing
+        fcnraw = m.fcn.f
+        rdir = try
+            _directional_interval(m, f, nothing, δ, up, bound, that, fhat,
+                                  m.covariance, Ref(0), Ref(0))
+        catch err
+            (err isa _DirectionUncomputable || err isa _EXTREMIZE_CATCH) || rethrow()
+            nothing
+        end
+        if rdir !== nothing
+            # `rdir.plo`/`.phi` are the endpoints SELECTED BY f-VALUE (argmin/max
+            # over the two rays plus the best fit); for a nonlinear f the lower
+            # endpoint may be the PLUS ray (and vice versa). The per-ray
+            # `f_failed_*`/`fcn_*` in `rdir.diag` are RAY-labeled, so they must
+            # NOT be used for the selected endpoint — recompute the FCN at the
+            # actual point and gate on feasibility there. (`rdir.lo == fhat` when
+            # the directional collapsed to the best fit ⇒ never beats `lo_v`.)
+            c_lo = _fcn_or_inf(fcnraw, rdir.plo)
+            if isfinite(rdir.lo) && rdir.lo < lo_v &&
+               c_lo <= bound + 1e-9 * up && _within_limits(m, rdir.plo)
+                lo_v, lo_p, lo_c, lo_fl = rdir.lo, rdir.plo, c_lo, true
+            end
+            c_hi = _fcn_or_inf(fcnraw, rdir.phi)
+            if isfinite(rdir.hi) && rdir.hi > hi_v &&
+               c_hi <= bound + 1e-9 * up && _within_limits(m, rdir.phi)
+                hi_v, hi_p, hi_c, hi_fl = rdir.hi, rdir.phi, c_hi, true
+            end
+        end
+    end
+
+    for (side, r, fl) in (("min", lo, lo_fl), ("max", hi, hi_fl))
         r.naccepted == 0 &&
             @warn "extremize: no penalty fit was accepted on the $side side — " *
-                  "that endpoint is the best-fit value itself. Check the " *
-                  "diagnostics records (convergence/acceptance per seed), " *
-                  "and consider more seeds, a larger accept_tol, or maxfcn."
+                  (fl ? "using the directional (linear-Gaussian) floor for that " *
+                        "endpoint. The penalty mechanism still found nothing; "
+                      : "that endpoint is the best-fit value itself. ") *
+                  "Check the diagnostics records, and consider more seeds, a " *
+                  "larger accept_tol, or maxfcn."
     end
     diag = (min = lo.records, max = hi.records,
             winner_min = lo.winner, winner_max = hi.winner,
             naccepted_min = lo.naccepted, naccepted_max = hi.naccepted,
-            fcn_min = lo.fcn, fcn_max = hi.fcn)
-    return ExtremizeResult(lo.value, hi.value, lo.params, hi.params, fhat,
+            fcn_min = lo_c, fcn_max = hi_c,
+            directional_floor = (lo = lo_fl, hi = hi_fl))
+    return ExtremizeResult(lo_v, hi_v, lo_p, hi_p, fhat,
                            bound, δ, delta === nothing ? Float64(cl) : NaN,
                            up, :full, diag)
 end
@@ -1363,14 +1453,17 @@ function Base.show(io::IO, ::MIME"text/plain", r::ExtremizeResult)
         return
     end
     # :full — winner 0 is benign when fits were accepted (the best fit IS the
-    # extremum for that side) and a failure when none were.
-    wname(w, nacc) = w != 0 ? "seed $w" :
-                     nacc > 0 ? "best fit (genuinely extremal)" :
-                                "best-fit fallback (side FAILED)"
+    # extremum for that side) and a failure when none were; the directional
+    # floor (when it supplied the endpoint) overrides both labels.
+    wname(w, nacc, fl) = fl ? "directional floor" :
+                         w != 0 ? "seed $w" :
+                         nacc > 0 ? "best fit (genuinely extremal)" :
+                                    "best-fit fallback (side FAILED)"
+    df = get(d, :directional_floor, (lo = false, hi = false))
     print(io, "  min: ", d.naccepted_min, "/", length(d.min),
-          " accepted, winner ", wname(d.winner_min, d.naccepted_min),
+          " accepted, winner ", wname(d.winner_min, d.naccepted_min, df.lo),
           ";  max: ", d.naccepted_max, "/", length(d.max),
-          " accepted, winner ", wname(d.winner_max, d.naccepted_max))
+          " accepted, winner ", wname(d.winner_max, d.naccepted_max, df.hi))
 end
 
 function Base.show(io::IO, b::ProfileBand)

@@ -366,8 +366,10 @@ end
     # the region (the boundary overshoot scales as 1/λ), so every candidate
     # fails the acceptance gate DETERMINISTICALLY and the machinery must
     # take the documented failure path: warn, fall back to the best-fit
-    # value, report winner 0 and naccepted 0.
-    rfail = @test_logs (:warn, r"no penalty fit was accepted on the min side") (:warn, r"no penalty fit was accepted on the max side") match_mode = :any extremize(m, f15; lambda = 1e-12)
+    # value, report winner 0 and naccepted 0. (`directional_floor = false`
+    # isolates the penalty path; the floor's rescue of this case is covered in
+    # the directional-floor testset.)
+    rfail = @test_logs (:warn, r"no penalty fit was accepted on the min side") (:warn, r"no penalty fit was accepted on the max side") match_mode = :any extremize(m, f15; lambda = 1e-12, directional_floor = false)
     @test rfail.lo == rfail.hi == rfail.fbest
     @test rfail.diagnostics.winner_min == 0 && rfail.diagnostics.winner_max == 0
     @test rfail.diagnostics.naccepted_min == 0 == rfail.diagnostics.naccepted_max
@@ -439,7 +441,9 @@ end
     @test_logs (:warn, r"NOT valid") match_mode = :any extremize(minv, f15)
 
     # Display forms (compact + MIME) render and carry the key facts.
-    r = extremize(m, f15)
+    # (`directional_floor = false` so the winner label reflects the penalty seed,
+    # not the floor — the floored label is checked in the directional-floor set.)
+    r = extremize(m, f15; directional_floor = false)
     @test occursin("ExtremizeResult", repr(r))
     plain = sprint(show, MIME"text/plain"(), r)
     @test occursin("extremize [full]: f ∈ [", plain)
@@ -744,4 +748,126 @@ end
                       Union{Nothing,Vector{Float64}}[[0.0]], [1.0], 1.0, 1.0, 1.0,
                       1.0, 0, d0)
     @test pbc.mode === :full
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Directional floor/ceiling of the :full interval (default path). On a
+#    strongly correlated / ill-conditioned Δχ² region the best-fit-anchored
+#    penalty can stall at a feasible but NON-extremal boundary point — silently
+#    under-covering — or (degenerate lambda) accept nothing. The result is
+#    floored/ceiled by the directional (HESSE-ellipse) endpoints, which are
+#    feasible and exact in the linear-Gaussian limit, so it is never narrower
+#    than the directional interval. `directional_floor = false` disables it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@testset "extremize — directional floor/ceiling (ill-conditioned)" begin
+    m = _ex_linear_fit()
+    f15 = θ -> θ[1] + θ[2] * 15.0
+
+    # (1) MECHANISM. The default result is floored/ceiled by the directional
+    # endpoints: it is never narrower than the penalty-only result, never
+    # narrower than the directional interval, and exposes a `directional_floor`
+    # diagnostic. It costs no extra penalty seeds (record count unchanged).
+    r        = extremize(m, f15)
+    rnofloor = extremize(m, f15; directional_floor = false)   # penalty-only (old)
+    rd       = extremize(m, f15; mode = :directional)
+    @test haskey(r.diagnostics, :directional_floor)
+    @test length(r.diagnostics.min) == length(rnofloor.diagnostics.min)  # no extra seeds
+    @test r.hi >= rnofloor.hi - 1e-9 && r.lo <= rnofloor.lo + 1e-9        # never narrows
+    @test r.hi >= rd.hi - 1e-9 && r.lo <= rd.lo + 1e-9                    # floored by directional
+    @test r.lo <= r.fbest <= r.hi
+    @test _ex_chi2(r.plo) <= r.bound + 1e-9 && _ex_chi2(r.phi) <= r.bound + 1e-9
+
+    # (2) DEGENERATE-PENALTY RESCUE (the core guarantee). lambda = 1e-12 makes
+    # every penalty optimum overshoot and be rejected (naccepted == 0), so the
+    # penalty-only result COLLAPSES to the best-fit value. The directional floor
+    # is lambda-independent and feasible, so the default still returns the full
+    # directional interval — never the collapsed point. (It warns that the
+    # penalty found nothing and the floor was used.)
+    rcollapse = with_logger(NullLogger()) do
+        extremize(m, f15; lambda = 1e-12, directional_floor = false)
+    end
+    @test rcollapse.lo == rcollapse.hi == rcollapse.fbest        # penalty-only collapses
+    rfloor = with_logger(NullLogger()) do
+        extremize(m, f15; lambda = 1e-12)                        # floor on (default)
+    end
+    @test rfloor.diagnostics.naccepted_min == 0 == rfloor.diagnostics.naccepted_max
+    @test rfloor.diagnostics.directional_floor.lo && rfloor.diagnostics.directional_floor.hi
+    @test rfloor.lo < rfloor.fbest < rfloor.hi                   # NOT collapsed
+    @test rfloor.lo ≈ rd.lo atol = 1e-6                          # equals directional
+    @test rfloor.hi ≈ rd.hi atol = 1e-6
+    @test _ex_chi2(rfloor.plo) <= rfloor.bound + 1e-9
+    @test occursin("directional floor", sprint(show, MIME"text/plain"(), rfloor))
+    @test_logs (:warn, r"no penalty fit was accepted on the min side") (:warn, r"max side") match_mode = :any extremize(
+        m, f15; lambda = 1e-12)
+
+    # (3) UN-COMPUTABLE DIRECTION ⇒ no floor, no crash. A constant f has
+    # ∇fᵀC∇f = 0; the directional probe is skipped and the (degenerate) penalty
+    # interval is returned unchanged.
+    rconst = extremize(m, θ -> 1.0)
+    @test rconst.diagnostics.directional_floor == (lo = false, hi = false)
+    @test rconst.lo == rconst.hi == rconst.fbest
+
+    # (4) MULTI-PARAMETER ILL-CONDITIONED FIT: the floor runs cleanly and the
+    # no-narrowing invariant + feasibility hold. A degree-2 Vandermonde fit on
+    # x ≈ 1000 is severely ill-conditioned (its HESSE covariance is degraded, so
+    # the directional floor is only as good as that C — the clean accurate-C
+    # demonstration is part (2)); here we assert the robust, always-true
+    # properties: the floored default is never narrower than penalty-only and its
+    # endpoints remain feasible region members.
+    xv = 1000.0 .+ collect(0.0:9.0)
+    yv = 1.0 .+ 2.0 .* xv .+ 0.01 .* xv .^ 2 .+
+         [0.3, -0.5, 0.1, 0.7, -0.2, -0.6, 0.4, 0.0, -0.3, 0.2]
+    cv(t) = sum((yv[i] - t[1] - t[2] * xv[i] - t[3] * xv[i]^2)^2 for i in eachindex(xv))
+    mv = Minuit(cv, [0.0, 0.0, 0.0]; errors = [1.0, 0.1, 0.01])
+    migrad!(mv); hesse!(mv)
+    @test mv.valid
+    fv = θ -> θ[1]
+    penonly, floored = with_logger(NullLogger()) do
+        (extremize(mv, fv; directional_floor = false), extremize(mv, fv))
+    end
+    @test (floored.hi - floored.lo) >= (penonly.hi - penonly.lo) - 1e-9   # never narrows
+    @test cv(floored.plo) <= floored.bound + 1e-6                          # feasible
+    @test cv(floored.phi) <= floored.bound + 1e-6
+    @test floored.lo <= floored.fbest <= floored.hi
+
+    # (5) NONLINEAR f with a ray SWAP. `_directional_interval` selects its
+    # endpoints by f-VALUE; for a non-monotonic f the lower endpoint can be the
+    # "+" ray (plo = θ₊) while the per-ray fcn_lo/f_failed_lo it returns are
+    # labeled by the "−" ray. The fold must therefore use the SELECTED endpoint's
+    # OWN recomputed FCN, never the ray label. We force the floor to supply both
+    # endpoints (lambda = 1e-12 collapses the penalty) on cos(·), which swaps:
+    fcos = θ -> cos(3 * (θ[1] + 15 * θ[2]))
+    rdcos = extremize(m, fcos; mode = :directional)
+    rfcos = with_logger(NullLogger()) do
+        extremize(m, fcos; lambda = 1e-12)
+    end
+    @test rfcos.diagnostics.directional_floor == (lo = true, hi = true)
+    @test rfcos.lo ≈ rdcos.lo atol = 1e-6        # value = directional (not collapsed)
+    @test rfcos.hi ≈ rdcos.hi atol = 1e-6
+    @test rfcos.diagnostics.fcn_min ≈ _ex_chi2(rfcos.plo) rtol = 1e-12   # selected endpoint…
+    @test rfcos.diagnostics.fcn_max ≈ _ex_chi2(rfcos.phi) rtol = 1e-12   # …not the ray label
+    @test _ex_chi2(rfcos.plo) <= rfcos.bound + 1e-9
+    @test _ex_chi2(rfcos.phi) <= rfcos.bound + 1e-9
+
+    # (6) RAY-FAILURE SWAP: the selected lower endpoint is the "+" ray while the
+    # "−" ray's f FAILS (NaN). The directional `f_failed_lo` flag is ray-labeled
+    # and is true here, yet the SELECTED endpoint (plo = θ₊) is valid; the fold
+    # must NOT consult that flag (the old `!f_failed_lo` gate would have wrongly
+    # skipped this endpoint and left the lo collapsed at the best fit). With the
+    # penalty collapsed (lambda = 1e-12) the floor must still recover it.
+    ph = m.values[1] + 15.0 * m.values[2]
+    fsw = θ -> (p = θ[1] + 15.0 * θ[2]; p < ph - 0.001 ? NaN : -(p - (ph + 0.3))^2)
+    rdsw = with_logger(NullLogger()) do
+        extremize(m, fsw; mode = :directional)
+    end
+    @test rdsw.diagnostics.f_failed_lo                       # the −ray f failed…
+    rfsw = with_logger(NullLogger()) do
+        extremize(m, fsw; lambda = 1e-12)
+    end
+    @test rfsw.diagnostics.directional_floor.lo              # …yet the floor still folded the +ray endpoint
+    @test rfsw.lo ≈ rdsw.lo atol = 1e-6
+    @test rfsw.lo < rfsw.fbest                               # NOT collapsed to the best fit
+    @test rfsw.diagnostics.fcn_min ≈ _ex_chi2(rfsw.plo) rtol = 1e-12
+    @test _ex_chi2(rfsw.plo) <= rfsw.bound + 1e-9
 end

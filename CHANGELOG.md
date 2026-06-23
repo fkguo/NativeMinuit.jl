@@ -3,6 +3,46 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [0.5.5] — 2026-06-23
+
+### Fixed
+
+- **`extremize` (`mode = :full`, the default): silent interval under-coverage on
+  ill-conditioned fits.** When the `Δχ²` region is a strongly correlated needle
+  (one or more weakly-determined parameters ⇒ a covariance with a large
+  condition number — e.g. a coupling constrained only loosely by the data), the
+  best-fit-anchored penalty MIGRAD could stall on the flat axis and return a
+  point that is *feasible* (exactly on the `Δχ²` boundary) but **not** the
+  extremum of `f` — silently reporting an interval far too narrow (observed
+  30–60 % of the true profile half-width), with healthy-looking diagnostics
+  (`accepted`, `winner ≠ 0`, no warning). More `rounds` or a stiffer `lambda`
+  did not help: the endpoint was on the boundary, just at the wrong place.
+  - **Fix:** the `:full` result is now **floored/ceiled by the directional
+    (HESSE-ellipse) endpoints** `θ̂ ± √δ·C∇f/σ_f` (new `directional_floor = true`
+    default). Those endpoints are FEASIBLE (the ray is root-found to the FCN
+    bound) and exact in the linear-Gaussian limit, so they are folded in as
+    GUARANTEED candidates: the reported interval is **never narrower than the
+    directional one**, whatever the penalty did — including a degenerate
+    `lambda` that accepts nothing (the penalty-only result there collapses to
+    the best fit; the floor still returns the full directional interval). This
+    costs **one extra directional probe** (≈ `n_free` gradient + ~a dozen FCN +
+    2 `f` calls), **not** extra penalty seeds — so the default penalty cost is
+    unchanged. If the direction is un-computable (`∇fᵀC∇f ≤ 0`, degenerate `C`,
+    non-finite `f` at the probe) the floor is silently skipped (prior behaviour);
+    a directional endpoint outside the parameter limits is not folded. Set
+    `directional_floor = false` to opt out. The new `diagnostics.directional_floor`
+    `(lo, hi)` records whether the floor supplied each endpoint.
+    This fixes the *ill-conditioned (unimodal)* under-coverage **when the
+    covariance is reliable**; at a condition number so extreme that HESSE's `C`
+    itself is degraded the floor is only as good as that `C`. *Disconnected
+    multi-corridor* regions still require explicit `seeds` (a straight ray
+    cannot cross a barrier), exactly as before.
+
+### Added
+
+- **`extremize` keyword `directional_floor::Bool = true`** — opt out of the
+  directional floor/ceiling above (`mode = :full`).
+
 ## [0.5.4] — 2026-06-13
 
 ### Fixed
