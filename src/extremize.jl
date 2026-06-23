@@ -264,8 +264,9 @@ end
 # coordinates can stray — the directional ray ignores limits, so an endpoint may
 # leave the box and is then NOT a member of the constrained Δχ² region.
 function _within_limits(m::Minuit, θ::Vector{Float64})
+    pars = _init_params(m).pars        # raw config (limits/fixed); no fit-overlay rebuild
     @inbounds for i in eachindex(θ)
-        p = m.params.pars[i]
+        p = pars[i]
         is_fixed(p) && continue
         lo, hi = p.lower, p.upper                  # NaN = absent
         isnan(lo) || θ[i] >= lo - 1e-9 * max(1.0, abs(lo)) || return false
@@ -730,7 +731,11 @@ end
 # secant/bisect the TRUE FCN to `bound` on each ±d ray and take the TRUE `f` at
 # the crossings; the interval is min/max over {f̂, f₊, f₋} (contains the best
 # fit by construction). Returns `(lo, hi, plo, phi, diag, f_failed_lo,
-# f_failed_hi)`. THROWS `ArgumentError` (∈ `_EXTREMIZE_CATCH`) when the
+# f_failed_hi, ray_minus, ray_plus)`; `ray_∓ = (f, θ)` are the RAW ∓-ray
+# crossings (NaN `f` if that ray's `f` failed), exposed so the `:full` floor can
+# fold each ray INDEPENDENTLY against the parameter limits (the f-selected
+# `plo`/`phi` alone can hide a feasible opposite-ray rescue on a bounded fit).
+# THROWS `ArgumentError` (∈ `_EXTREMIZE_CATCH`) when the
 # direction is un-computable — `grad_f` wrong length, a non-finite gradient
 # probe, or ∇fᵀC∇f ≤ 0 — so `extremize` propagates it while `profile_band`
 # catches it to flag that point. Does NOT warn; `C`/`nf_fcn`/`nf_f` are passed
@@ -805,7 +810,8 @@ function _directional_interval(m::Minuit, f, grad_f, δ::Float64, up::Float64,
     # mutation of one endpoint must not corrupt the other.
     return (lo = loitem[1], hi = hitem[1],
             plo = copy(loitem[2]), phi = copy(hitem[2]),
-            diag = diag, f_failed_lo = isnan(fm), f_failed_hi = isnan(fp))
+            diag = diag, f_failed_lo = isnan(fm), f_failed_hi = isnan(fp),
+            ray_minus = (f = fm, θ = copy(θm)), ray_plus = (f = fp, θ = copy(θp)))
 end
 
 function _extremize_directional(m::Minuit, f, grad_f, δ::Float64, up::Float64,
@@ -1072,37 +1078,42 @@ function extremize(m::Minuit, f; cl::Real = 1, seeds = nothing,
     # NOT extra penalty seeds. Best-effort: an un-computable direction
     # (∇fᵀC∇f ≤ 0, degenerate C) or an f-domain probe failure simply skips the
     # floor, reproducing the prior penalty-only result (a swallowed error can
-    # only COST the floor, never corrupt the answer). A directional endpoint that
-    # leaves the parameter limits (the ray ignores limits) is not a region member
-    # and is not folded.
+    # only COST the floor, never corrupt the answer). Both ∓ rays are folded
+    # INDEPENDENTLY, each gated on the parameter limits, so a ray that leaves the
+    # limits is skipped WITHOUT discarding the other (still-feasible) ray — on a
+    # bounded fit the f-extreme ray can exit a limit while the opposite ray is
+    # the true feasible extremum.
     lo_v, lo_p, lo_c, lo_fl = lo.value, lo.params, lo.fcn, false
     hi_v, hi_p, hi_c, hi_fl = hi.value, hi.params, hi.fcn, false
-    if directional_floor && m.covariance !== nothing
+    C = m.covariance
+    if directional_floor && C !== nothing
         fcnraw = m.fcn.f
         rdir = try
             _directional_interval(m, f, nothing, δ, up, bound, that, fhat,
-                                  m.covariance, Ref(0), Ref(0))
+                                  C, Ref(0), Ref(0))
         catch err
             (err isa _DirectionUncomputable || err isa _EXTREMIZE_CATCH) || rethrow()
             nothing
         end
         if rdir !== nothing
-            # `rdir.plo`/`.phi` are the endpoints SELECTED BY f-VALUE (argmin/max
-            # over the two rays plus the best fit); for a nonlinear f the lower
-            # endpoint may be the PLUS ray (and vice versa). The per-ray
-            # `f_failed_*`/`fcn_*` in `rdir.diag` are RAY-labeled, so they must
-            # NOT be used for the selected endpoint — recompute the FCN at the
-            # actual point and gate on feasibility there. (`rdir.lo == fhat` when
-            # the directional collapsed to the best fit ⇒ never beats `lo_v`.)
-            c_lo = _fcn_or_inf(fcnraw, rdir.plo)
-            if isfinite(rdir.lo) && rdir.lo < lo_v &&
-               c_lo <= bound + 1e-9 * up && _within_limits(m, rdir.plo)
-                lo_v, lo_p, lo_c, lo_fl = rdir.lo, rdir.plo, c_lo, true
-            end
-            c_hi = _fcn_or_inf(fcnraw, rdir.phi)
-            if isfinite(rdir.hi) && rdir.hi > hi_v &&
-               c_hi <= bound + 1e-9 * up && _within_limits(m, rdir.phi)
-                hi_v, hi_p, hi_c, hi_fl = rdir.hi, rdir.phi, c_hi, true
+            # Fold the RAW ∓-ray crossings independently rather than only the
+            # f-selected `plo`/`phi`: for a nonlinear / bounded fit the f-extreme
+            # ray may exit a limit while the OTHER ray is feasible AND still beats
+            # the penalty — folding only the selected endpoint would silently drop
+            # that rescue. Each candidate is gated on its OWN recomputed FCN
+            # (≤ bound — never trust the ray-labeled `diag.fcn_*`) and the limits,
+            # so a folded endpoint is always a genuine region member. The best fit
+            # needs no candidate: `lo_v ≤ f̂ ≤ hi_v` already (the pool includes it).
+            for ray in (rdir.ray_minus, rdir.ray_plus)
+                isfinite(ray.f) || continue
+                c = _fcn_or_inf(fcnraw, ray.θ)
+                (c <= bound + 1e-9 * up && _within_limits(m, ray.θ)) || continue
+                if ray.f < lo_v
+                    lo_v, lo_p, lo_c, lo_fl = ray.f, ray.θ, c, true
+                end
+                if ray.f > hi_v
+                    hi_v, hi_p, hi_c, hi_fl = ray.f, ray.θ, c, true
+                end
             end
         end
     end

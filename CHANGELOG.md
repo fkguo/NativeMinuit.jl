@@ -28,8 +28,10 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
     costs **one extra directional probe** (≈ `n_free` gradient + ~a dozen FCN +
     2 `f` calls), **not** extra penalty seeds — so the default penalty cost is
     unchanged. If the direction is un-computable (`∇fᵀC∇f ≤ 0`, degenerate `C`,
-    non-finite `f` at the probe) the floor is silently skipped (prior behaviour);
-    a directional endpoint outside the parameter limits is not folded. Set
+    non-finite `f` at the probe) the floor is silently skipped (prior behaviour).
+    On a bounded fit both ± rays are folded independently, each gated on the
+    parameter limits, so a ray that leaves the limits is skipped without
+    discarding the other (still-feasible) ray. Set
     `directional_floor = false` to opt out. The new `diagnostics.directional_floor`
     `(lo, hi)` records whether the floor supplied each endpoint.
     This fixes the *ill-conditioned (unimodal)* under-coverage **when the

@@ -870,4 +870,26 @@ end
     @test rfsw.lo < rfsw.fbest                               # NOT collapsed to the best fit
     @test rfsw.diagnostics.fcn_min ≈ _ex_chi2(rfsw.plo) rtol = 1e-12
     @test _ex_chi2(rfsw.plo) <= rfsw.bound + 1e-9
+
+    # (7) BOUNDED OPPOSITE-RAY RESCUE. The floor folds BOTH ± rays
+    # independently, not only the f-selected endpoint: when the f-extreme ray
+    # exits a parameter limit, a feasible, more-extreme OTHER ray must still be
+    # folded. χ²=θ² on θ∈[-0.5, 2.0]: the −ray crossing θ=-1 is out of limits,
+    # but the +ray crossing θ=+1 is in-limits and IS the true min of
+    # f=-(θ-0.2)² over the feasible region [-0.5, 1]. Regression for the bounded
+    # single-endpoint gap: folding only plo=−ray left lo collapsed at the
+    # penalty value ≈ -0.49 (silent ~23% under-coverage of the true -0.64).
+    chi2b(t) = t[1]^2
+    mb = Minuit(chi2b, [0.0]; errors = [0.1], limits = [(-0.5, 2.0)])
+    migrad!(mb); hesse!(mb)
+    @test mb.valid
+    fb = θ -> -(θ[1] - 0.2)^2
+    penb, flob = with_logger(NullLogger()) do
+        (extremize(mb, fb; directional_floor = false), extremize(mb, fb))
+    end
+    @test flob.diagnostics.directional_floor.lo          # +ray folded despite −ray out-of-limits
+    @test flob.lo ≈ -0.64 atol = 2e-3                    # true constrained min at θ≈1 (NOT -0.49)
+    @test flob.lo < penb.lo - 1e-3                       # strictly improves penalty-only
+    @test chi2b(flob.plo) <= flob.bound + 1e-9           # folded endpoint is a feasible region member
+    @test -0.5 - 1e-9 <= flob.plo[1] <= 2.0 + 1e-9       # …and within the limits
 end
