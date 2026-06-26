@@ -17,9 +17,8 @@
 *.swp
 .ipynb_checkpoints/
 
-# Local dev — ignore local Claude Code state, but DO track the bundled skill(s)
-/.claude/*
-!/.claude/skills/
+# Local dev — ignore all local Claude Code state (skills now live in /skills)
+/.claude/
 /scratch/
 
 # C++ harness build artifacts (regenerable via tools/regen_reference.sh)
