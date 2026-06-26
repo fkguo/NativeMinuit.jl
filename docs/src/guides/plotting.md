@@ -67,6 +67,24 @@ plot(contour_grid(m, 1, 2))               # ContourGrid → filled FCN-landscape
 The recipes attach sensible defaults (markers, labels, `aspect_ratio` for the
 contour) and pass through any `plot` keyword.
 
+A worked example — a two-parameter linear fit, its Hesse error bars, and the exact
+joint 68 % confidence contour (both blocks share the fitted `m`):
+
+```@example plotfig
+using JuMinuit, Plots, Random
+gr()                                            # headless-friendly backend
+Random.seed!(1)
+xs = range(0, 1; length = 30); σ = 0.1
+ys = 0.5 .+ 2.0 .* xs .+ σ .* randn(30)
+χ²(p) = sum(((ys .- (p[1] .+ p[2] .* xs)) ./ σ) .^ 2)
+m = Minuit(χ², [0.0, 0.0]; names = ["a", "b"]); migrad!(m); hesse!(m)
+plot(m.fmin)                                    # value ± Hesse error bars
+```
+
+```@example plotfig
+draw_mncontour(m, 1, 2; numpoints = 50)         # exact joint 68 % confidence contour
+```
+
 ### Error-analysis results
 
 The error-analysis outputs from the [Error analysis](../error_analysis.md) page
@@ -105,6 +123,14 @@ plot(modes; vars = (1, 3))       # project onto a chosen parameter pair
 
 `vars` / `par` are recipe-only options consumed before the backend sees them, so
 they never trigger an "unsupported attribute" warning.
+
+For instance, the MC-Δχ² accepted cloud of the fit above, each point coloured by its
+Δχ²:
+
+```@example plotfig
+r = get_contours_samples(m; nsamples = 4000, cl = 1, seed = 1)
+plot(r)                          # 2D scatter over the accepted Δχ² ≤ 1 region
+```
 
 ## iminuit-style `draw_*` helpers
 

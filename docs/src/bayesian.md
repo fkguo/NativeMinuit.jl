@@ -70,6 +70,24 @@ ci = credible_interval(post, :b; level = 0.6827)
 isapprox((ci[2] - ci[1]) / 2, m.errors[2]; rtol = 0.1)   # credible half-width ≈ HESSE σ_b
 ```
 
+The posterior is just a sample, so any picture follows directly — here the marginal
+for `b` with its 68 % credible interval:
+
+```@example bayesfig
+using JuMinuit, Plots, Random
+gr()
+Random.seed!(1)
+xs = range(0, 1; length = 25)
+ys = 0.5 .+ 2.0 .* xs .+ 0.1 .* randn(25)
+χ²(p) = sum(((ys .- (p[1] .+ p[2] .* xs)) ./ 0.1) .^ 2)
+m = Minuit(χ², [0.0, 0.0]; names = ["a", "b"]); migrad!(m); hesse!(m)
+post = posterior_sample(m; prior = :flat, seed = 1)
+lo, hi = credible_interval(post, :b; level = 0.6827)
+histogram(post.ensemble.samples[:, 2]; bins = 40, normalize = true,
+          label = "posterior of b", xlabel = "b", legend = :topright)
+vline!([lo, hi]; label = "68 % credible", lw = 2, color = :red)
+```
+
 ## Example 2 — a near-zero signal: Bayesian upper limit
 
 A signal strength `μ ≥ 0` whose data prefer a small value. MINOS gives a

@@ -4,6 +4,8 @@
 # Run from the repo root with:
 #     julia --project=docs docs/make.jl
 
+ENV["GKSwstype"] = "100"   # headless GR backend for the @example figures
+
 using Documenter
 using JuMinuit
 
