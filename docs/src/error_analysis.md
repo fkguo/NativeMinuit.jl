@@ -1,6 +1,6 @@
 # Error analysis in JuMinuit — which method, when
 
-JuMinuit offers seven ways to put an uncertainty on a fitted parameter — or on
+JuMinuit offers eight ways to put an uncertainty on a fitted parameter — or on
 a **derived quantity** (any scalar `f(θ)`, or a model curve's pointwise error
 band). They are **not** interchangeable: they answer genuinely different
 questions, and they diverge in exactly the situations where it matters. This
@@ -50,6 +50,17 @@ Use the likelihood methods as the primary error (they are cheap and standard);
 reach for resampling when you doubt the error model or suspect estimator bias,
 or when you want a model-light cross-check before quoting a result.
 
+A **Bayesian** layer sits on top of the first family: `bayesian` /
+`posterior_sample` multiply that same likelihood by an explicit **prior** and
+sample the **posterior**, reporting **credible** intervals and one-sided
+credible **limits**. Mechanically it is the likelihood-ensemble chain (data
+fixed, parameters varied) — with `prior = :flat` the target is the pure
+likelihood (a single chain reproduces the `mcmc_sample` path exactly); what
+changes is the **interpretation** (a 68% credible interval is
+a probability statement about θ *given the prior*, not a coverage statement) and
+the **tooling** (priors, and a credible upper limit on a coupling pinned near a
+boundary). It is the eighth method, detailed after the MCMC section below.
+
 ## The unified table
 
 | Method | Varies | Needs | Best when | Caveats |
@@ -59,6 +70,7 @@ or when you want a model-light cross-check before quoting a result.
 | **extremize / profile_band** | parameters (constrained extremization of a derived `f(θ)` over the `Δχ²` region) | a converged, valid fit; seeds covering every low-χ² corridor | an interval on a **derived quantity** (a scalar `f(θ)` that is not a parameter), or the pointwise **error band** of a curve family — "MINOS for a function" | likelihood method (trusts the error model); `extremize` floors/ceils by the directional endpoints by default (fixes ill-conditioned single-seed under-coverage; `profile_band` does not — use its `mode=:directional` there), but a *disconnected multi-corridor* region still needs `seeds` — audit `.diagnostics` |
 | **MC-Δχ² region** | parameters (fixed data), using the **true** `Δχ²` not a quadratic | the `χ²`/`−2lnL` plus a proposal (the fit covariance, or an explicit parameter range) | mapping a **non-Gaussian** confidence region, or a **joint** N-D region, where MINOS' 1-D profile is not enough | the proposal must **over-cover** when the covariance is unreliable, or the region is clipped; still *trusts the error model* (it is a likelihood method) |
 | **Likelihood-ensemble MCMC** | parameters (fixed data): a Metropolis chain on the **true** likelihood `∝ exp(−fcn/(2·up))` | a fit to start from (HESSE helps the proposal); an FCN cheap enough for ~10⁴–10⁵ evaluations | **marginal quantiles & pointwise bands of derived quantities** (curves, ratios, …) under non-Gaussianity or active parameter limits; a reusable, likelihood-weighted error set | the quantile band is a *marginal* construction: at an active limit it can legitimately exclude the best fit (mode ≠ median — a property, not a failure); single chain — watch the acceptance and mixing; trusts the error model |
+| **Bayesian posterior** | parameters (fixed data): the same Metropolis chain on `prior × exp(−fcn/(2·up))` | a fit to start from; an explicit **prior** (`:flat` ⇒ the likelihood path); FCN cheap enough for ~10⁴–10⁵ evals per chain | a **credible** interval or one-sided credible **limit** (e.g. an upper limit on a near-zero coupling), or any posterior summary under an informative prior | gives **credible** (prior-conditional), *not* confidence, statements; a flat prior is flat in **external** coords (parameterization-dependent, not "uninformative"); needs `nchains ≥ 2` for R̂; the posterior temperature follows `errordef` (keep `up` at 1 or ½) |
 | **Bootstrap** | **data** (resample with replacement, then re-fit) | a resamplable dataset and many cheap re-fits | the error model is **uncertain or misspecified**; you want the estimator's empirical sampling distribution and robust, possibly asymmetric, CIs | expensive (`nresample` full re-fits); needs enough independent points; weak for binned / heavily-aggregated / strongly-correlated data |
 | **Jackknife** | **data** (leave-one-out, then re-fit) | a dataset and `N` (delete-1) re-fits | a quick, almost assumption-free error **plus an explicit bias estimate** | coarser than the bootstrap; unreliable for highly nonlinear or non-smooth estimators; the delete-`d` block variant is coarser still |
 
@@ -368,6 +380,91 @@ sanity: `minimum(ens.fvals)` should come within `Δχ² ≈ O(1)` of `ens.fbest`
 again), quantiles should be stable against halving the ensemble, and
 `minimum(ens.fvals) < ens.fbest` means the chain found a **deeper minimum** —
 re-minimize (`find_deeper_minimum`) before quoting any errors.
+
+### Bayesian posterior bridge — `bayesian` / `posterior_sample` / credible intervals
+
+`posterior_sample(m)` and the one-step `bayesian(m)` reuse the **same** Metropolis
+kernel as the likelihood ensemble, but multiply the likelihood by an explicit
+**prior** and interpret the result as a **posterior** in full external
+coordinates:
+
+```math
+\log p(θ \mid \text{data}) = -\,\frac{\text{fcn}(θ)}{2\,\text{up}} + \log \text{prior}(θ).
+```
+
+The result is a [`PosteriorSample`](@ref JuMinuit.PosteriorSample) — a
+`LikelihoodEnsemble` plus Bayesian provenance (prior, kept log-likelihood /
+log-posterior, per-chain IDs, R̂ / ESS, boundary flags). Everything is
+**non-mutating**: the fit, `m.values`, `m.errors`, and `m.nfcn` are untouched.
+
+```julia
+m = Minuit(chi2, x0; names = names, limits = limits)
+migrad!(m); hesse!(m)                         # HESSE shapes the proposal
+
+# One-step report: 68.3% equal-tailed credible intervals under a flat prior.
+report = bayesian(m; level = 0.6827)          # m is left completely untouched
+
+# Explicit prior + a reusable posterior sample (4 chains ⇒ split-R̂ / ESS).
+pr   = normal_prior(m, :mass, 3.8717, 0.0002) # Gaussian prior on one parameter
+post = posterior_sample(m; prior = pr, nchains = 4, seed = 11)
+maximum(post.rhat) < 1.01 && minimum(post.ess) > 400   # converged & well-mixed?
+
+ci   = credible_interval(post, :mass; level = 0.6827)            # (lo, hi)
+gup  = upper_limit(post, :g; level = 0.90)                       # 90% credible upper limit
+db   = derived_interval(post, θ -> θ[2] - θ[1]; level = 0.6827)  # any scalar f(θ)
+posterior_summary(post; level = 0.6827)                         # per-parameter table
+```
+
+**Priors are small and explicit.** Each is a log-density over the *full*
+external vector; Minuit limits are intersected in as physical support:
+
+```julia
+flat_prior(m)                    # default; flat in EXTERNAL coords (see caveat)
+normal_prior(m, :x, μ, σ)        # Gaussian on one parameter, flat on the rest
+uniform_prior(m, :g, 0.0, 0.8)   # proper box on one parameter
+half_normal_prior(m, :g, σ)      # half-normal above the lower limit (or above 0)
+combine_priors(p1, p2)           # add disjoint informative components (MVP: no overlap)
+```
+
+`prior = :flat` makes `posterior_sample` reproduce the single-chain likelihood
+path **byte-for-byte** (`post.ensemble.samples == mcmc_sample(m; …).samples` at
+the same seed) — the Bayesian layer adds machinery, never silently changes the
+chain. Construction **fails loudly** if the best-fit point lies outside the
+prior × limits support, rather than starting a dead chain.
+
+!!! warning "Credible ≠ confidence, and three things to keep honest"
+    - A credible interval/limit is a probability statement about θ **given the
+      prior** — not a frequentist confidence interval, CLs, Feldman–Cousins, or
+      MINOS interval. `upper_limit`/`lower_limit` return a
+      [`CredibleLimit`](@ref JuMinuit.CredibleLimit), not a `merror`.
+    - `flat_prior` is flat in **external** coordinates — a parameterization
+      choice, **not** an "uninformative"/Jeffreys prior. Re-parameterize and the
+      flat prior changes.
+    - The posterior **temperature follows `errordef`**: the likelihood enters as
+      `exp(-fcn/(2·up))`, so keep `up = 1` (χ² / `-2 log L`) or `up = 0.5`
+      (`-log L`). Inflating `up` to widen a MINOS interval tempers the posterior
+      by the same `√up` — put extra information in the **prior**, not in
+      `errordef`.
+
+**Diagnostics & mixing.** `nchains` defaults to 4, each started **over-dispersed**
+at `overdisperse` × the proposal/HESSE scale from the best fit (default `2`, i.e.
+≈2σ wider than the posterior — the spread that makes split-R̂ a real convergence
+test; a start landing on a non-finite posterior is retried, then warned).
+`rhat(post, par)` is the **basic split-R̂** (needs `nchains ≥ 2`, want `< 1.01`;
+not rank-normalized, so for a skewed or boundary-truncated marginal also check
+ESS and the trace) and `effective_sample_size(post, par)` the autocorrelation-
+adjusted ESS. A `boundary_active` warning means posterior mass piles against a
+parameter limit —
+the same one-sided boundary effect as the marginal quantile band above (mode ≠
+median), here a genuine feature for upper-limit reporting. Proposal tuning
+(`proposal`, `scale`, `target_accept`) is identical to `mcmc_sample`.
+
+**When to reach for it.** Use the Bayesian bridge when the deliverable is
+explicitly Bayesian — an upper limit on a coupling consistent with zero, a
+result under a physically-motivated prior, or a posterior probability — and the
+likelihood ensemble / MINOS / profile band when the deliverable is a frequentist
+confidence statement. With a flat prior in a near-Gaussian interior the credible
+and confidence intervals coincide; quote which one you computed.
 
 ### Bootstrap — `bootstrap(model, data, start; ...)`
 Resamples the dataset and re-fits `nresample` times, returning a
@@ -816,12 +913,20 @@ usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/mai
    instead (profile construction; an explicit `delta = delta_chisq(cl, k)` is
    for genuinely joint statements only). At parameter
    limits the two differ legitimately — see the comparison table above.
-4. **Doubt the error model** (don't trust the quoted `σ`, suspect correlations or
+4. **Want a Bayesian statement, an explicit prior, or an upper limit on a
+   near-zero quantity** (a coupling consistent with 0, a rate, a positive
+   parameter at its boundary): sample the posterior with `bayesian` /
+   `posterior_sample` and read `credible_interval` / `upper_limit` — these are
+   **credible** (prior-conditional) statements, not a confidence/CLs/Feldman–
+   Cousins limit. A flat prior recovers the likelihood-ensemble quantiles. See
+   the [Bayesian analysis guide](bayesian.md) for worked examples (upper limits,
+   nuisance marginalization, derived quantities, EFT naturalness).
+5. **Doubt the error model** (don't trust the quoted `σ`, suspect correlations or
    mis-scaling): cross-check with the **nonparametric bootstrap** — a bootstrap
    error far from the HESSE error tells you the `σ` are wrong.
-5. **Suspect estimator bias** (nonlinear, boundary, small `N`): run the
+6. **Suspect estimator bias** (nonlinear, boundary, small `N`): run the
    **jackknife** for an explicit bias estimate and a bias-corrected value.
-6. **Sanity check** that the resampling plumbing agrees with the curvature error:
+7. **Sanity check** that the resampling plumbing agrees with the curvature error:
    the **parametric bootstrap** should reproduce the HESSE error.
 
 ## See also
@@ -834,5 +939,9 @@ usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/mai
 - Likelihood-ensemble MCMC / quantile bands:
   [`src/mcmc.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/mcmc.jl); tests
   [`test/test_mcmc.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/test/test_mcmc.jl)
+- Bayesian posterior bridge (priors, posterior, credible intervals):
+  [`src/posterior.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/posterior.jl),
+  [`src/priors.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/priors.jl); tests
+  [`test/test_bayesian_bridge.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/test/test_bayesian_bridge.jl)
 - HESSE / MINOS / contours: [`src/hesse.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/hesse.jl),
   [`src/minos.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/minos.jl), [`src/contours.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/contours.jl)

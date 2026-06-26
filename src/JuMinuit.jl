@@ -81,6 +81,8 @@ include("cost_functions.jl")
 include("resampling.jl")
 include("error_sampling.jl")
 include("mcmc.jl")
+include("priors.jl")
+include("posterior.jl")
 include("extremize.jl")
 include("serialize.jl")
 include("plot_recipes.jl")
@@ -141,6 +143,15 @@ export get_contours_samples, contour_df_samples
 # Likelihood-ensemble MCMC + marginal quantile bands (mcmc.jl)
 export LikelihoodEnsemble, mcmc_sample, quantiles, quantile_band
 export save_ensemble, load_ensemble
+# Bayesian bridge (non-mutating; posterior.jl / priors.jl)
+export Prior, flat_prior, normal_prior, uniform_prior, half_normal_prior
+export combine_priors
+export PosteriorProblem, PosteriorSample, posterior_sample
+export BayesianReport, bayesian
+export credible_interval, upper_limit, lower_limit, CredibleLimit
+export posterior_summary, derived_interval
+export posterior_mean, posterior_median, posterior_std
+export effective_sample_size, rhat, isconsistent
 export BoundedFunctionMinimum, ext_errors, ext_covariance, free_covariance
 export Minuit, migrad!, minos!
 # IMinuit.jl drop-in fit-type names (AbstractFit supertype; Fit/ArrayFit

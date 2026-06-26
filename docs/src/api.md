@@ -183,6 +183,43 @@ JuMinuit.save_ensemble
 JuMinuit.load_ensemble
 ```
 
+## Bayesian posterior bridge (priors & credible intervals)
+
+Non-mutating Bayesian layer: `prior × likelihood` sampled in full external
+coordinates, returning credible (not confidence) summaries. Three samplers —
+`sampler = :metropolis` (random walk), `sampler = :stretch` (the gradient-free,
+affine-invariant Goodman–Weare ensemble), and `sampler = :nuts` (gradient-based
+NUTS, via the AdvancedHMC extension). With `prior = :flat` a single Metropolis
+chain (`nchains = 1`) reproduces the likelihood path exactly at the same seed;
+sampling never mutates the `Minuit` object or `m.nfcn`. See the
+[Bayesian analysis guide](bayesian.md) for worked examples and how to enable NUTS.
+
+```@docs
+JuMinuit.bayesian
+JuMinuit.BayesianReport
+JuMinuit.posterior_sample
+JuMinuit.PosteriorProblem
+JuMinuit.PosteriorSample
+JuMinuit.isconsistent
+JuMinuit.Prior
+JuMinuit.flat_prior
+JuMinuit.normal_prior
+JuMinuit.uniform_prior
+JuMinuit.half_normal_prior
+JuMinuit.combine_priors
+JuMinuit.credible_interval
+JuMinuit.derived_interval
+JuMinuit.upper_limit
+JuMinuit.lower_limit
+JuMinuit.CredibleLimit
+JuMinuit.posterior_summary
+JuMinuit.posterior_mean
+JuMinuit.posterior_median
+JuMinuit.posterior_std
+JuMinuit.effective_sample_size
+JuMinuit.rhat
+```
+
 ## Resampling (bootstrap & jackknife)
 
 ```@docs

@@ -3,6 +3,79 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **NUTS / HMC posterior sampler (`posterior_sample(...; sampler = :nuts)`), via a
+  new `JuMinuitAdvancedHMCExt` extension.** Gradient-based No-U-Turn sampling
+  (AdvancedHMC): bounded parameters are mapped to unconstrained ℝ by
+  TransformVariables with the proper **log-Jacobian** (verified against the
+  rejection-based samplers), sampled with a ForwardDiff gradient, and transformed
+  back to external coordinates. The most efficient sampler for smooth,
+  higher-dimensional posteriors. It **requires an auto-differentiable FCN** — no
+  finite-difference fallback (a noisy gradient would silently wreck NUTS); it
+  errors and points to `:stretch` otherwise, and refuses a best fit on a
+  parameter limit. Enable with `using AdvancedHMC, LogDensityProblems,
+  LogDensityProblemsAD, TransformVariables, ForwardDiff` (new optional weakdeps).
+- **Affine-invariant ensemble sampler (`posterior_sample(...; sampler = :stretch)`).**
+  The Goodman–Weare stretch move (the emcee kernel): `nwalkers` walkers explore the
+  posterior, **gradient-free** (works for any FCN, including ones that cannot be
+  auto-differentiated — e.g. complex-buffer χ²) and **affine-invariant**, so it
+  samples strongly correlated / skewed posteriors far better than a single
+  random-walk chain. Each walker is a chain for the split-R̂ / ESS diagnostics;
+  `nwalkers` defaults to `max(2·n_free+2, 8)` and `stretch` (a) to `2`. Shares the
+  prior/limit handling and the structural mutation-safety of the Metropolis path.
+- **Bayesian posterior bridge — `bayesian` / `posterior_sample` (+ priors and
+  credible intervals).** A non-mutating Bayesian layer over the existing
+  Metropolis kernel: it samples `prior × exp(−fcn/(2·up))` in full external
+  coordinates and returns **credible** (not confidence) summaries.
+  - Priors (`priors.jl`): `flat_prior` (default), `normal_prior`,
+    `uniform_prior`, `half_normal_prior`, and `combine_priors` (disjoint
+    informative components). A flat prior is flat in **external** coordinates
+    (parameterization-dependent — documented, not claimed "uninformative").
+  - Posterior (`posterior.jl`): `PosteriorProblem` (a non-mutating fit snapshot;
+    `isconsistent` checks it against a later `Minuit`), `posterior_sample` →
+    `PosteriorSample`, and the one-step `bayesian` → `BayesianReport`.
+    Multi-chain by default (`nchains = 4`) with genuinely over-dispersed starts
+    (`overdisperse` × the proposal/HESSE scale, default 2 ⇒ ≈2σ — the spread the
+    split-R̂ convergence test needs), basic **split-R̂** (`rhat`) and ESS
+    (`effective_sample_size`) diagnostics, and boundary-mass flags.
+  - Summaries: `credible_interval`, `upper_limit` / `lower_limit`
+    (`CredibleLimit`), `derived_interval` (any scalar `f(θ)`), `posterior_summary`,
+    `posterior_mean` / `posterior_median` / `posterior_std`.
+  - **Non-mutating**: never writes `m.values`, `m.errors`, `m.covariance`, MINOS
+    state, or `m.nfcn`. With `prior = :flat` the sampler reproduces the
+    single-chain `mcmc_sample` path **byte-for-byte** at the same seed. Support
+    is the Minuit `limits` intersected with the prior support; construction
+    fails loudly if the best-fit point is outside it.
+  - The posterior temperature follows `errordef` (`log L = -fcn/(2·up)`); the
+    docstrings and the error-analysis guide note to keep `up` at its statistical
+    value (`1` for χ², `0.5` for `−log L`) for Bayesian work.
+  - **Worked examples** in the new `bayesian.md` manual page: the flat-prior ≡
+    HESSE anchor, a near-zero upper limit, nuisance marginalization, a nonlinear
+    derived ratio, EFT naturalness, and a coupled-channel **X(6200)** capstone —
+    propagating the pole mass, effective range, compositeness, and (near-unitary,
+    divergent) scattering length of the two-channel di-`J/ψ` fit of Dong *et al.*
+    (*Phys. Rev. Lett.* **126**, 132001 (2021)) through `derived_interval`, and
+    showing why a divergent derived quantity must be reported via `1/a` (the
+    paper's disjoint `|a| ≳ 0.48 fm`) rather than an equal-tailed interval.
+  - **Runnable data-backed example** `BenchmarkExamples/X6200_double_jpsi/`: a
+    native JuMinuit fit to the digitized LHCb double-`J/ψ` spectrum (recovering the
+    published χ²/dof = 0.99 best fit), a four-Riemann-sheet pole search for the
+    X(6200), and the bridge propagating its pole / scattering length / effective
+    range / compositeness — reproducing the published Table (frequentist ensemble)
+    and the Bayesian credible analogue. Data vendored from `fkguo/double_jpsi_fit`.
+
+### Changed
+
+- `mcmc_sample` and the Bayesian samplers now share one `_metropolis_chain`
+  kernel (internal). It splices the free coordinates into **separate** reused
+  full-length buffers for the prior and the FCN (refreshed each step), so neither
+  a mutating user FCN nor a mutating prior can corrupt the other's evaluation, and
+  it evaluates the cheap log-prior before the possibly expensive FCN. The
+  `mcmc_sample` output is unchanged (byte-for-byte).
+
 ## [0.5.5] — 2026-06-23
 
 ### Fixed

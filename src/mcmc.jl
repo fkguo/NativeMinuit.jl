@@ -60,10 +60,12 @@ row.
 - `up::Float64` — the fit's `errordef` (1 for χ², 0.5 for `−log L`).
 - `acceptance::Float64` — accepted fraction of the post-burn-in proposals
   (healthy random-walk Metropolis: ≈ 0.2–0.4).
-- `nsteps::Int`, `burn::Int`, `thin::Int` — the chain settings;
-  `nkept = (nsteps − burn) ÷ thin`.
-- `scale::Float64` — the final proposal scale (after any burn-in
-  adaptation; equals the input `scale` when `target_accept` was not used).
+- `nsteps::Int`, `burn::Int`, `thin::Int` — the chain settings; the kept rows are
+  `(nsteps − burn) ÷ thin` **per chain**, so the total is that times the number of
+  chains (or walkers, for the `:stretch` ensemble).
+- `scale::Float64` — the final proposal scale (after any burn-in adaptation;
+  equals the input `scale` when `target_accept` was not used). `NaN` for the
+  `:nuts` sampler, which has no proposal scale.
 - `proposal::Symbol` — the proposal actually used: `:hesse`, `:errors`,
   `:steps` (explicit per-coordinate σ) or `:matrix` (explicit covariance);
   `:unknown` for ensembles loaded from a foreign file.
@@ -139,8 +141,13 @@ function Base.show(io::IO, ::MIME"text/plain", e::LikelihoodEnsemble)
     nfree < ntot && print(io, " (of ", ntot, ")")
     println(io)
     if isfinite(e.acceptance)
-        @printf(io, "  acceptance %.3f   proposal :%s   scale %.4g   (nsteps %d, burn %d, thin %d)\n",
-                e.acceptance, e.proposal, e.scale, e.nsteps, e.burn, e.thin)
+        if isfinite(e.scale)
+            @printf(io, "  acceptance %.3f   proposal :%s   scale %.4g   (nsteps %d, burn %d, thin %d)\n",
+                    e.acceptance, e.proposal, e.scale, e.nsteps, e.burn, e.thin)
+        else
+            @printf(io, "  acceptance %.3f   sampler :%s   (nsteps %d, burn %d, thin %d)\n",
+                    e.acceptance, e.proposal, e.nsteps, e.burn, e.thin)
+        end
     end
     if nk > 0 && isfinite(e.fbest) && isfinite(e.up) && e.up > 0
         Δ = (e.fvals .- e.fbest) ./ e.up
@@ -166,6 +173,365 @@ function _covariance_unreliable(m::Minuit)
     return !is_valid(m.fmin) || fm.made_pos_def ||
            cov_status == MnHesseFailed || cov_status == MnMadePosDef ||
            cov_status == MnNotPosDef
+end
+
+# Evaluate `(fval, logprior)` at the free-coordinate point `q`, splicing it into
+# a FULL external vector. The prior and the FCN get SEPARATE working buffers
+# (`pbuf`, `fbuf`) that are never aliased, so a prior or FCN that mutates its
+# argument in place cannot corrupt the other — structural safety, no defensive
+# re-copy. The cheap prior is evaluated FIRST: an out-of-support point
+# (`logprior = -Inf`) returns immediately and skips the possibly expensive FCN.
+# `logprior_full === nothing` is the flat (zero) prior; it skips the prior buffer
+# entirely (the `mcmc_sample` path — one splice per step, zero allocation). Both
+# buffers are refreshed from `best_full` on every call, so the fixed coordinates
+# always carry their snapshot values and a mutating user FCN cannot leak across
+# steps (the guarantee the old per-call `copy` gave — see `quantiles`). Shared by
+# the Metropolis and the affine-invariant ensemble samplers.
+@inline function _eval_posterior!(pbuf::Vector{Float64}, fbuf::Vector{Float64},
+                                  best_full, free_idx, fval_full, logprior_full, q)
+    lp = 0.0
+    if logprior_full !== nothing
+        @inbounds copyto!(pbuf, best_full)
+        @inbounds for (j, i) in enumerate(free_idx)
+            pbuf[i] = q[j]
+        end
+        lp = Float64(logprior_full(pbuf))
+        isfinite(lp) || return (Inf, lp)
+    end
+    @inbounds copyto!(fbuf, best_full)
+    @inbounds for (j, i) in enumerate(free_idx)
+        fbuf[i] = q[j]
+    end
+    return (Float64(fval_full(fbuf)), lp)
+end
+
+function _metropolis_chain(fval_full, logprior_full,
+                           p0::AbstractVector{<:Real},
+                           best_full::AbstractVector{<:Real},
+                           free_idx::AbstractVector{<:Integer},
+                           lo_free::AbstractVector{<:Real},
+                           hi_free::AbstractVector{<:Real},
+                           steps_vec::Union{Nothing,Vector{Float64}},
+                           Sfac::Union{Nothing,Matrix{Float64}};
+                           up::Real,
+                           nsteps::Integer,
+                           burn::Integer,
+                           thin::Integer,
+                           scale::Real,
+                           target_accept::Union{Nothing,Real},
+                           adapt_every::Integer,
+                           rng::Random.AbstractRNG,
+                           warn::Bool,
+                           context::AbstractString = "mcmc_sample")
+    ntot = length(best_full)
+    nfree = length(p0)
+    nfree >= 1 || throw(ArgumentError("no free parameters to sample"))
+    steps_vec === nothing && Sfac === nothing &&
+        throw(ArgumentError("internal error: missing proposal scale"))
+
+    p = Float64.(collect(p0))                 # current chain position (free coords)
+    # Two reusable full-length buffers — one for the prior, one for the FCN — so
+    # they are never aliased (a mutating prior cannot shift the FCN point) and
+    # nothing is allocated per step. `fval_full` / `logprior_full` receive the
+    # FULL external vector; `logprior_full === nothing` is the flat-prior
+    # (`mcmc_sample`) fast path. See `_eval_posterior!`.
+    pbuf = Vector{Float64}(undef, ntot)
+    fbuf = Vector{Float64}(undef, ntot)
+    _eval(qfree) = _eval_posterior!(pbuf, fbuf, best_full, free_idx,
+                                    fval_full, logprior_full, qfree)
+
+    c0, lp0 = _eval(p)
+    isfinite(lp0) ||
+        throw(ArgumentError("the log-prior is not finite at the start point (logprior = $lp0)"))
+    isfinite(c0) ||
+        throw(ArgumentError("the FCN is not finite at the best-fit start point (fcn = $c0)"))
+    fstart = c0
+    logpost0 = -c0 / (2.0 * Float64(up)) + lp0
+    isfinite(logpost0) ||
+        throw(ArgumentError("the log-posterior is not finite at the start point"))
+
+    nkept = (nsteps - burn) ÷ thin
+    kept = Matrix{Float64}(undef, nkept, ntot)
+    fvals = Vector{Float64}(undef, nkept)
+    loglik = Vector{Float64}(undef, nkept)
+    logpost = Vector{Float64}(undef, nkept)
+
+    q = Vector{Float64}(undef, nfree)       # proposal buffer
+    z = Vector{Float64}(undef, nfree)       # N(0,1) draws for :hesse/:matrix
+    scale_cur = Float64(scale)
+    ikeep = 0
+    nacc_post = 0                            # accepted after burn-in
+    npost = nsteps - burn
+    block_acc = 0                            # burn-in adaptation bookkeeping
+    block_n = 0
+    adapting = target_accept !== nothing
+
+    @inbounds for it in 1:nsteps
+        # Propose q = p + scale·δ with symmetric δ.
+        if steps_vec !== nothing
+            for k in 1:nfree
+                q[k] = p[k] + scale_cur * steps_vec[k] * randn(rng)
+            end
+        else
+            for k in 1:nfree
+                z[k] = randn(rng)
+            end
+            for k in 1:nfree
+                acc = 0.0
+                for l in 1:nfree
+                    acc += Sfac[k, l] * z[l]
+                end
+                q[k] = p[k] + scale_cur * acc
+            end
+        end
+
+        # Reject outside the effective support BEFORE calling the FCN.
+        accepted = false
+        inbox = true
+        for k in 1:nfree
+            (!isnan(lo_free[k]) && q[k] < lo_free[k]) && (inbox = false; break)
+            (!isnan(hi_free[k]) && q[k] > hi_free[k]) && (inbox = false; break)
+        end
+        if inbox
+            c1, lp1 = _eval(q)
+            if isfinite(c1) && isfinite(lp1)
+                # Keep the old likelihood-only path byte-stable: with a zero
+                # prior this is exactly exp(-(c1-c0)/(2up)).
+                dlogpost = -(c1 - c0) / (2.0 * Float64(up)) + (lp1 - lp0)
+                if dlogpost > 0 || rand(rng) < exp(dlogpost)
+                    copyto!(p, q)
+                    c0 = c1
+                    lp0 = lp1
+                    logpost0 = -c0 / (2.0 * Float64(up)) + lp0
+                    accepted = true
+                end
+            end
+        end
+
+        if it > burn
+            accepted && (nacc_post += 1)
+            r = it - burn
+            if r % thin == 0
+                ikeep += 1
+                for i in 1:ntot
+                    kept[ikeep, i] = best_full[i]
+                end
+                for (j, i) in enumerate(free_idx)
+                    kept[ikeep, i] = p[j]
+                end
+                fvals[ikeep] = c0
+                loglik[ikeep] = -c0 / (2.0 * Float64(up))
+                logpost[ikeep] = logpost0
+            end
+        elseif adapting
+            block_n += 1
+            accepted && (block_acc += 1)
+            if block_n == adapt_every
+                rate = block_acc / adapt_every
+                scale_cur *= clamp(rate / Float64(target_accept), 0.5, 2.0)
+                scale_cur = clamp(scale_cur, 1e-10, 1e10)
+                block_n = 0
+                block_acc = 0
+            end
+        end
+    end
+    @assert ikeep == nkept
+
+    acceptance = nacc_post / npost
+    if warn
+        acceptance < 0.05 &&
+            @warn "$context: post-burn acceptance $(round(acceptance; digits=3)) < 0.05 — " *
+                  "the steps are too large (or the start point is poor); lower `scale` or " *
+                  "set `target_accept = 0.25`."
+        acceptance > 0.9 &&
+            @warn "$context: post-burn acceptance $(round(acceptance; digits=3)) > 0.9 — " *
+                  "the steps are much too small, so consecutive samples are highly correlated; " *
+                  "raise `scale` or set `target_accept = 0.25`."
+    end
+
+    return kept, fvals, loglik, logpost, acceptance, scale_cur, fstart
+end
+
+# Affine-invariant ensemble sampler (Goodman & Weare 2010 stretch move, the
+# emcee kernel). GRADIENT-FREE — it only evaluates the log-posterior, so it works
+# for any FCN (including ones that cannot be auto-differentiated) — and affine
+# invariant, so it samples strongly correlated / skewed posteriors far better
+# than a single random-walk chain. A population of `nwalkers` walkers is split
+# into two halves; each walker `k` is updated against a random walker `j` in the
+# complementary (frozen) half by proposing `q = X_j + z·(X_k − X_j)` with `z`
+# drawn from `g(z) ∝ 1/√z` on `[1/aₛ, aₛ]`, accepted with probability
+# `min(1, z^(nfree−1)·post(q)/post(X_k))` — the `z^(nfree−1)` factor is what makes
+# the move affine-invariant and preserves detailed balance. Proposals outside the
+# effective support are rejected before the FCN is called. Reuses
+# `_eval_posterior!`, so the same prior/limit handling and mutation-safety apply.
+function _ensemble_chain(fval_full, logprior_full,
+                         best_free::AbstractVector{<:Real},
+                         best_full::AbstractVector{<:Real},
+                         free_idx::AbstractVector{<:Integer},
+                         lo_free::AbstractVector{<:Real},
+                         hi_free::AbstractVector{<:Real},
+                         init_scale::AbstractVector{<:Real};
+                         up::Real, nwalkers::Integer, niter::Integer,
+                         burn::Integer, thin::Integer, stretch::Real,
+                         rng::Random.AbstractRNG, warn::Bool,
+                         context::AbstractString = "posterior_sample")
+    nfree = length(best_free)
+    ntot = length(best_full)
+    nfree >= 1 || throw(ArgumentError("no free parameters to sample"))
+    nwalkers >= 4 ||
+        throw(ArgumentError("ensemble sampler needs nwalkers ≥ 4, got $nwalkers"))
+    # The stretch move keeps every proposal inside the affine hull of the current
+    # ensemble, so with nwalkers ≤ n_free the walkers can never span the full
+    # parameter space — one or more posterior directions would never be sampled.
+    nwalkers > nfree ||
+        throw(ArgumentError("ensemble sampler needs nwalkers > n_free (= $nfree) so the " *
+                            "walkers span the full space (the stretch move preserves the " *
+                            "ensemble's affine hull); got nwalkers = $nwalkers. Use " *
+                            "nwalkers ≥ $(2 * nfree) for good mixing."))
+    iseven(nwalkers) ||
+        throw(ArgumentError("ensemble sampler needs an even nwalkers, got $nwalkers"))
+    (isfinite(stretch) && stretch > 1) ||
+        throw(ArgumentError("stretch parameter `a` must be finite and > 1, got $stretch"))
+    warn && nwalkers < 2 * nfree &&
+        @warn "$context: nwalkers = $nwalkers < 2·n_free = $(2nfree); the affine-invariant \
+ensemble can mix poorly or get stuck in a subspace when walkers ≲ 2·n_free — raise `nwalkers`."
+    up_f = Float64(up)
+
+    pbuf = Vector{Float64}(undef, ntot)
+    fbuf = Vector{Float64}(undef, ntot)
+    eval_post(q) = _eval_posterior!(pbuf, fbuf, best_full, free_idx,
+                                    fval_full, logprior_full, q)
+
+    cbest, lpbest = eval_post(best_free)
+    isfinite(lpbest) ||
+        throw(ArgumentError("the log-prior is not finite at the best-fit start point"))
+    isfinite(cbest) ||
+        throw(ArgumentError("the FCN is not finite at the best-fit start point (fcn = $cbest)"))
+    fstart = cbest
+
+    # ── Initialise the walkers in a small over-dispersed ball around the best
+    #    fit, each validated to lie in the effective support with a finite
+    #    posterior. Walker 1 sits at the best fit. ──────────────────────────
+    X = Matrix{Float64}(undef, nwalkers, nfree)
+    fv = Vector{Float64}(undef, nwalkers)
+    lpv = Vector{Float64}(undef, nwalkers)
+    lpost = Vector{Float64}(undef, nwalkers)
+    @inbounds for d in 1:nfree
+        X[1, d] = best_free[d]
+    end
+    fv[1] = cbest; lpv[1] = lpbest; lpost[1] = -cbest / (2.0 * up_f) + lpbest
+    qw = Vector{Float64}(undef, nfree)
+    @inbounds for w in 2:nwalkers
+        placed = false
+        fac = 0.1
+        for _ in 1:50
+            for d in 1:nfree
+                qw[d] = best_free[d] + fac * init_scale[d] * randn(rng)
+            end
+            inbox = true
+            for d in 1:nfree
+                (!isnan(lo_free[d]) && qw[d] < lo_free[d]) && (inbox = false; break)
+                (!isnan(hi_free[d]) && qw[d] > hi_free[d]) && (inbox = false; break)
+            end
+            if inbox
+                c, lp = eval_post(qw)
+                if isfinite(c) && isfinite(lp)
+                    for d in 1:nfree
+                        X[w, d] = qw[d]
+                    end
+                    fv[w] = c; lpv[w] = lp; lpost[w] = -c / (2.0 * up_f) + lp
+                    placed = true
+                    break
+                end
+            end
+            fac *= 0.7
+        end
+        if !placed
+            for d in 1:nfree
+                X[w, d] = best_free[d]
+            end
+            fv[w] = cbest; lpv[w] = lpbest; lpost[w] = lpost[1]
+        end
+    end
+    # Guard against a collapsed ensemble: if walkers could not be placed in
+    # support and fell back to the best fit, the centered ensemble loses rank and
+    # the affine-hull-preserving stretch move can never explore the lost
+    # directions — fail loudly rather than return a silent point mass.
+    Xc = X .- (sum(X, dims = 1) ./ nwalkers)
+    rank(Xc; rtol = 1e-9) == nfree ||
+        throw(ArgumentError("$context: could not initialise a full-rank ensemble — the " *
+            "effective support is too tight (or walkers collapsed onto the best fit). Loosen " *
+            "the limits/prior, raise `nwalkers`, or use sampler = :metropolis / :nuts."))
+
+    half = nwalkers ÷ 2
+    set_a = 1:half
+    set_b = (half + 1):nwalkers
+    nrec = (niter - burn) ÷ thin
+    nkept = nrec * nwalkers
+    kept = Matrix{Float64}(undef, nkept, ntot)
+    fvals = Vector{Float64}(undef, nkept)
+    loglik = Vector{Float64}(undef, nkept)
+    logpost = Vector{Float64}(undef, nkept)
+    chain_ids = Vector{Int}(undef, nkept)
+    nacc = 0
+    nprop = 0
+    ikeep = 0
+    prop = Vector{Float64}(undef, nfree)
+
+    @inbounds for it in 1:niter
+        for (active, complement) in ((set_a, set_b), (set_b, set_a))
+            nc = length(complement)
+            for k in active
+                j = complement[rand(rng, 1:nc)]      # frozen complementary walker
+                z = ((stretch - 1.0) * rand(rng) + 1.0)^2 / stretch
+                inbox = true
+                for d in 1:nfree
+                    prop[d] = X[j, d] + z * (X[k, d] - X[j, d])
+                    (!isnan(lo_free[d]) && prop[d] < lo_free[d]) && (inbox = false)
+                    (!isnan(hi_free[d]) && prop[d] > hi_free[d]) && (inbox = false)
+                end
+                it > burn && (nprop += 1)
+                inbox || continue
+                c, lp = eval_post(prop)
+                (isfinite(c) && isfinite(lp)) || continue
+                lpost_new = -c / (2.0 * up_f) + lp
+                # Affine-invariant acceptance: (nfree−1)·log z + Δlogpost.
+                logα = (nfree - 1) * log(z) + (lpost_new - lpost[k])
+                if logα >= 0.0 || log(rand(rng)) < logα
+                    for d in 1:nfree
+                        X[k, d] = prop[d]
+                    end
+                    fv[k] = c; lpv[k] = lp; lpost[k] = lpost_new
+                    it > burn && (nacc += 1)
+                end
+            end
+        end
+        if it > burn && (it - burn) % thin == 0
+            for w in 1:nwalkers
+                ikeep += 1
+                for i in 1:ntot
+                    kept[ikeep, i] = best_full[i]
+                end
+                for (d, i) in enumerate(free_idx)
+                    kept[ikeep, i] = X[w, d]
+                end
+                fvals[ikeep] = fv[w]
+                loglik[ikeep] = -fv[w] / (2.0 * up_f)
+                logpost[ikeep] = lpost[w]
+                chain_ids[ikeep] = w
+            end
+        end
+    end
+    @assert ikeep == nkept
+
+    acceptance = nprop > 0 ? nacc / nprop : NaN
+    if warn && isfinite(acceptance)
+        acceptance < 0.1 &&
+            @warn "$context: ensemble acceptance $(round(acceptance; digits=3)) < 0.1 — the \
+walkers may be poorly initialised or the posterior strongly non-affine; raise `nwalkers` or \
+widen the start."
+    end
+    return kept, fvals, loglik, logpost, chain_ids, acceptance, fstart
 end
 
 """
@@ -314,7 +680,7 @@ function mcmc_sample(m::Minuit;
     nsteps - burn >= thin ||
         throw(ArgumentError("no samples would be kept: need nsteps − burn ≥ thin " *
                             "(got nsteps=$nsteps, burn=$burn, thin=$thin)"))
-    scale > 0 || throw(ArgumentError("scale must be > 0"))
+    (isfinite(scale) && scale > 0) || throw(ArgumentError("scale must be finite and > 0, got $scale"))
     adapt_every >= 1 || throw(ArgumentError("adapt_every must be ≥ 1"))
     if target_accept !== nothing
         0 < target_accept < 1 ||
@@ -342,7 +708,7 @@ function mcmc_sample(m::Minuit;
 
     best_full = collect(Float64, m.values)
     up = Float64(m.fcn.up)
-    up > 0 || throw(ArgumentError("errordef (up) must be > 0, got $up"))
+    (isfinite(up) && up > 0) || throw(ArgumentError("errordef (up) must be finite and > 0, got $up"))
 
     # Per-free-parameter limits, NaN ⇒ unbounded on that side (same
     # convention as get_contours_samples). Enforced by rejection BEFORE
@@ -368,9 +734,11 @@ function mcmc_sample(m::Minuit;
         size(proposal) == (nfree, nfree) ||
             throw(DimensionMismatch("proposal covariance is $(size(proposal)), " *
                                     "expected ($nfree, $nfree)"))
-        # An explicit covariance is a deliberate user act: a non-PD matrix
-        # would silently freeze the clamped directions (zero proposal spread)
-        # — fail loudly instead.
+        # An explicit covariance is a deliberate user act: a non-finite or non-PD
+        # matrix would silently freeze the clamped directions (zero/Inf proposal
+        # spread) — fail loudly instead.
+        all(isfinite, proposal) ||
+            throw(ArgumentError("explicit proposal covariance must be all-finite"))
         isposdef(Symmetric(Matrix{Float64}(proposal))) ||
             throw(ArgumentError("explicit proposal covariance must be positive-definite " *
                                 "(for a diagonal proposal pass a σ vector instead)"))
@@ -409,114 +777,18 @@ parabolic errors are also meaningless (e.g. a parameter at a limit)."""
         prop_used = :errors
     end
 
-    # χ²/FCN over the free coordinates: splice into a fresh full external
-    # vector (the user FCN never sees our working buffers) and call the
-    # raw user function — NOT the counting wrapper, so m.nfcn is untouched.
+    # The chain calls the raw user function — NOT the counting wrapper, so
+    # m.nfcn is untouched — on the full external vector (`_metropolis_chain`
+    # splices the free coordinates into its own working buffer). A flat
+    # (zero) log-prior keeps this byte-for-byte identical to the pure
+    # likelihood chain.
     userf = m.fcn.f
-    eval_free = let base = best_full, fi = free_idx, f = userf
-        q -> begin
-            full = copy(base)
-            @inbounds for (j, i) in enumerate(fi)
-                full[i] = q[j]
-            end
-            return Float64(f(full))
-        end
-    end
-
-    p = best_full[free_idx]                 # current chain position (free coords)
-    c0 = eval_free(p)
-    isfinite(c0) ||
-        throw(ArgumentError("the FCN is not finite at the best-fit start point (fcn = $c0)"))
-    fbest = c0
-
-    nkept = (nsteps - burn) ÷ thin
-    kept = Matrix{Float64}(undef, nkept, ntot)
-    fvals = Vector{Float64}(undef, nkept)
-
-    q = Vector{Float64}(undef, nfree)       # proposal buffer
-    z = Vector{Float64}(undef, nfree)       # N(0,1) draws for :hesse/:matrix
-    scale_cur = Float64(scale)
-    ikeep = 0
-    nacc_post = 0                            # accepted after burn-in
-    npost = nsteps - burn
-    block_acc = 0                            # burn-in adaptation bookkeeping
-    block_n = 0
-    adapting = target_accept !== nothing
-
-    @inbounds for it in 1:nsteps
-        # Propose q = p + scale·δ with symmetric δ.
-        if steps_vec !== nothing
-            for k in 1:nfree
-                q[k] = p[k] + scale_cur * steps_vec[k] * randn(rng_use)
-            end
-        else
-            for k in 1:nfree
-                z[k] = randn(rng_use)
-            end
-            for k in 1:nfree
-                acc = 0.0
-                for l in 1:nfree
-                    acc += Sfac[k, l] * z[l]
-                end
-                q[k] = p[k] + scale_cur * acc
-            end
-        end
-
-        # Reject outside the limits BEFORE calling the FCN (truncated
-        # target); otherwise standard Metropolis on exp(−f/(2up)).
-        accepted = false
-        inbox = true
-        for k in 1:nfree
-            (!isnan(lo_free[k]) && q[k] < lo_free[k]) && (inbox = false; break)
-            (!isnan(hi_free[k]) && q[k] > hi_free[k]) && (inbox = false; break)
-        end
-        if inbox
-            c1 = eval_free(q)
-            if isfinite(c1) && (c1 < c0 || rand(rng_use) < exp(-(c1 - c0) / (2.0 * up)))
-                copyto!(p, q)
-                c0 = c1
-                accepted = true
-            end
-        end
-
-        if it > burn
-            accepted && (nacc_post += 1)
-            r = it - burn
-            if r % thin == 0
-                ikeep += 1
-                for i in 1:ntot
-                    kept[ikeep, i] = best_full[i]
-                end
-                for (j, i) in enumerate(free_idx)
-                    kept[ikeep, i] = p[j]
-                end
-                fvals[ikeep] = c0
-            end
-        elseif adapting
-            block_n += 1
-            accepted && (block_acc += 1)
-            if block_n == adapt_every
-                rate = block_acc / adapt_every
-                scale_cur *= clamp(rate / Float64(target_accept), 0.5, 2.0)
-                scale_cur = clamp(scale_cur, 1e-10, 1e10)
-                block_n = 0
-                block_acc = 0
-            end
-        end
-    end
-    @assert ikeep == nkept
-
-    acceptance = nacc_post / npost
-    if warn
-        acceptance < 0.05 &&
-            @warn "mcmc_sample: post-burn acceptance $(round(acceptance; digits=3)) < 0.05 — " *
-                  "the steps are too large (or the start point is poor); lower `scale` or " *
-                  "set `target_accept = 0.25`."
-        acceptance > 0.9 &&
-            @warn "mcmc_sample: post-burn acceptance $(round(acceptance; digits=3)) > 0.9 — " *
-                  "the steps are much too small, so consecutive samples are highly correlated; " *
-                  "raise `scale` or set `target_accept = 0.25`."
-    end
+    kept, fvals, _, _, acceptance, scale_cur, fbest = _metropolis_chain(
+        userf, nothing, best_full[free_idx], best_full, free_idx,
+        lo_free, hi_free, steps_vec, Sfac;
+        up = up, nsteps = nsteps, burn = burn, thin = thin, scale = scale,
+        target_accept = target_accept, adapt_every = adapt_every, rng = rng_use,
+        warn = warn, context = "mcmc_sample")
 
     names = [p_.name for p_ in m.params.pars]
     free = [!is_fixed(p_) for p_ in m.params.pars]

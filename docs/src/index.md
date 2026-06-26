@@ -70,9 +70,10 @@ m.merrors       # asymmetric ±σ per parameter (name-keyed Dict)
   (`LeastSquares`, `UnbinnedNLL`, `BinnedNLL`, …) composable with `CostSum`.
 - **[Error analysis](error_analysis.md) beyond HESSE/MINOS** — derived-quantity
   intervals & profile bands (`extremize`/`profile_band`), Monte-Carlo Δχ²
-  regions, likelihood-ensemble MCMC, bootstrap, jackknife, and multi-modal
-  solution detection, for the flat or strongly non-Gaussian likelihoods where
-  MINOS struggles.
+  regions, likelihood-ensemble MCMC, a non-mutating **Bayesian posterior bridge**
+  (`bayesian`/`posterior_sample` — priors, credible intervals & limits),
+  bootstrap, jackknife, and multi-modal solution detection, for the flat or
+  strongly non-Gaussian likelihoods where MINOS struggles.
 - **AD & threaded gradients** — a ForwardDiff extension and an opt-in
   threaded numerical gradient — plus an `Optim.jl` alternative-minimizer
   bridge (`optim`).

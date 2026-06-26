@@ -1,10 +1,11 @@
 name = "JuMinuit"
 uuid = "5523a57a-07f4-4aae-a9fd-d526bcb5d194"
 license = "LGPL-2.1-or-later"
-version = "0.5.5"
+version = "0.6.0"
 authors = ["Feng-Kun Guo"]
 
 [deps]
+DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
@@ -14,13 +15,18 @@ RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [weakdeps]
+AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
 Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+LogDensityProblemsAD = "996a588d-648d-4e1f-a8f0-a84b347e47b1"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+TransformVariables = "84d833dd-6860-57f9-a1a7-6da5db126cff"
 
 [extensions]
+JuMinuitAdvancedHMCExt = ["AdvancedHMC", "LogDensityProblems", "LogDensityProblemsAD", "TransformVariables", "ForwardDiff"]
 JuMinuitClusteringExt = "Clustering"
 JuMinuitDataFramesExt = "DataFrames"
 JuMinuitForwardDiffExt = "ForwardDiff"
@@ -28,13 +34,17 @@ JuMinuitOptimExt = "Optim"
 JuMinuitPlotsExt = "Plots"
 
 [compat]
+AdvancedHMC = "0.8"
 Aqua = "0.8"
 Clustering = "0.15"
 DataFrames = "1"
+DelimitedFiles = "1.9.1"
 ForwardDiff = "0.10, 1"
 JET = "0.9, 0.10, 0.11"
 JSON = "0.21, 1"
 LinearAlgebra = "1"
+LogDensityProblems = "2"
+LogDensityProblemsAD = "1"
 Logging = "1"
 Optim = "1, 2"
 Plots = "1"
@@ -44,23 +54,23 @@ Random = "1"
 RecipesBase = "1"
 Statistics = "1"
 Test = "1"
+TransformVariables = "0.8"
 julia = "1.11"
 
 [extras]
+AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+LogDensityProblemsAD = "996a588d-648d-4e1f-a8f0-a84b347e47b1"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+TransformVariables = "84d833dd-6860-57f9-a1a7-6da5db126cff"
 
-# NB: JET is intentionally NOT in the test target — it is a dev-only,
-# Julia-version-fragile optimization diagnostic whose precompile failure on a
-# new Julia point release would abort the whole `Pkg.test()`. It stays in
-# [extras]/[compat] so a developer can opt in (`]add JET`); test_aqua_jet.jl
-# loads it opportunistically and skips its check when absent.
 [targets]
-test = ["Aqua", "Clustering", "DataFrames", "ForwardDiff", "JSON", "Optim", "Plots", "Test"]
+test = ["Aqua", "Clustering", "DataFrames", "ForwardDiff", "JSON", "Optim", "Plots", "Test", "AdvancedHMC", "LogDensityProblems", "LogDensityProblemsAD", "TransformVariables"]

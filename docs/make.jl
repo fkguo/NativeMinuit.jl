@@ -35,6 +35,7 @@ makedocs(
             "Gradients: AD & threading" => "guides/gradients.md",
             "Alternative minimizers" => "guides/optim.md",
             "Error analysis" => "error_analysis.md",
+            "Bayesian analysis" => "bayesian.md",
             "Plotting & rich output" => "guides/plotting.md",
             "Migrating from iminuit/IMinuit.jl" => "guides/migration.md",
         ],

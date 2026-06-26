@@ -7,7 +7,9 @@ description: >-
   that fits data with `Minuit`, `migrad!`, `minos!`, `hesse!`, the cost-function
   objects (`LeastSquares`/`UnbinnedNLL`/`BinnedNLL`/…), `mncontour`/`profile`,
   `extremize`/`profile_band` (derived-quantity intervals & error bands),
-  `bootstrap`/`jackknife`, `get_contours_samples`, `find_solution_modes`, or
+  `bayesian`/`posterior_sample` (Bayesian posterior, priors & credible
+  intervals/limits), `bootstrap`/`jackknife`, `get_contours_samples`,
+  `find_solution_modes`, or
   `find_deeper_minimum`; or when porting Python-iminuit or IMinuit.jl fitting
   code to JuMinuit. Covers the bang-method idiom (`migrad!(m)` not `m.migrad()`),
   the FCN/result conventions, AD & threaded gradients, bounds/fixed parameters,
@@ -334,6 +336,7 @@ Two families that **agree** on a clean near-Gaussian fit and **diverge** when it
 | **extremize / profile band** | `extremize(m, f; seeds=…)`, `profile_band(m, f, xs; …)` | **profile interval/band of a derived quantity** ("MINOS for a function"); contains the best fit by construction |
 | **MC-Δχ²** | `get_contours_samples(m; …)` | non-Gaussian or **joint** N-D confidence region |
 | **MCMC ensemble** | `mcmc_sample(m; …)` → `quantiles` / `quantile_band` | **marginal quantile bands of derived quantities** (curves, ratios); active limits |
+| **Bayesian posterior** | `bayesian(m; …)` / `posterior_sample(m; prior=…)` → `credible_interval` / `upper_limit` | a **credible** interval/limit under an explicit **prior** (e.g. upper limit on a near-zero coupling); `prior=:flat` ⇒ the MCMC path |
 | **bootstrap** | `bootstrap(model, Data(x,y,σ), start)`, `bootstrap(cost, start)`, or `bootstrap(refit, data)` | you **doubt the error model** (quoted σ); want empirical sampling dist |
 | **jackknife** | `jackknife(model, Data(x,y,σ), start)` (or a `cost` / `refit` form) | quick error **+ explicit bias** estimate |
 
@@ -377,6 +380,40 @@ save_ensemble("ens.dat", ens; comment="…"); ens = load_ensemble("ens.dat")  # 
   pool for `extremize`/`profile_band` (pass the members extreme in `f`).
 - `minimum(ens.fvals) < ens.fbest` ⇒ chain found a deeper minimum → `find_deeper_minimum`.
 - Fixed params don't move; `m.nfcn` untouched; `seed=`/`rng=` for reproducibility.
+
+**Bayesian posterior bridge** (`bayesian` / `posterior_sample`, 0.5+): the SAME
+Metropolis kernel, now sampling `prior × exp(−fcn/(2·up))` and reporting
+**credible** (not confidence) summaries. Non-mutating: never writes `m.values` /
+`m.errors` / `m.covariance` / `m.nfcn`.
+
+```julia
+report = bayesian(m; level = 0.6827)        # one-step report; flat prior; m untouched
+pr   = normal_prior(m, :mass, 3.8717, 2e-4) # priors: flat_/normal_/uniform_/half_normal_prior, combine_priors
+post = posterior_sample(m; prior = pr, nchains = 4, seed = 11)   # PosteriorSample (reusable)
+maximum(post.rhat) < 1.01                    # split-R̂ (needs nchains≥2); effective_sample_size(post,:mass) too
+ci  = credible_interval(post, :mass; level = 0.6827)            # (lo,hi) equal-tailed marginal
+gup = upper_limit(post, :g; level = 0.90)                       # 90% credible upper limit (CredibleLimit)
+db  = derived_interval(post, θ -> θ[2] - θ[1]; level = 0.6827)  # credible interval of any scalar f(θ)
+posterior_mean/median/std(post, :mass); posterior_summary(post) # point summaries / table
+```
+- **Credible ≠ confidence**: `upper_limit`/`credible_interval` are prior-conditional;
+  NOT MINOS/CLs/Feldman–Cousins. `prior=:flat` reproduces the single-chain
+  `mcmc_sample` path **byte-for-byte** (same seed).
+- `flat_prior` is flat in **external** coords (parameterization-dependent, not
+  "uninformative"/Jeffreys). Support = Minuit `limits` ∩ prior support; construction
+  **throws** if the best fit is outside it (re-minimize or fix the prior).
+- **Posterior temperature follows `errordef`**: keep `up = 1` (χ²) or `0.5` (−log L);
+  inflating `up` for a wider MINOS interval tempers the posterior by `√up` — put
+  extra information in the **prior**, not in `errordef`.
+- **Samplers** (`sampler=`): `:metropolis` (default, random walk; `proposal`/`scale`/
+  `target_accept`/`overdisperse`, `nchains=4`, ≈2σ over-dispersed so split-R̂ is real);
+  `:stretch` (affine-invariant Goodman–Weare ensemble — **gradient-free**, ANY FCN incl.
+  non-AD complex-χ², beats RWM on strong correlation; knobs `nwalkers`/`stretch`);
+  `:nuts` (gradient NUTS via AdvancedHMC **extension** — `using AdvancedHMC,
+  LogDensityProblems, LogDensityProblemsAD, TransformVariables, ForwardDiff`; best for
+  smooth high-dim; **needs an AD-able FCN** — errors→use `:stretch` — and a best fit off
+  the limits). `rhat` is basic split-R̂ — for skewed/boundary marginals also check ESS +
+  trace. `method=:central` only (HPD throws, not silently approximate).
 
 ## Gotchas cheat-sheet (the non-guessable list)
 

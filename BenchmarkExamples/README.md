@@ -44,6 +44,30 @@ call (multiple Riemann sheets, near-threshold expansion). Free
 parameters: ~3–6 depending on which model variant. The covariance
 matrix is highly correlated → ideal stress test for MNCONTOUR.
 
+### `X6200_double_jpsi/` — two-channel di-J/ψ fit + Bayesian pole / scattering length
+
+Native-JuMinuit reproduction of the coupled-channel analysis of the
+**X(6200)**, the near-threshold state in the J/ψJ/ψ system, fit to the
+real LHCb double-J/ψ spectrum:
+
+> X.-K. Dong, V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
+> "Coupled-channel interpretation of the LHCb double-J/ψ spectrum and hints
+> of a new state near the J/ψJ/ψ threshold",
+> *Phys. Rev. Lett.* **126** (2021) 132001,
+> [arXiv:2009.07795](https://arxiv.org/abs/2009.07795),
+> [INSPIRE 1817481](https://inspirehep.net/literature/1817481).
+
+A 7-parameter fit to the digitized LHCb spectrum recovers the published
+best fit (χ²/dof = 0.99); a four-Riemann-sheet pole search locates the
+X(6200) at ≈ 6.20 GeV. It is also the **worked example for the Bayesian
+bridge**: `posterior_sample` + `derived_interval` propagate the pole,
+scattering length, effective range, and compositeness — reproducing the
+published Table and showing why a near-unitary scattering length must be
+reported through `1/a`. Files: `x6200_double_jpsi.jl`, `data_lhcb.csv`
+(digitized LHCb, arXiv:2006.16957), `parametersets_2c.csv` (published
+Δχ² ensemble). Both data files vendored from
+[fkguo/double_jpsi_fit](https://github.com/fkguo/double_jpsi_fit).
+
 ### `IAM_2Pformfactor/` — Inverse Amplitude Method on ππ / Kπ / πη / πK form factors
 
 ▶ **Run online (no install):** [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)

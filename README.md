@@ -106,6 +106,19 @@ common in coupled-channel / amplitude fits), JuMinuit adds:
   (`save_ensemble` / `load_ensemble`). The second leg of the
   profile-extremization ↔ ensemble-quantiles ↔ MINOS triangulation; iminuit
   has no native analogue (Python users bolt on emcee).
+- **Bayesian posterior bridge** (`bayesian`, `posterior_sample`) — a
+  non-mutating layer over the same kernel: `prior × exp(−fcn/(2·up))` sampled in
+  external coordinates (`flat`/`normal`/`uniform`/`half_normal` priors), with
+  **credible intervals**, one-sided **credible limits** (`credible_interval`,
+  `upper_limit`/`lower_limit`), multi-chain split-R̂ / ESS, and a flat prior that
+  (single chain, same seed) reproduces the likelihood path byte-for-byte. Three
+  samplers: a random-walk Metropolis (`:metropolis`); a gradient-free,
+  affine-invariant **ensemble** (`:stretch`, the Goodman–Weare/emcee kernel —
+  works on any FCN, including non-differentiable complex-χ², and handles strongly
+  correlated posteriors); and **NUTS** (`:nuts`, via an AdvancedHMC extension —
+  gradient-based, for smooth higher-dimensional posteriors, with proper
+  unconstraining transforms + log-Jacobian). Credible, not confidence — and it
+  never writes into `m.errors`/`m.covariance`/`m.nfcn`.
 - **Bootstrap** and **jackknife** (`bootstrap`, `jackknife`) — data-resampling
   errors that don't trust the quoted `σ`; with full covariance + `correlation`.
 - **Multi-modal solution detection** (`find_solution_modes`) — cluster the
@@ -358,8 +371,8 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   bounded parameters, MINOS & contours), error analysis, cost functions, and the
   full API reference.
 - **[Error-analysis guide](docs/src/error_analysis.md)** — which uncertainty method
-  to use, when, and why (HESSE / MINOS / MC-Δχ² / MCMC ensemble / bootstrap /
-  jackknife / multi-modal).
+  to use, when, and why (HESSE / MINOS / MC-Δχ² / MCMC ensemble / Bayesian
+  posterior / bootstrap / jackknife / multi-modal).
 - **[`docs/dev/`](docs/dev/)** — development-history archive: design notes, the
   C++-fidelity audit, the original roadmap, and the deferred-features list — a
   point-in-time snapshot from the v0.3 era, kept for provenance (see the
@@ -373,8 +386,8 @@ This repository ships a [Claude Code](https://claude.com/claude-code) **skill**
 that teaches an AI coding agent the JuMinuit API — the `Minuit` / `migrad!` /
 `minos!` workflow, the Julia-native cost functions, bounds and fixed parameters,
 AD & threaded gradients, and the error-analysis tools (`mncontour`,
-`get_contours_samples`, `mcmc_sample` / `quantile_band`, `bootstrap` /
-`jackknife`, `find_deeper_minimum`, …).
+`get_contours_samples`, `mcmc_sample` / `quantile_band`, `bayesian` /
+`posterior_sample`, `bootstrap` / `jackknife`, `find_deeper_minimum`, …).
 With it installed, an agent writes **correct fits and error analysis** instead of
 guessing the API or falling back to Python-`iminuit` / `IMinuit.jl` syntax. The
 skill is a concise quick-reference; its authoritative source is the package's own
