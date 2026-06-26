@@ -36,7 +36,7 @@ There are two families, and the difference is **what is held fixed**.
   estimator** directly.
 
 For a correctly-specified, near-Gaussian fit the two families **agree** — that
-agreement is itself a useful sanity check. They **diverge** precisely when:
+agreement is itself a useful check. They **diverge** precisely when:
 
 - **the error model is wrong** (the per-point `σ` are mis-scaled or
   mis-correlated). HESSE/MINOS/MC-Δχ² *trust* those `σ`; the bootstrap reads the
@@ -149,7 +149,7 @@ band.nfail == 0 || @warn "inspect band.diagnostics"
 # plot: ribbon between band.lo and band.hi, central curve band.fbest
 ```
 
-**Seed coverage is load-bearing, not a tuning knob.** Each endpoint comes
+**Seed coverage is load-bearing, not a tunable parameter.** Each endpoint comes
 from an exterior-penalty MIGRAD (a stiffening `λ`-continuation ladder with
 warm restarts) run from every seed. A best-fit-only run can come out
 **silently too narrow** — under-extremization — in two ways: (i) on a strongly
@@ -185,7 +185,7 @@ call — for the common **near-linear** case use `mode = :directional`, which
 walks the single projection direction `C·∇f`, secant-roots the *true* FCN to
 the `Δχ²` boundary on each side, and reports the *true* `f` there (≈ `n_free +
 ~15` paired evaluations, ~50× cheaper, exact in the linear-Gaussian limit). The
-recommended workflow is **directional first, `:full` only if you suspect
+recommended procedure is **directional first, `:full` only if you suspect
 non-linearity or the two disagree**. On the `:full` path, cut cost with
 `rounds = 1`, `iterate = 1`, `strategy = 0`, and a modest `maxfcn`. For a long
 run on a shared/kill-prone machine, attach `on_unit = …` (fired once per
@@ -428,7 +428,7 @@ combine_priors(p1, p2)           # add disjoint informative components (MVP: no 
 
 `prior = :flat` makes `posterior_sample` reproduce the single-chain likelihood
 path **byte-for-byte** (`post.ensemble.samples == mcmc_sample(m; …).samples` at
-the same seed) — the Bayesian layer adds machinery, never silently changes the
+the same seed) — the Bayesian layer adds new tools, never silently changes the
 chain. Construction **fails loudly** if the best-fit point lies outside the
 prior × limits support, rather than starting a dead chain.
 
@@ -459,10 +459,10 @@ the same one-sided boundary effect as the marginal quantile band above (mode ≠
 median), here a genuine feature for upper-limit reporting. Proposal tuning
 (`proposal`, `scale`, `target_accept`) is identical to `mcmc_sample`.
 
-**When to reach for it.** Use the Bayesian bridge when the deliverable is
+**When to use it.** Use the Bayesian posterior when the result you want is
 explicitly Bayesian — an upper limit on a coupling consistent with zero, a
 result under a physically-motivated prior, or a posterior probability — and the
-likelihood ensemble / MINOS / profile band when the deliverable is a frequentist
+likelihood ensemble / MINOS / profile band when the result you want is a frequentist
 confidence statement. With a flat prior in a near-Gaussian interior the credible
 and confidence intervals coincide; quote which one you computed.
 
@@ -479,7 +479,7 @@ Resamples the dataset and re-fits `nresample` times, returning a
 - **Parametric** (`kind = :parametric`): regenerates `yᵢ* = model(xᵢ, θ̂) + σᵢ·zᵢ`
   from the best fit and the assumed Gaussian error model, then re-fits. This
   *does* trust `σ`, so it tracks the HESSE error closely — useful as a check that
-  the resampling machinery and the curvature error agree.
+  the resampling estimate and the curvature error agree.
 
 Re-fits are warm-started from the full-data optimum by default, run serially
 unless you pass `threaded = true` (the default is `threaded = false`), and are
@@ -740,7 +740,7 @@ The flag is exposed as `mode.new_min`. This connects directly to the IAM
 cold-start convergence gap (see [`IAM_CONVERGENCE_GAP.md`](https://github.com/fkguo/JuMinuit.jl/blob/main/docs/dev/IAM_CONVERGENCE_GAP.md)):
 a separated cluster can be exactly the basin a stiff cold-start fit failed to
 reach. Per-mode re-fits are parallelized across threads when the fit opts into
-threading (`m.threaded_gradient`, honoring the same FCN thread-safety contract as
+threading (`m.threaded_gradient`, honoring the same FCN thread-safety requirement as
 JuMinuit's threaded gradient).
 
 ### Expensive cost functions: control every FCN call
@@ -854,7 +854,7 @@ perturbation form instead.
 ### Tuning and caveats
 
 - **`threshold`** (default `1.0`, in whitened σ units) sets the connection radius.
-  *Smaller* is stricter — it will not bridge distinct modes, but may split a
+  *Smaller* is stricter — it will not merge distinct modes, but may split a
   sparsely-sampled one. *Larger* risks single-linkage **chaining** across a gap.
   Distinct physical modes are typically separated by many σ, so the default is a
   safe starting point; sanity-check by reading the per-mode Δχ² and representative
@@ -926,7 +926,7 @@ usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/mai
    error far from the HESSE error tells you the `σ` are wrong.
 6. **Suspect estimator bias** (nonlinear, boundary, small `N`): run the
    **jackknife** for an explicit bias estimate and a bias-corrected value.
-7. **Sanity check** that the resampling plumbing agrees with the curvature error:
+7. **Check** that the resampling estimate agrees with the curvature error:
    the **parametric bootstrap** should reproduce the HESSE error.
 
 ## See also
@@ -939,7 +939,7 @@ usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/mai
 - Likelihood-ensemble MCMC / quantile bands:
   [`src/mcmc.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/mcmc.jl); tests
   [`test/test_mcmc.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/test/test_mcmc.jl)
-- Bayesian posterior bridge (priors, posterior, credible intervals):
+- Bayesian posterior analysis (priors, posterior, credible intervals):
   [`src/posterior.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/posterior.jl),
   [`src/priors.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/priors.jl); tests
   [`test/test_bayesian_bridge.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/test/test_bayesian_bridge.jl)

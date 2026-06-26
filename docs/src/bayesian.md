@@ -1,9 +1,9 @@
 # Bayesian posterior analysis
 
-JuMinuit's Bayesian bridge turns a converged Minuit fit into a **posterior** —
+JuMinuit turns a converged Minuit fit into a **posterior** —
 `prior × likelihood` sampled in the parameter space — without leaving the fit
 object and without re-specifying the model. It is the native-Julia analogue of
-the common *"MINUIT for the best fit, then an MCMC for the posterior"* workflow
+the common *"MINUIT for the best fit, then an MCMC for the posterior"* approach
 (in Python: iminuit + emcee).
 
 It answers a different question from HESSE/MINOS:
@@ -13,14 +13,14 @@ It answers a different question from HESSE/MINOS:
 > interval, a CLs limit, a Feldman–Cousins interval, or a MINOS error — even when
 > the numbers look identical in the Gaussian interior. Always quote the prior.
 
-Everything here is **non-mutating**: it never writes into `m.values`,
+Nothing here modifies the fit: it never writes into `m.values`,
 `m.errors`, `m.covariance`, MINOS state, or `m.nfcn`. See the
 [error-analysis guide](error_analysis.md) for how the Bayesian method sits
 beside HESSE / MINOS / profile bands / the likelihood-ensemble MCMC.
 
-## The statistical contract
+## Defining the posterior
 
-The posterior target is
+The posterior density is
 
 ```math
 \log p(θ \mid \text{data}) = -\,\frac{\text{fcn}(θ)}{2\,\text{up}} + \log\text{prior}(θ),
@@ -35,9 +35,9 @@ information in the **prior**, not in `errordef`.
 A flat prior is flat in JuMinuit's **external** coordinates — a parameterization
 choice, not an "uninformative" / Jeffreys prior. Minuit `limits` are taken as
 physical posterior support (intersected with the prior support); if a limit was
-only an optimizer stabilizer, remove it and supply a proper prior.
+only there to stabilize the minimization, remove it and supply a proper prior.
 
-## One-step report and the reusable sample
+## One-line summary, and the posterior sample
 
 ```julia
 using JuMinuit
@@ -51,10 +51,10 @@ credible_interval(post, :x; level = 0.6827)    # (lo, hi) equal-tailed
 posterior_mean(post, :x); posterior_median(post, :x); posterior_std(post, :x)
 ```
 
-## Example 1 — flat prior reproduces the HESSE error (anchor)
+## Example 1 — flat prior reproduces the HESSE error (a calibration check)
 
 In the Gaussian, near-linear interior a flat-prior credible interval matches the
-HESSE error. This is the sanity check that the machinery is calibrated.
+HESSE error — confirming the method is calibrated.
 
 ```julia
 using JuMinuit, Statistics
@@ -141,9 +141,11 @@ JuMinuit.quantile_band) for a pointwise band of a whole model curve.
 
 ## Example 5 — nuclear EFT: naturalness priors and a truncation band
 
-A degree-of-belief use case: an EFT observable `O(Q) = Σ_{n} c_n (Q/Λ)^n` with
-**naturalness** priors `c_n ~ N(0, 1)`. Fit the coefficients with their priors,
-then read the **truncation error** as the posterior of the first omitted term.
+A degree-of-belief use case (Furnstahl, Klco, Phillips, Wesolowski, [*Phys. Rev.
+C* **92**, 024005 (2015)](https://arxiv.org/abs/1506.01343)): an EFT observable
+`O(Q) = Σ_{n} c_n (Q/Λ)^n` with **naturalness** priors `c_n ~ N(0, 1)`. Fit the
+coefficients with their priors, then read the **truncation error** as the posterior
+of the first omitted term.
 
 ```julia
 using JuMinuit, Statistics
@@ -164,13 +166,13 @@ Q = 0.30
 dob68 = quantile(abs.(randn(20_000)) .* (Q/Λ)^3, 0.68)   # |c₃|·(Q/Λ)³, 68 % DoB
 ```
 
-This is the entry point; serious EFT analyses add a theory-covariance / discrepancy
-term to the FCN and a breakdown-scale hyperparameter — JuMinuit gives you the
-`logprior` and sample machinery to build that, it does not assume it for you.
+This is the starting point; a full EFT analysis adds a theory-covariance / discrepancy
+term and a breakdown-scale hyperparameter — JuMinuit provides the `logprior` and the
+sampling to build that, it does not assume it for you.
 
 ## Example 6 — a published coupled-channel fit: the X(6200), and a near-unitary scattering length
 
-Example 4 propagated a ratio; the same machinery carries the derived quantities of a
+Example 4 propagated a ratio; the same calls carry the derived quantities of a
 *published* analysis — the near-threshold state **X(6200)** from the two-channel fit
 to the LHCb double-`J/ψ` spectrum (Dong, Baru, Guo, Hanhart, Nefediev, [*Phys. Rev.
 Lett.* **126**, 132001 (2021)](https://arxiv.org/abs/2009.07795); full analysis at
@@ -182,7 +184,7 @@ X(6200). We want its **pole mass**, **effective range** `r`, **compositeness** `
 (molecular weight), and **scattering length** `a` — each a strongly nonlinear
 functional of the couplings (the pole is even located by a numerical root search on
 `det(1 − G·V) = 0`, so there is no analytic Jacobian for a linear propagation). We
-drive the bridge from the published best fit and its covariance, and propagate by
+start from the published best fit and its covariance, and propagate by
 sample evaluation:
 
 ```julia
@@ -250,11 +252,11 @@ quant(f) = round.(quantile([f(S[i,:]) for i in 1:size(S,1)], (0.16, 0.5, 0.84));
 ```
 
 The best-fit centrals reproduce the paper exactly — pole **6.20 GeV**, `r = −2.18 fm`,
-`X̄_A = 0.39` (a sizable molecular component) — and the bridge attaches an interval to
+`X̄_A = 0.39` (a sizable molecular component) — and we obtain an interval for
 each. The **scattering length is the instructive case**, and the reason a naive
 interval misleads: near the unitary limit `a` **diverges**, so its posterior straddles
 `±∞` (samples of both signs) and an *equal-tailed credible interval on `a` is
-meaningless*. The well-defined variable is `1/a`; the bridge keeps it away from a tight
+meaningless*. The well-defined variable is `1/a`; the posterior keeps it away from a tight
 band around zero, i.e. **|a| ≳ 0.4–0.5 fm** — exactly the paper's *disjoint*
 `a₀ ≤ −0.49 or ≥ 0.48 fm`. The general lesson: **reparametrize a derived quantity that
 can diverge** (report `1/a`, a bound, or an HPD region), never equal-tailed quantiles
@@ -275,7 +277,7 @@ makes the published bars tight):
 [`BenchmarkExamples/X6200_double_jpsi`](https://github.com/fkguo/JuMinuit.jl/tree/main/BenchmarkExamples/X6200_double_jpsi).
 The sampler is **`:stretch`** because this χ² runs through complex logarithms and
 Riemann-sheet square roots and is *not* auto-differentiable — the gradient-free ensemble
-is the right tool (see the table below).
+is the appropriate choice (see the table below).
 
 ## Choosing a sampler
 
@@ -287,16 +289,16 @@ posterior_sample(m; sampler = :nuts,       prior = pr)   # NUTS (needs the Advan
 
 | | `:metropolis` | `:stretch` (ensemble) | `:nuts` (HMC) |
 |---|---|---|---|
-| moves | Gaussian random walk, HESSE-preconditioned | Goodman–Weare stretch (the emcee kernel) | gradient-guided NUTS (AdvancedHMC) |
+| moves | Gaussian random walk, HESSE-preconditioned | Goodman–Weare stretch move (the emcee algorithm) | gradient-guided NUTS (AdvancedHMC) |
 | gradients | none | none — **works for any FCN** | **requires an auto-differentiable FCN** |
 | correlated / high-dim | mixes slowly | affine-invariant; good | scales best to high dimension |
-| knobs | `proposal`, `scale`, `target_accept`, `overdisperse` | `nwalkers`, `stretch` | `target_accept`, `nchains` |
+| options | `proposal`, `scale`, `target_accept`, `overdisperse` | `nwalkers`, `stretch` | `target_accept`, `nchains` |
 | availability | built in | built in | extension (see below) |
 
-Reach for **`:stretch`** when the posterior is strongly correlated or the FCN
+Use **`:stretch`** when the posterior is strongly correlated or the FCN
 cannot be auto-differentiated — common for complex-amplitude χ² in hadron physics
-— it is the de-facto HEP/astro standard and the safest default for awkward
-posteriors. Use **`:metropolis`** for cheap, near-Gaussian posteriors. Use
+— it is the de-facto standard in HEP and astrophysics and the safest default for
+difficult posteriors. Use **`:metropolis`** for inexpensive, near-Gaussian posteriors. Use
 **`:nuts`** for higher-dimensional, smooth, **auto-differentiable** posteriors,
 where gradient information makes it the most efficient — but it errors (rather
 than silently degrading) on a non-differentiable FCN or a best fit sitting on a
@@ -304,8 +306,8 @@ parameter limit.
 
 ### Enabling NUTS
 
-`sampler = :nuts` lives in a package **extension**, loaded when its backend is
-present:
+`sampler = :nuts` is provided by a package **extension**, loaded when the required
+packages are present:
 
 ```julia
 using JuMinuit
@@ -320,8 +322,8 @@ non-differentiable FCN raises a clear error pointing you to `:stretch`.
 
 All built-in cost objects — including `BinnedNLL` / `ExtendedBinnedNLL` — are
 ForwardDiff-differentiable, so `:nuts` works on them as long as the model / pdf /
-cdf you supply is itself auto-differentiable. A user function that hard-codes
-`Float64` internally (e.g. a complex-buffer χ² common in hadron physics) still
+cdf you supply is itself auto-differentiable. A user function that internally fixes
+its type to `Float64` (e.g. a complex-buffer χ² common in hadron physics) still
 needs the gradient-free `:stretch`.
 
 ## Diagnostics and honesty checks
@@ -341,6 +343,6 @@ post.warnings                        # boundary pile-up, etc.
   deeper minimum: re-minimize (see [`find_deeper_minimum`](@ref
   JuMinuit.find_deeper_minimum)) before quoting anything.
 
-See the [API reference](api.md) (the "Bayesian posterior bridge" section) for the
+See the [API reference](api.md) (the "Bayesian posterior analysis" section) for the
 full symbol list, and the [error-analysis guide](error_analysis.md) for how this
 sits beside HESSE / MINOS / profile bands / the likelihood ensemble.

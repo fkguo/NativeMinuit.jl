@@ -183,9 +183,9 @@ JuMinuit.save_ensemble
 JuMinuit.load_ensemble
 ```
 
-## Bayesian posterior bridge (priors & credible intervals)
+## Bayesian posterior analysis (priors & credible intervals)
 
-Non-mutating Bayesian layer: `prior × likelihood` sampled in full external
+A Bayesian layer that never modifies the fit: `prior × likelihood` sampled in full external
 coordinates, returning credible (not confidence) summaries. Three samplers —
 `sampler = :metropolis` (random walk), `sampler = :stretch` (the gradient-free,
 affine-invariant Goodman–Weare ensemble), and `sampler = :nuts` (gradient-based
@@ -244,7 +244,7 @@ JuMinuit.SolutionModes
 JuMinuit.find_deeper_minimum
 ```
 
-## Alternative minimizers (Optim.jl bridge)
+## Alternative minimizers (Optim.jl integration)
 
 ```@docs
 JuMinuit.optim

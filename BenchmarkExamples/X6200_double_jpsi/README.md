@@ -13,7 +13,7 @@ It does five things, each verified against the published numbers:
    J/ψJ/ψ threshold (6.194 GeV), plus the broad sheet-III pole near 6.82 GeV.
 3. **Reproduces the published error bars** by propagating the derived quantities
    over the paper's Δχ² parameter ensemble (the frequentist method it used).
-4. **Propagates them with the JuMinuit Bayesian bridge** (`posterior_sample` +
+4. **Propagates them with JuMinuit's Bayesian posterior sampling** (`posterior_sample` +
    `derived_interval`): classifies the near-threshold pole sheet-by-sheet — bound
    state (sheet I) vs virtual / resonance (sheet II) — to quantify the X(6200)'s
    two-fold interpretation, and shows why a near-unitary scattering length must be
@@ -26,7 +26,7 @@ It does five things, each verified against the published numbers:
 
 | File | Purpose |
 |---|---|
-| `x6200_double_jpsi.jl` | The runnable example (fit → poles → frequentist band → bridge → physical-prior check) |
+| `x6200_double_jpsi.jl` | The runnable example (fit → poles → frequentist band → posterior → physical-prior check) |
 | `data_lhcb.csv` | Digitized LHCb double-J/ψ invariant-mass spectrum (mass, events, error) |
 | `parametersets_2c.csv` | The published Δχ²≈1 parameter ensemble (322 sets) for the error bars |
 
@@ -68,7 +68,7 @@ T(k)⁻¹ = -8π√s [ 1/a + ½ r k² - i k + O(k⁴) ].
 | compositeness X̄_A | 0.39 ⁺⁰·⁵⁸₋₀.₁₂ | **0.39 +0.58 −0.12** (frequentist) |
 
 The Δχ²-ensemble (Part 3) propagation reproduces the published Table exactly. The
-Bayesian bridge from the real data fit (Part 4) returns the credible-interval
+Bayesian posterior from the real data fit (Part 4) returns the credible-interval
 analogue — *broad* here (e.g. r at 16/50/84 % ≈ −2.77 / −1.75 / −1.19 fm), because
 the 36-bin spectrum weakly constrains the couplings; the centrals still match. See
 *What this example also teaches* below.

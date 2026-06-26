@@ -33,7 +33,7 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
   random-walk chain. Each walker is a chain for the split-R̂ / ESS diagnostics;
   `nwalkers` defaults to `max(2·n_free+2, 8)` and `stretch` (a) to `2`. Shares the
   prior/limit handling and the structural mutation-safety of the Metropolis path.
-- **Bayesian posterior bridge — `bayesian` / `posterior_sample` (+ priors and
+- **Bayesian posterior analysis — `bayesian` / `posterior_sample` (+ priors and
   credible intervals).** A non-mutating Bayesian layer over the existing
   Metropolis kernel: it samples `prior × exp(−fcn/(2·up))` in full external
   coordinates and returns **credible** (not confidence) summaries.
@@ -70,7 +70,7 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
   - **Runnable data-backed example** `BenchmarkExamples/X6200_double_jpsi/`: a
     native JuMinuit fit to the digitized LHCb double-`J/ψ` spectrum (recovering the
     published χ²/dof = 0.99 best fit), a four-Riemann-sheet pole search for the
-    X(6200), and the bridge propagating its pole / scattering length / effective
+    X(6200), and the posterior propagating its pole / scattering length / effective
     range / compositeness — reproducing the published Table (frequentist ensemble)
     and the Bayesian credible analogue. Data vendored from `fkguo/double_jpsi_fit`.
 
