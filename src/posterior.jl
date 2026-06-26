@@ -452,12 +452,13 @@ Two samplers are available:
   and sampled with a ForwardDiff gradient; it is the most efficient sampler for
   smooth, higher-dimensional posteriors but **requires an auto-differentiable
   FCN** (no finite-difference fallback — it errors and points to `:stretch`) and
-  cannot start from a best fit on a parameter limit. The cost objects
-  `LeastSquares` / `UnbinnedNLL` / `ExtendedUnbinnedNLL` / `CostSum` are
-  ForwardDiff-differentiable and work with `:nuts`; `BinnedNLL` /
-  `ExtendedBinnedNLL` are not (their CDF edge buffer is `Float64`), so use
-  `:stretch` / `:metropolis` for those. Defaults `nsteps=2000` (per chain, incl.
-  warmup), `burn=1000`, `target_accept=0.8`.
+  cannot start from a best fit on a parameter limit. All built-in cost objects
+  (`LeastSquares` / `UnbinnedNLL` / `ExtendedUnbinnedNLL` / `BinnedNLL` /
+  `ExtendedBinnedNLL` / `CostSum`) are ForwardDiff-differentiable and work with
+  `:nuts`, **provided the model / pdf / cdf you supply is itself
+  auto-differentiable** — a user function that hard-codes `Float64` internally
+  (e.g. a complex-buffer χ²) still needs the gradient-free `:stretch`. Defaults
+  `nsteps=2000` (per chain, incl. warmup), `burn=1000`, `target_accept=0.8`.
 
 The reported `rhat` is the basic split-R̂ (not rank-normalized / folded); for
 skewed or boundary-truncated marginals also check `effective_sample_size` and the

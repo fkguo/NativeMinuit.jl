@@ -116,15 +116,16 @@ m.strategy = 2   # or store on m so later fits reuse it
 
 For standard fits, use a cost object: it carries data + model + the right
 `errordef`, so `Minuit(cost, x0)` reads `up` and the data count automatically
-(enables `χ²/ndf` and p-value in the table). Each is callable `cost(p)->Float64`.
+(enables `χ²/ndf` and p-value in the table). Each is callable `cost(p)` → a scalar
+objective (`Float64` on ordinary numeric calls; a ForwardDiff `Dual` under AD).
 
 | Cost | For | `errordef` | AD-generic? |
 |---|---|---|---|
 | `LeastSquares(x, y, σy, model; name=[…])` | χ² of `y±σ` vs `model(x,p)` | 1.0 | yes |
 | `UnbinnedNLL(samples, pdf; name=[…])` | unbinned ML from a normalized pdf | 0.5 | yes |
 | `ExtendedUnbinnedNLL(samples, density, integral)` | unbinned + yield param | 0.5 | yes |
-| `BinnedNLL(counts, edges, cdf)` | histogram fit (cumulative model) | 0.5 | **no** |
-| `ExtendedBinnedNLL(counts, edges, scaled_cdf)` | histogram + yield | 0.5 | **no** |
+| `BinnedNLL(counts, edges, cdf)` | histogram fit (cumulative model) | 0.5 | yes |
+| `ExtendedBinnedNLL(counts, edges, scaled_cdf)` | histogram + yield | 0.5 | yes |
 | `cA + cB` → `CostSum` | joint fit; params **unified by name** | rescaled | — |
 
 ```julia

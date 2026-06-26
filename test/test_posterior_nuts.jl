@@ -103,6 +103,29 @@ using AdvancedHMC, LogDensityProblems, LogDensityProblemsAD, TransformVariables,
         @test all(1.0 .<= pn.ensemble.samples[:, 1] .<= 3.0)
     end
 
+    @testset "BinnedNLL: NUTS matches metropolis (AD-generic edge buffer)" begin
+        # The binned cost is now ForwardDiff-differentiable (its `_edge_cdf` buffer
+        # promotes to the parameter type), so `:nuts` runs on it. The posterior must
+        # agree with the gradient-free, transform-free metropolis sampler — the same
+        # cross-check as the JACOBIAN GATE tests, now driving AD through `_edge_cdf`.
+        edges = collect(0.0:0.5:6.0)
+        cdfexp(x, p) = 1 - exp(-p[1] * x)
+        probs = [cdfexp(edges[i+1], [0.8]) - cdfexp(edges[i], [0.8])
+                 for i in 1:length(edges)-1]
+        counts = round.(probs ./ sum(probs) .* 2000)
+        c = BinnedNLL(counts, edges, cdfexp)
+        m = Minuit(c, [1.0]; limits = [(1e-6, 50.0)], tol = 1e-5); migrad!(m); hesse!(m)
+
+        pn = posterior_sample(m; sampler = :nuts, seed = 7, warn = false)
+        pm = posterior_sample(m; sampler = :metropolis, seed = 7, warn = false)
+        @test pn isa PosteriorSample && pn.sampler === :nuts
+        vn = pn.ensemble.samples[:, 1]
+        vm = pm.ensemble.samples[:, 1]
+        @test abs(mean(vn) - mean(vm)) < 0.3 * std(vm)     # agree to <0.3 posterior-σ
+        @test std(vn) ≈ std(vm) rtol = 0.25
+        @test all(vn .> 0.0)                                # respects the [1e-6, 50] limit
+    end
+
     @testset "non-differentiable FCN errors (no finite-difference fallback)" begin
         buf = zeros(Float64, 1)
         hbad(x) = (buf[1] = x[1]; (buf[1] - 1.0)^2)    # Dual → Float64 buffer breaks AD

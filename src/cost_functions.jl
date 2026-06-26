@@ -41,9 +41,11 @@ Supertype of the Julia-native cost-function family — `LeastSquares`,
 `UnbinnedNLL`, `BinnedNLL`, `ExtendedUnbinnedNLL`, `ExtendedBinnedNLL`,
 and their `CostSum` composition.
 
-A cost is a **callable** mapping a parameter vector to a `Float64`
-objective: `(c::AbstractCost)(par)::Float64`. Two things make a cost
-more than a bare closure:
+A cost is a **callable** mapping a parameter vector to a scalar
+objective: `(c::AbstractCost)(par)` returns a `Float64` on ordinary
+numeric calls, and a ForwardDiff `Dual` under automatic differentiation
+(every cost in this family is AD-generic, given an AD-able user model).
+Two things make a cost more than a bare closure:
 
 - `errordef(c)` — a trait (dispatched on the concrete type) giving the
   Minuit ErrorDef (`1.0` for χ², `0.5` for a negative-log-likelihood).
@@ -280,10 +282,19 @@ end
 # (normalise to `ptot`, then accumulate) without re-evaluating the cdf.
 # The cost is one small `O(nb)` array per FCN call — measured negligible
 # (≈0.5 KB for 50 bins; a full 50-bin MIGRAD allocates ~0.02 MB total).
+#
+# The buffer element type promotes against `eltype(par)` instead of being
+# pinned to `Float64`, so ForwardDiff `Dual`s flow through unbroken — this is
+# what makes `BinnedNLL` / `ExtendedBinnedNLL` auto-differentiable (e.g. the
+# `sampler = :nuts` posterior path), provided the user's `cdf` is itself
+# AD-generic. On the ordinary `Vector{Float64}` call path
+# `promote_type(Float64, Float64) == Float64`, so the buffer stays
+# `Vector{Float64}` and the result is bit-identical to the old `Float64(cdf(…))`
+# coercion (storing into a `Float64` array converts exactly as `Float64(…)` did).
 @inline function _edge_cdf(cdf::F, xe, par, nb::Int) where {F}
-    v = Vector{Float64}(undef, nb + 1)
+    v = Vector{promote_type(Float64, eltype(par))}(undef, nb + 1)
     @inbounds for k in 1:(nb + 1)
-        v[k] = Float64(cdf(xe[k], par))
+        v[k] = cdf(xe[k], par)
     end
     return v
 end

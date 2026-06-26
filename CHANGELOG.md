@@ -18,6 +18,13 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
   errors and points to `:stretch` otherwise, and refuses a best fit on a
   parameter limit. Enable with `using AdvancedHMC, LogDensityProblems,
   LogDensityProblemsAD, TransformVariables, ForwardDiff` (new optional weakdeps).
+  All built-in cost objects — `LeastSquares` / `UnbinnedNLL` /
+  `ExtendedUnbinnedNLL` / `BinnedNLL` / `ExtendedBinnedNLL` / `CostSum` — are
+  ForwardDiff-differentiable, so `:nuts` works on them whenever the user-supplied
+  model / pdf / cdf is itself auto-differentiable. (`BinnedNLL` /
+  `ExtendedBinnedNLL` reach this by promoting their per-edge CDF buffer to the
+  parameter element type instead of coercing it to `Float64`; the plain-`Float64`
+  evaluation path is unchanged, bit-for-bit.)
 - **Affine-invariant ensemble sampler (`posterior_sample(...; sampler = :stretch)`).**
   The Goodman–Weare stretch move (the emcee kernel): `nwalkers` walkers explore the
   posterior, **gradient-free** (works for any FCN, including ones that cannot be

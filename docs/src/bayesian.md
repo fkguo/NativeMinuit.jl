@@ -318,6 +318,12 @@ log-Jacobian, sampled by NUTS, and transformed back to external coordinates; the
 gradient comes from ForwardDiff. There is **no finite-difference fallback** — a
 non-differentiable FCN raises a clear error pointing you to `:stretch`.
 
+All built-in cost objects — including `BinnedNLL` / `ExtendedBinnedNLL` — are
+ForwardDiff-differentiable, so `:nuts` works on them as long as the model / pdf /
+cdf you supply is itself auto-differentiable. A user function that hard-codes
+`Float64` internally (e.g. a complex-buffer χ² common in hadron physics) still
+needs the gradient-free `:stretch`.
+
 ## Diagnostics and honesty checks
 
 ```julia

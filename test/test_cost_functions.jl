@@ -17,6 +17,10 @@
 # Local mean (avoid a Statistics test-dep that isn't in the test target).
 _mean(v) = sum(v) / length(v)
 
+# ForwardDiff (a JuMinuit dependency, in the test target) for the binned-cost
+# auto-differentiability regression below.
+import ForwardDiff
+
 @testset "cost_functions.jl — Julia-native cost family" begin
 
     # Shared fixtures ----------------------------------------------------
@@ -148,6 +152,36 @@ _mean(v) = sum(v) / length(v)
         par = collect(m.values)
         μ = [scdf(edges[i+1], par) - scdf(edges[i], par) for i in 1:length(edges)-1]
         @test c(par) ≈ 0.5 * poisson_chi2(counts, μ) atol = 1e-9
+    end
+
+    @testset "Binned NLLs are ForwardDiff-differentiable (AD-generic edge buffer)" begin
+        # Regression: `_edge_cdf` must propagate ForwardDiff `Dual`s — a `Float64`
+        # edge buffer silently kills them. This is the prerequisite for AD of a
+        # binned cost and for the `sampler = :nuts` posterior path on binned fits.
+        edges = collect(0.0:0.5:6.0)
+        cdfexp(x, p) = 1 - exp(-p[1] * x)
+        probs = [cdfexp(edges[i+1], [0.8]) - cdfexp(edges[i], [0.8])
+                 for i in 1:length(edges)-1]
+        counts = round.(probs ./ sum(probs) .* 2000)
+
+        # central finite difference with a parameter-scaled step (independent oracle)
+        fdpart(f, x, k) = let h = 1e-6 * max(1.0, abs(x[k])), xp = copy(x), xm = copy(x)
+            xp[k] += h
+            xm[k] -= h
+            (f(xp) - f(xm)) / (2h)
+        end
+
+        cb = BinnedNLL(counts, edges, cdfexp)
+        gb = ForwardDiff.gradient(cb, [1.1])           # must not error / kill the Duals
+        @test length(gb) == 1 && all(isfinite, gb)
+        @test gb[1] ≈ fdpart(cb, [1.1], 1) rtol = 1e-5
+
+        scdf(x, p) = p[2] * (1 - exp(-p[1] * x))
+        ce = ExtendedBinnedNLL(counts, edges, scdf)
+        ge = ForwardDiff.gradient(ce, [1.1, 1900.0])
+        @test length(ge) == 2 && all(isfinite, ge)
+        @test ge[1] ≈ fdpart(ce, [1.1, 1900.0], 1) rtol = 1e-5
+        @test ge[2] ≈ fdpart(ce, [1.1, 1900.0], 2) rtol = 1e-5
     end
 
     @testset "ExtendedUnbinnedNLL: extended MLE (N̂=n, λ̂=n/Σx)" begin
