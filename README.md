@@ -9,8 +9,10 @@ function-minimization library — the workhorse of every HEP fit. JuMinuit is a
 drop-in replacement for [IMinuit.jl](https://github.com/fkguo/IMinuit.jl) (the
 Julia wrapper of the Python [iminuit](https://github.com/scikit-hep/iminuit)),
 with an iminuit-style
-API, **C++-comparable (often better) performance**, and error-analysis tools
-that go beyond what either offers.
+API, **C++-comparable (often better) performance**, and error-analysis tools that
+go well beyond either — exact confidence contours, Monte-Carlo Δχ² regions, a
+likelihood-ensemble MCMC, **Bayesian posterior analysis** (priors & credible
+intervals, three samplers), bootstrap / jackknife, and multi-modal detection.
 
 License: **LGPL 2.1 or later** (mirrors upstream Minuit2). This is a derivative
 work of C++ Minuit2 — see [`LICENSE`](LICENSE) and [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
@@ -106,7 +108,7 @@ common in coupled-channel / amplitude fits), JuMinuit adds:
   (`save_ensemble` / `load_ensemble`). The second leg of the
   profile-extremization ↔ ensemble-quantiles ↔ MINOS triangulation; iminuit
   has no native analogue (Python users bolt on emcee).
-- **Bayesian posterior bridge** (`bayesian`, `posterior_sample`) — a
+- **Bayesian posterior analysis** (`bayesian`, `posterior_sample`) — a
   non-mutating layer over the same kernel: `prior × exp(−fcn/(2·up))` sampled in
   external coordinates (`flat`/`normal`/`uniform`/`half_normal` priors), with
   **credible intervals**, one-sided **credible limits** (`credible_interval`,
@@ -380,36 +382,37 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
 - **[`docs/UPSTREAM.md`](docs/UPSTREAM.md)** — upstream provenance and LGPL
   attribution.
 
-## Using JuMinuit with an AI coding agent (Claude Code skill)
+## Using JuMinuit with an AI coding agent (agent skill)
 
-This repository ships a [Claude Code](https://claude.com/claude-code) **skill**
-that teaches an AI coding agent the JuMinuit API — the `Minuit` / `migrad!` /
-`minos!` workflow, the Julia-native cost functions, bounds and fixed parameters,
-AD & threaded gradients, and the error-analysis tools (`mncontour`,
-`get_contours_samples`, `mcmc_sample` / `quantile_band`, `bayesian` /
-`posterior_sample`, `bootstrap` / `jackknife`, `find_deeper_minimum`, …).
+This repository ships an **agent skill** that teaches an AI coding agent the
+JuMinuit API — the `Minuit` / `migrad!` / `minos!` workflow, the Julia-native cost
+functions, bounds and fixed parameters, AD & threaded gradients, and the
+error-analysis tools (`mncontour`, `get_contours_samples`, `mcmc_sample` /
+`quantile_band`, `bayesian` / `posterior_sample`, `bootstrap` / `jackknife`,
+`find_deeper_minimum`, …).
 With it installed, an agent writes **correct fits and error analysis** instead of
 guessing the API or falling back to Python-`iminuit` / `IMinuit.jl` syntax. The
 skill is a concise quick-reference; its authoritative source is the package's own
 docstrings and [`docs/`](docs/), which it points to for depth.
 
-It lives at
-[`.claude/skills/juminuit-usage/SKILL.md`](.claude/skills/juminuit-usage/SKILL.md).
+It is a plain `SKILL.md` agent skill — **not tied to one tool**: it works with any
+coding agent that can read a skill ([Claude Code](https://claude.com/claude-code),
+OpenAI Codex, Gemini CLI, …). It lives at
+[`skills/juminuit-usage/SKILL.md`](skills/juminuit-usage/SKILL.md).
 
-- **Working inside this repository:** nothing to do — Claude Code auto-discovers
-  the project skill.
-- **Using JuMinuit from your own projects:** install it once at the user level so
-  every session can use it:
+- **Working inside this repository:** nothing to do for Claude Code — it
+  auto-discovers the project skill.
+- **Using JuMinuit from your own projects:** symlink it once into your agent's
+  skills directory, so a later `git pull` keeps it current:
 
   ```bash
-  mkdir -p ~/.claude/skills
-
-  # Option A — copy it in:
-  cp -r .claude/skills/juminuit-usage ~/.claude/skills/
-
-  # Option B (instead of A) — symlink it, so a later `git pull` keeps the skill current:
-  ln -s "$PWD/.claude/skills/juminuit-usage" ~/.claude/skills/juminuit-usage
+  ln -s "$PWD/skills/juminuit-usage" ~/.claude/skills/juminuit-usage   # Claude Code
+  ln -s "$PWD/skills/juminuit-usage" ~/.codex/skills/juminuit-usage    # OpenAI Codex
+  ln -s "$PWD/skills/juminuit-usage" ~/.gemini/skills/juminuit-usage   # Gemini CLI
   ```
+
+  Claude Code then auto-discovers it; Codex / Gemini have no skill auto-load, so
+  reference the file from `~/.codex/AGENTS.md` / `~/.gemini/GEMINI.md`.
 
 The agent then picks it up automatically whenever a task involves fitting with
 JuMinuit (writing a χ²/likelihood fit, running MIGRAD/MINOS, computing contours
