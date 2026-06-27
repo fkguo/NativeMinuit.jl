@@ -53,6 +53,27 @@ m                        # rich table (HTML in Jupyter, text in the REPL)
 `Fit` and `ArrayFit` are exported as IMinuit.jl-compatible aliases, so existing
 IMinuit.jl scripts largely work unchanged.
 
+## Beyond C++ Minuit2
+
+C++ Minuit2 gives you MIGRAD / HESSE / MINOS / MnContours / Simplex / Scan with
+bounds, fixed parameters, and Strategy levels — all ported here with line-by-line
+fidelity. On top of that, JuMinuit adds, in pure Julia:
+
+- **iminuit / IMinuit.jl-style front end** — `Minuit`, `migrad!`, `minos!`, `m.values` / `m.errors` / `m.merrors`, … (drop-in for IMinuit.jl).
+- **Julia-native cost functions** — `LeastSquares`, `UnbinnedNLL`, `BinnedNLL`, `ExtendedUnbinnedNLL`, `ExtendedBinnedNLL`, and their `CostSum`.
+- **Automatic-differentiation gradients** (ForwardDiff) and a **threaded numerical gradient**.
+- **Derived-quantity intervals & error bands** — `extremize` / `profile_band`: MINOS for any scalar `f(θ)`, with a fast `:directional` mode.
+- **Monte-Carlo Δχ² confidence regions** — `get_contours_samples` (the true non-Gaussian / joint region, not just the ellipse).
+- **Likelihood-ensemble MCMC** — `mcmc_sample` + `quantile_band` (marginal intervals & curve bands on the exact FCN).
+- **Bayesian posterior analysis** — `bayesian` / `posterior_sample`: priors, credible intervals & limits, and three samplers (random-walk, affine-invariant ensemble, NUTS).
+- **Bootstrap & jackknife** — `bootstrap` / `jackknife` (data-resampling errors).
+- **Multi-modal solution detection** — `find_solution_modes` (cluster statistically distinct minima).
+- **Basin escape** — `find_deeper_minimum` (basin-hopping to a deeper minimum).
+- **Alternative minimizers** — `optim` / `minimize_with` (Optim.jl integration).
+- **Rich output** — `to_latex` publication tables, Plots recipes, Unicode/HTML auto-display, ASCII plots.
+
+Each is detailed in the sections below.
+
 ## Features
 
 ### Minuit2 algorithms (ported with line-by-line C++ fidelity)
@@ -180,7 +201,7 @@ iminuit's `Minuit.scipy()`. Loads on `using Optim` (package extension).
 The API mirrors iminuit where it makes sense and leans on Julia's strengths
 (generic FCNs, multiple dispatch, package extensions) where that is better.
 
-## Beyond C++ Minuit2 — Julia-only gradient options
+## Julia-only gradient options (AD & threading)
 
 Two capabilities flow directly from Julia's generic-function dispatch and
 lightweight threading — useful when the FCN is expensive or contains
