@@ -56,8 +56,8 @@ IMinuit.jl scripts largely work unchanged.
 ## Beyond C++ Minuit2
 
 C++ Minuit2 gives you MIGRAD / HESSE / MINOS / MnContours / Simplex / Scan with
-bounds, fixed parameters, and Strategy levels — all ported here with line-by-line
-fidelity. On top of that, JuMinuit adds, in pure Julia:
+bounds, fixed parameters, and Strategy levels — all ported here. On top of that,
+JuMinuit adds, in pure Julia:
 
 - **iminuit / IMinuit.jl-style front end** — `Minuit`, `migrad!`, `minos!`, `m.values` / `m.errors` / `m.merrors`, … (drop-in for IMinuit.jl).
 - **Julia-native cost functions** — `LeastSquares`, `UnbinnedNLL`, `BinnedNLL`, `ExtendedUnbinnedNLL`, `ExtendedBinnedNLL`, and their `CostSum`.
