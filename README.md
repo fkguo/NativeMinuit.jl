@@ -74,6 +74,40 @@ JuMinuit adds, in pure Julia:
 
 Each is detailed in the sections below.
 
+## Performance
+
+Wall time for a full **MIGRAD** minimization vs C++ Minuit2 on five standard
+test objectives — the FCN being minimized, *not* a Minuit operation (Apple M3 /
+Julia 1.12 / OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides):
+
+| Benchmark | Julia (μs) | C++ (μs) | Julia / C++ |
+|---|---|---|---|
+| `quad_4d` | 0.81 | 5.50 | **0.147×** |
+| `rosenbrock_2d` | 9.50 | 37.62 | **0.253×** |
+| `rosenbrock_10d` | 58.11 | 156.62 | **0.371×** |
+| `gauss_ll_10_1000` | 32.26 | 44.96 | **0.718×** |
+| `gauss_ll_2_100` | 20.16 | 22.71 | **0.888×** |
+
+The objectives (the user FCN that MIGRAD minimizes — these are standard
+optimization test problems, not Minuit operations) are:
+
+- `quad_4d` — a 4-parameter quadratic (smooth and convex — the easy baseline).
+- `rosenbrock_2d` / `rosenbrock_10d` — the Rosenbrock "banana" function (a
+  curved, narrow valley; the classic hard test for a minimizer) in 2 and 10
+  dimensions.
+- `gauss_ll_<npar>_<ndata>` — a Gaussian negative-log-likelihood fit with
+  `<npar>` free parameters over `<ndata>` data points (a realistic
+  maximum-likelihood fit; e.g. `gauss_ll_10_1000` = 10 parameters, 1000 points).
+
+**Why Julia wins**: a parametric `CostFunction{F}` devirtualizes the FCN call
+site at compile time, whereas C++ Minuit2 pays for `shared_ptr` ref-counting and
+`ABObj` expression-template dispatch. Reproduce: build the C++ side
+(`cmake --build benchmark/cpp/build`), generate the Julia baseline
+(`scripts/run_gate.sh --save-baseline`), then `julia benchmark/compare_cpp.jl`.
+
+(Real-world HEP-fit benchmarks vs `iminuit` are further down, under
+[Real-world physics fits](#real-world-physics-fits).)
+
 ## Features
 
 ### Minuit2 algorithms (ported with line-by-line C++ fidelity)
@@ -314,38 +348,7 @@ Either way, confirm the fix with `JuMinuit.is_thread_safe(cf, x0)` (or just let
    8T = threaded_gradient=true under julia -t 8 (any thread-safe FCN).
 ```
 
-## Performance
-
-Wall time for a full **MIGRAD** minimization vs C++ Minuit2 on five standard
-test objectives — the FCN being minimized, *not* a Minuit operation (Apple M3 /
-Julia 1.12 / OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides):
-
-| Benchmark | Julia (μs) | C++ (μs) | Julia / C++ |
-|---|---|---|---|
-| `quad_4d` | 0.81 | 5.50 | **0.147×** |
-| `rosenbrock_2d` | 9.50 | 37.62 | **0.253×** |
-| `rosenbrock_10d` | 58.11 | 156.62 | **0.371×** |
-| `gauss_ll_10_1000` | 32.26 | 44.96 | **0.718×** |
-| `gauss_ll_2_100` | 20.16 | 22.71 | **0.888×** |
-
-The objectives (the user FCN that MIGRAD minimizes — these are standard
-optimization test problems, not Minuit operations) are:
-
-- `quad_4d` — a 4-parameter quadratic (smooth and convex — the easy baseline).
-- `rosenbrock_2d` / `rosenbrock_10d` — the Rosenbrock "banana" function (a
-  curved, narrow valley; the classic hard test for a minimizer) in 2 and 10
-  dimensions.
-- `gauss_ll_<npar>_<ndata>` — a Gaussian negative-log-likelihood fit with
-  `<npar>` free parameters over `<ndata>` data points (a realistic
-  maximum-likelihood fit; e.g. `gauss_ll_10_1000` = 10 parameters, 1000 points).
-
-**Why Julia wins**: a parametric `CostFunction{F}` devirtualizes the FCN call
-site at compile time, whereas C++ Minuit2 pays for `shared_ptr` ref-counting and
-`ABObj` expression-template dispatch. Reproduce: build the C++ side
-(`cmake --build benchmark/cpp/build`), generate the Julia baseline
-(`scripts/run_gate.sh --save-baseline`), then `julia benchmark/compare_cpp.jl`.
-
-### Real-world physics fits
+## Real-world physics fits
 
 On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
 
