@@ -300,27 +300,33 @@ is the appropriate choice (see the table below).
 ## Choosing a sampler
 
 ```julia
-posterior_sample(m; sampler = :metropolis, prior = pr)   # default: random-walk, nchains=4
-posterior_sample(m; sampler = :stretch,    prior = pr)   # affine-invariant ensemble
+posterior_sample(m; prior = pr)                          # default sampler: :stretch
+posterior_sample(m; sampler = :stretch,    prior = pr)   # affine-invariant ensemble (the default)
+posterior_sample(m; sampler = :metropolis, prior = pr)   # HESSE-preconditioned random walk
 posterior_sample(m; sampler = :nuts,       prior = pr)   # NUTS (needs the AdvancedHMC ext)
 ```
 
-| | `:metropolis` | `:stretch` (ensemble) | `:nuts` (HMC) |
+| | **`:stretch`** (default) | `:metropolis` | `:nuts` (HMC) |
 |---|---|---|---|
-| moves | Gaussian random walk, HESSE-preconditioned | Goodman–Weare stretch move (the emcee algorithm) | gradient-guided NUTS (AdvancedHMC) |
-| gradients | none | none — **works for any FCN** | **requires an auto-differentiable FCN** |
-| correlated / high-dim | mixes slowly | affine-invariant; good | scales best to high dimension |
-| options | `proposal`, `scale`, `target_accept`, `overdisperse` | `nwalkers`, `stretch` | `target_accept`, `nchains` |
+| moves | Goodman–Weare stretch move (the emcee algorithm) | Gaussian random walk, HESSE-preconditioned | gradient-guided NUTS (AdvancedHMC) |
+| gradients | none — **works for any FCN** | none | **requires an auto-differentiable FCN** |
+| correlated / high-dim | affine-invariant; good | mixes slowly | scales best to high dimension |
+| options | `nwalkers`, `stretch` | `proposal`, `scale`, `target_accept`, `overdisperse` | `target_accept`, `nchains` |
 | availability | built in | built in | extension (see below) |
 
-Use **`:stretch`** when the posterior is strongly correlated or the FCN
-cannot be auto-differentiated — common for complex-amplitude χ² in hadron physics
-— it is the de-facto standard in HEP and astrophysics and the safest default for
-difficult posteriors. Use **`:metropolis`** for inexpensive, near-Gaussian posteriors. Use
-**`:nuts`** for higher-dimensional, smooth, **auto-differentiable** posteriors,
-where gradient information makes it the most efficient — but it errors (rather
-than silently degrading) on a non-differentiable FCN or a best fit sitting on a
-parameter limit.
+The default is **`:stretch`**, the affine-invariant ensemble (the emcee algorithm).
+It needs no gradients, so it works for *any* FCN — including the complex-amplitude
+χ² common in hadron physics, which is typically not auto-differentiable — and its
+affine invariance keeps it efficient even when the posterior is strongly correlated.
+It is the de-facto standard in HEP and astrophysics, which makes it the safe choice
+when you would rather not think about tuning a proposal.
+
+Switch to **`:metropolis`** for inexpensive, near-Gaussian posteriors, where a
+HESSE-preconditioned random walk is already adequate and its per-chain R̂ / split
+diagnostics are convenient. Switch to **`:nuts`** for higher-dimensional, smooth,
+**auto-differentiable** posteriors, where gradient information makes it the most
+efficient — but it errors (rather than silently degrading) on a non-differentiable
+FCN or a best fit sitting on a parameter limit.
 
 ### Enabling NUTS
 

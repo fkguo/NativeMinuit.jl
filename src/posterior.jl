@@ -427,15 +427,17 @@ end
 
 Sample the posterior `exp(-fcn/(2*up)) * prior` in external coordinates. The
 returned object is independent of `m`; the fit state and `m.nfcn` are not mutated.
-Two samplers are available:
+Three samplers are available. The default, **`:stretch`**, is gradient-free and
+affine-invariant — it works for any FCN (including a non-differentiable
+complex-buffer χ²) and mixes well on strongly correlated posteriors:
 
-- `sampler = :metropolis` (default) — a random-walk Metropolis chain, `nchains`
+- `sampler = :metropolis` — a random-walk Metropolis chain, `nchains`
   of them (default 4). The proposal is set by `proposal` (`:hesse` / `:errors` /
   a σ vector / a covariance), tuned by `scale` and optional `target_accept`.
   Chains 2…n start **over-dispersed** at `overdisperse` × the proposal/HESSE
   scale from the best fit (default `2`, ≈2σ wider than the posterior) — the
   condition that makes the multi-chain split-R̂ a real convergence test.
-- `sampler = :stretch` — the affine-invariant **ensemble** sampler (Goodman &
+- `sampler = :stretch` **(the default)** — the affine-invariant **ensemble** sampler (Goodman &
   Weare; the emcee kernel). `nwalkers` walkers (default `max(2·n_free+2, 8)`,
   rounded up to even) explore the posterior with stretch moves of scale
   `stretch` (`a`, default `2`). It is **gradient-free** (works for any FCN,
@@ -466,7 +468,7 @@ trace rather than trusting `R̂ < 1.01` alone. Bayesian credibility levels are
 plain probabilities; no frequentist `nσ` overload is used.
 """
 function posterior_sample(prob::PosteriorProblem;
-                          sampler::Symbol = :metropolis,
+                          sampler::Symbol = :stretch,
                           nsteps::Union{Nothing,Integer} = nothing,
                           burn::Union{Nothing,Integer} = nothing,
                           thin::Union{Nothing,Integer} = nothing,

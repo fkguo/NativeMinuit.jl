@@ -187,10 +187,11 @@ JuMinuit.load_ensemble
 
 A Bayesian layer that never modifies the fit: `prior × likelihood` sampled in full external
 coordinates, returning credible (not confidence) summaries. Three samplers —
-`sampler = :metropolis` (random walk), `sampler = :stretch` (the gradient-free,
-affine-invariant Goodman–Weare ensemble), and `sampler = :nuts` (gradient-based
-NUTS, via the AdvancedHMC extension). With `prior = :flat` a single Metropolis
-chain (`nchains = 1`) reproduces the likelihood path exactly at the same seed;
+`sampler = :stretch` (the default: the gradient-free, affine-invariant Goodman–Weare
+ensemble), `sampler = :metropolis` (a HESSE-preconditioned random walk), and
+`sampler = :nuts` (gradient-based NUTS, via the AdvancedHMC extension). With
+`sampler = :metropolis, prior = :flat` a single chain (`nchains = 1`) reproduces
+the likelihood path exactly at the same seed;
 sampling never mutates the `Minuit` object or `m.nfcn`. See the
 [Bayesian analysis guide](bayesian.md) for worked examples and how to enable NUTS.
 

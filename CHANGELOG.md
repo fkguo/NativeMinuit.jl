@@ -3,6 +3,27 @@
 All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 + [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] — 2026-07-05
+
+### Changed
+
+- **The default posterior sampler is now `:stretch`** (the affine-invariant
+  Goodman–Weare ensemble), replacing `:metropolis`. `posterior_sample(m)` and
+  `bayesian(m)` now use the gradient-free ensemble by default: it works for *any*
+  FCN — including the non-auto-differentiable complex-amplitude χ² common in hadron
+  physics — and its affine invariance keeps it efficient on strongly correlated
+  posteriors, with no proposal to tune. `:metropolis` (the HESSE-preconditioned
+  random walk) and `:nuts` remain available via `sampler = …`; pass
+  `sampler = :metropolis` to recover the previous default, and its flat-prior chain
+  still reproduces `mcmc_sample` byte-for-byte at a fixed seed. The random-walk-only
+  options (`proposal` / `scale` / `target_accept` / `overdisperse`) are silently
+  ignored by `:stretch`, so existing calls that passed them keep running.
+
+### Removed
+
+- Dropped the unused `DelimitedFiles` dependency (flagged by Aqua); no user-facing
+  effect.
+
 ## [0.6.0] — 2026-06-26
 
 ### Added

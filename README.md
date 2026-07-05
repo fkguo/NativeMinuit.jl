@@ -169,8 +169,8 @@ common in coupled-channel / amplitude fits), JuMinuit adds:
   **credible intervals**, one-sided **credible limits** (`credible_interval`,
   `upper_limit`/`lower_limit`), multi-chain split-R̂ / ESS, and a flat prior that
   (single chain, same seed) reproduces the likelihood path byte-for-byte. Three
-  samplers: a random-walk Metropolis (`:metropolis`); a gradient-free,
-  affine-invariant **ensemble** (`:stretch`, the Goodman–Weare/emcee kernel —
+  samplers (`:stretch` is the default): a random-walk Metropolis (`:metropolis`);
+  a gradient-free, affine-invariant **ensemble** (`:stretch`, the Goodman–Weare/emcee kernel —
   works on any FCN, including non-differentiable complex-χ², and handles strongly
   correlated posteriors); and **NUTS** (`:nuts`, via an AdvancedHMC extension —
   gradient-based, for smooth higher-dimensional posteriors, with proper

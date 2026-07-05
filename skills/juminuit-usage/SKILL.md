@@ -406,10 +406,11 @@ posterior_mean/median/std(post, :mass); posterior_summary(post) # point summarie
 - **Posterior temperature follows `errordef`**: keep `up = 1` (χ²) or `0.5` (−log L);
   inflating `up` for a wider MINOS interval tempers the posterior by `√up` — put
   extra information in the **prior**, not in `errordef`.
-- **Samplers** (`sampler=`): `:metropolis` (default, random walk; `proposal`/`scale`/
-  `target_accept`/`overdisperse`, `nchains=4`, ≈2σ over-dispersed so split-R̂ is real);
-  `:stretch` (affine-invariant Goodman–Weare ensemble — **gradient-free**, ANY FCN incl.
-  non-AD complex-χ², beats RWM on strong correlation; knobs `nwalkers`/`stretch`);
+- **Samplers** (`sampler=`): `:stretch` (**default** — affine-invariant Goodman–Weare
+  ensemble, **gradient-free**, ANY FCN incl. non-AD complex-χ², beats RWM on strong
+  correlation; knobs `nwalkers`/`stretch`); `:metropolis` (HESSE-preconditioned random
+  walk; `proposal`/`scale`/`target_accept`/`overdisperse`, `nchains=4`, ≈2σ over-dispersed
+  so split-R̂ is real — use for cheap near-Gaussian posteriors);
   `:nuts` (gradient NUTS via AdvancedHMC **extension** — `using AdvancedHMC,
   LogDensityProblems, LogDensityProblemsAD, TransformVariables, ForwardDiff`; best for
   smooth high-dim; **needs an AD-able FCN** — errors→use `:stretch` — and a best fit off

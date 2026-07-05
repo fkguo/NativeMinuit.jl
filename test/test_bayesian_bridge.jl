@@ -21,7 +21,7 @@ end
         hesse!(m)
         ens = mcmc_sample(m; nsteps = 3_000, burn = 500, thin = 5,
                           seed = 11, warn = false)
-        post = posterior_sample(m; prior = :flat, nchains = 1,
+        post = posterior_sample(m; sampler = :metropolis, prior = :flat, nchains = 1,
                                 nsteps = 3_000, burn = 500, thin = 5,
                                 seed = 11, warn = false)
         @test post isa PosteriorSample
@@ -42,7 +42,7 @@ end
         ens = mcmc_sample(m; proposal = [0.2], nsteps = 1_000,
                           burn = 200, thin = 10, seed = 123,
                           warn = false)
-        post = posterior_sample(m; prior = :flat, proposal = [0.2],
+        post = posterior_sample(m; sampler = :metropolis, prior = :flat, proposal = [0.2],
                                 nchains = 1, nsteps = 1_000,
                                 burn = 200, thin = 10, seed = 123,
                                 warn = false)
@@ -59,6 +59,7 @@ end
         @test posterior_sample(m; prior = :flat, seed = 1, warn = false) isa PosteriorSample
         @test bayesian(m; warn = false) isa BayesianReport
         @test posterior_sample(m; sampler = :stretch, seed = 1, warn = false) isa PosteriorSample
+        @test posterior_sample(m; prior = :flat, seed = 1, warn = false).sampler === :stretch  # :stretch is the default
     end
 
     @testset "isconsistent: true for unbounded params, false after a different fit" begin
@@ -173,7 +174,7 @@ end
         # so the chain must stay byte-identical to the flat-prior chain.
         evil = Prior(θ -> (θ[1] = -999.0; 0.0), :evil, "mutating prior",
                      [-Inf], [Inf], ["x"], false, [false])
-        kw = (; nchains = 1, nsteps = 3_000, burn = 500, thin = 10, seed = 8, warn = false)
+        kw = (; sampler = :metropolis, nchains = 1, nsteps = 3_000, burn = 500, thin = 10, seed = 8, warn = false)
         flat = posterior_sample(m; prior = :flat, kw...)
         mut  = posterior_sample(m; prior = evil, kw...)
         @test mut.ensemble.samples == flat.ensemble.samples
@@ -240,10 +241,10 @@ end
     @testset "non-finite errordef / sampler config is rejected (not silently degenerate)" begin
         f(x) = ((x[1] - 1.0) / 0.3)^2
         m = Minuit(f, [0.0]; names = ["x"]); migrad!(m); hesse!(m)
-        @test_throws ArgumentError posterior_sample(m; scale = Inf, warn = false)
-        @test_throws ArgumentError posterior_sample(m; overdisperse = Inf, warn = false)
+        @test_throws ArgumentError posterior_sample(m; sampler = :metropolis, scale = Inf, warn = false)
+        @test_throws ArgumentError posterior_sample(m; sampler = :metropolis, overdisperse = Inf, warn = false)
         @test_throws ArgumentError posterior_sample(m; sampler = :stretch, stretch = Inf, warn = false)
-        @test_throws ArgumentError posterior_sample(m; proposal = fill(Inf, 1, 1), warn = false)
+        @test_throws ArgumentError posterior_sample(m; sampler = :metropolis, proposal = fill(Inf, 1, 1), warn = false)
         @test_throws ArgumentError mcmc_sample(m; scale = Inf, warn = false)
         m.up = Inf                                       # improper target (no likelihood term)
         @test_throws ArgumentError PosteriorProblem(m)
@@ -269,7 +270,7 @@ end
         m = Minuit(f, [0.0]; names = ["x"])
         migrad!(m)
         hesse!(m)
-        post = posterior_sample(m; nchains = 2, nsteps = 2_000, burn = 500,
+        post = posterior_sample(m; sampler = :metropolis, nchains = 2, nsteps = 2_000, burn = 500,
                                 thin = 10, seed = 13, scale = 2.0,
                                 target_accept = 0.25, warn = false)
         @test post.nchains == 2
