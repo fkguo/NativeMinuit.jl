@@ -35,4 +35,4 @@
 /scripts/Manifest.toml
 
 # research-harness anchor marker (host-machine state, not project content)
-/.autoresearch/
+/.nullius/
