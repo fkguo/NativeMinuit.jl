@@ -149,16 +149,16 @@
         edmval = 1.0e-3
         # ipass == 0 → never bails (preserves the first-pass do-while
         # semantics), even with an invalid state and a huge edm.
-        @test !JuMinuit._migrad_second_pass_invalid(0, invalid_state, 1.0e9, edmval)
-        @test !JuMinuit._migrad_second_pass_invalid(0, valid_state, 1.0e9, edmval)
+        @test !NativeMinuit._migrad_second_pass_invalid(0, invalid_state, 1.0e9, edmval)
+        @test !NativeMinuit._migrad_second_pass_invalid(0, valid_state, 1.0e9, edmval)
         # ipass > 0 + invalid inner state → bail.
-        @test JuMinuit._migrad_second_pass_invalid(1, invalid_state, 0.0, edmval)
+        @test NativeMinuit._migrad_second_pass_invalid(1, invalid_state, 0.0, edmval)
         # ipass > 0 + above-max-edm (edm_corrected > 10·edmval) → bail.
-        @test JuMinuit._migrad_second_pass_invalid(1, valid_state, 11 * edmval, edmval)
+        @test NativeMinuit._migrad_second_pass_invalid(1, valid_state, 11 * edmval, edmval)
         # ipass > 0 + valid + edm within 10·edmval → do NOT bail; a
         # converging multi-pass fit must keep iterating.
-        @test !JuMinuit._migrad_second_pass_invalid(1, valid_state, 5 * edmval, edmval)
-        @test !JuMinuit._migrad_second_pass_invalid(2, valid_state, 9 * edmval, edmval)
+        @test !NativeMinuit._migrad_second_pass_invalid(1, valid_state, 5 * edmval, edmval)
+        @test !NativeMinuit._migrad_second_pass_invalid(2, valid_state, 9 * edmval, edmval)
     end
 
     @testset "2nd-pass bail leaves converging Strategy≥1 fits unchanged" begin

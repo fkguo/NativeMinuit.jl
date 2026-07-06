@@ -114,11 +114,11 @@
         # loop / opt-in Simplex multistart was needed to reach the deep
         # minimum. That "stall" was a bare-eps ARTIFACT — with the corrected
         # machine precision (eps = 4·eps(Float64), matching C++/iminuit) the
-        # numerical-gradient steps are no longer too small, and JuMinuit now
+        # numerical-gradient steps are no longer too small, and NativeMinuit now
         # converges on pass 1, exactly as iminuit does. Cross-checked against
         # iminuit 2.32.0 (Strategy(0), plain migrad, use_simplex=false):
         #   valid=true, fval=-0.862799, a=b=3.21598, nfcn=70.
-        # JuMinuit reaches the IDENTICAL minimum (fval/a/b) in nfcn=82; the
+        # NativeMinuit reaches the IDENTICAL minimum (fval/a/b) in nfcn=82; the
         # call-count differs across implementations by construction (not asserted).
         # So this is now a CONVERGENCE-PARITY test. The genuine "pass-1 stalls →
         # retry enters" coverage lives in the "noisy stall" and "fixed-point"
@@ -160,7 +160,7 @@
         @test m5.fval ≈ fval1 atol = 1e-10    # idempotent
         @test m5.fval ≤ fval1 + 1e-10         # safety invariant
 
-        # OPT-IN Simplex multistart (use_simplex=true — JuMinuit extension
+        # OPT-IN Simplex multistart (use_simplex=true — NativeMinuit extension
         # beyond C++/iminuit): on an already-converged fit it must stay valid
         # at the deep minimum and never worsen the result (safety invariant).
         m5s = Minuit(fcn, [-5.0, 5.0];
@@ -244,26 +244,26 @@
         # we don't have direct access to dcovar from the BFM but we
         # can verify a well-conditioned prior_cov produces a valid fit
         # in the same number of (or fewer) calls as the cold start.
-        cf = JuMinuit.CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
-        params = JuMinuit.Parameters(["x", "y"], [0.0, 0.0], [0.1, 0.1])
+        cf = NativeMinuit.CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
+        params = NativeMinuit.Parameters(["x", "y"], [0.0, 0.0], [0.1, 0.1])
         # Cold start
         bfm_cold = migrad(cf, params)
-        @test JuMinuit.is_valid(bfm_cold)
+        @test NativeMinuit.is_valid(bfm_cold)
         # Warm start with the cold result's inverse Hessian as prior_cov
         # (also in internal coords since this FCN has no bounds → int == ext).
         prior = bfm_cold.internal.state.error.inv_hessian
-        cf2 = JuMinuit.CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
-        params2 = JuMinuit.Parameters(["x", "y"], [0.0, 0.0], [0.1, 0.1])
+        cf2 = NativeMinuit.CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
+        params2 = NativeMinuit.Parameters(["x", "y"], [0.0, 0.0], [0.1, 0.1])
         bfm_warm = migrad(cf2, params2; prior_cov = prior)
-        @test JuMinuit.is_valid(bfm_warm)
+        @test NativeMinuit.is_valid(bfm_warm)
         # And the CFwG overload accepts prior_cov too
-        cfwg = JuMinuit.CostFunctionWithGradient(
+        cfwg = NativeMinuit.CostFunctionWithGradient(
             x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2,
             x -> [2.0 * (x[1] - 1.0), 2.0 * (x[2] - 2.0)],
             1.0)
-        params3 = JuMinuit.Parameters(["x", "y"], [0.0, 0.0], [0.1, 0.1])
+        params3 = NativeMinuit.Parameters(["x", "y"], [0.0, 0.0], [0.1, 0.1])
         bfm_ad = migrad(cfwg, params3; prior_cov = prior)
-        @test JuMinuit.is_valid(bfm_ad)
+        @test NativeMinuit.is_valid(bfm_ad)
     end
 
     @testset "AD-gradient FCN survives retry path (codex BLOCKING regression)" begin
@@ -363,7 +363,7 @@
         # Simplex multistart's growing hop escapes to it — the X(3872)-shaped
         # "the deeper solution is only reached by perturbing out of the
         # stall" outcome. This basin jump is the job of the multistart
-        # (use_simplex=true, a JuMinuit extension beyond C++/iminuit), not the
+        # (use_simplex=true, a NativeMinuit extension beyond C++/iminuit), not the
         # faithful plain-re-seed default.
         m1 = Minuit(fcn_rugged, [0.0, 0.0]; names = ["x", "y"], errors = [0.02, 0.02])
         migrad!(m1; iterate = 1, tol = 1e-6, maxfcn = 4000)
@@ -390,20 +390,20 @@
     @testset "retry policy helpers (unit)" begin
         # ── Geometric growth schedule ────────────────────────────────────
         # Pass 2 reproduces the fixed-scale hop (×1); each later pass ×2.
-        @test JuMinuit._retry_perturb_factor(2) == 1.0
-        @test JuMinuit._retry_perturb_factor(3) == 2.0
-        @test JuMinuit._retry_perturb_factor(4) == 4.0
-        @test JuMinuit._retry_perturb_factor(5) == 8.0
+        @test NativeMinuit._retry_perturb_factor(2) == 1.0
+        @test NativeMinuit._retry_perturb_factor(3) == 2.0
+        @test NativeMinuit._retry_perturb_factor(4) == 4.0
+        @test NativeMinuit._retry_perturb_factor(5) == 8.0
 
         # ── Physical range used to cap growth ────────────────────────────
-        p_bounded = JuMinuit.MinuitParameter("a", 0.0, 0.1; lower = -2.0, upper = 3.0)
-        @test JuMinuit._retry_param_range(p_bounded, 0.1) == 5.0   # span
-        p_unbounded = JuMinuit.MinuitParameter("b", 0.0, 0.1)
-        @test JuMinuit._retry_param_range(p_unbounded, 0.1) ==
-              JuMinuit._RETRY_UNBOUNDED_RANGE_MULT * 0.1
-        p_onesided = JuMinuit.MinuitParameter("c", 0.0, 0.1; lower = -1.0)
-        @test JuMinuit._retry_param_range(p_onesided, 0.1) ==
-              JuMinuit._RETRY_UNBOUNDED_RANGE_MULT * 0.1   # not two-sided → step scale
+        p_bounded = NativeMinuit.MinuitParameter("a", 0.0, 0.1; lower = -2.0, upper = 3.0)
+        @test NativeMinuit._retry_param_range(p_bounded, 0.1) == 5.0   # span
+        p_unbounded = NativeMinuit.MinuitParameter("b", 0.0, 0.1)
+        @test NativeMinuit._retry_param_range(p_unbounded, 0.1) ==
+              NativeMinuit._RETRY_UNBOUNDED_RANGE_MULT * 0.1
+        p_onesided = NativeMinuit.MinuitParameter("c", 0.0, 0.1; lower = -1.0)
+        @test NativeMinuit._retry_param_range(p_onesided, 0.1) ==
+              NativeMinuit._RETRY_UNBOUNDED_RANGE_MULT * 0.1   # not two-sided → step scale
 
         # ── Scaled-params construction ───────────────────────────────────
         #   a: unbounded → grows ×factor (range huge, never capped)
@@ -418,8 +418,8 @@
                     fixed = [false, true, false, false])
         base_errs = [p.error for p in m.params.pars]
         # factor ≤ 1 → returned object is the input unchanged (pass-2 identity).
-        @test JuMinuit._retry_scaled_params(m, m.params, 1.0, base_errs) === m.params
-        sp = JuMinuit._retry_scaled_params(m, m.params, 4.0, base_errs)
+        @test NativeMinuit._retry_scaled_params(m, m.params, 1.0, base_errs) === m.params
+        sp = NativeMinuit._retry_scaled_params(m, m.params, 4.0, base_errs)
         @test sp.pars[1].error ≈ 0.1 * 4.0   # unbounded: grown ×4 = 0.4
         @test sp.pars[2].error == 0.2        # fixed: unchanged
         @test sp.pars[3].error == 0.2        # capped at span/10 (< grown 0.4)
@@ -432,8 +432,8 @@
         ms = Minuit(x -> x[1]^2, [0.0]; names = ["a"], errors = [0.1],
                      limits = [(-1.0, 1.0)])
         be_s = [p.error for p in ms.params.pars]
-        @test !JuMinuit._retry_perturb_saturated(ms, 1.0, be_s)   # 10·1·0.1=1 < 2
-        @test JuMinuit._retry_perturb_saturated(ms, 2.0, be_s)    # 10·2·0.1=2 ≥ 2
+        @test !NativeMinuit._retry_perturb_saturated(ms, 1.0, be_s)   # 10·1·0.1=1 < 2
+        @test NativeMinuit._retry_perturb_saturated(ms, 2.0, be_s)    # 10·2·0.1=2 ≥ 2
     end
 
     @testset "best-of-passes selector enforces the safety invariant" begin
@@ -446,12 +446,12 @@
         migrad!(mhi; iterate = 1)
         lo = mlo.fmin
         hi = mhi.fmin
-        @test JuMinuit.fval(lo) < JuMinuit.fval(hi)
+        @test NativeMinuit.fval(lo) < NativeMinuit.fval(hi)
         # Lower fval wins regardless of argument order.
-        @test JuMinuit._retry_select_better(lo, hi) === lo
-        @test JuMinuit._retry_select_better(hi, lo) === lo
+        @test NativeMinuit._retry_select_better(lo, hi) === lo
+        @test NativeMinuit._retry_select_better(hi, lo) === lo
         # A candidate equal to the incumbent does not displace it (identity).
-        @test JuMinuit._retry_select_better(lo, lo) === lo
+        @test NativeMinuit._retry_select_better(lo, lo) === lo
     end
 
     @testset "fixed-point predicate: detects revisits, never merges distinct minima" begin
@@ -466,17 +466,17 @@
         bfm_b = mb.fmin
         base_errs = [0.1, 0.1]
         visited_a = Tuple{Vector{Float64},Float64}[
-            (copy(bfm_a.ext_values), JuMinuit.fval(bfm_a))]
+            (copy(bfm_a.ext_values), NativeMinuit.fval(bfm_a))]
 
         # Re-visiting the SAME converged point → detected.
-        @test JuMinuit._retry_is_fixed_point(bfm_a, visited_a, base_errs)
+        @test NativeMinuit._retry_is_fixed_point(bfm_a, visited_a, base_errs)
         # A DISTINCT minimum with (near-)equal fval → NOT merged: the
         # position gate disambiguates fval-degenerate minima. This is the
         # "fixed-point detection can't false-positive on a still-progressing
         # search" guarantee.
-        @test !JuMinuit._retry_is_fixed_point(bfm_b, visited_a, base_errs)
+        @test !NativeMinuit._retry_is_fixed_point(bfm_b, visited_a, base_errs)
         # Empty history → nothing to match.
-        @test !JuMinuit._retry_is_fixed_point(
+        @test !NativeMinuit._retry_is_fixed_point(
             bfm_a, Tuple{Vector{Float64},Float64}[], base_errs)
 
         # Stress the position gate: a CLOSE but distinct minimum (5% of the
@@ -485,7 +485,7 @@
         mc = Minuit(x -> (x[1] - 1.05)^2 + (x[2] - 2.0)^2, [0.0, 0.0];
                      names = ["x", "y"], errors = [0.1, 0.1])
         migrad!(mc; iterate = 1)
-        @test !JuMinuit._retry_is_fixed_point(mc.fmin, visited_a, base_errs)
+        @test !NativeMinuit._retry_is_fixed_point(mc.fmin, visited_a, base_errs)
 
         # The length scale is the *input* base_errs (the stable user step),
         # NOT the fit's converged ext_errors (which can blow up on an invalid
@@ -493,7 +493,7 @@
         # what drives the scale: with an absurd base step the window grows to
         # ~1% of it (≈10) and the (5,8)-vs-(1,2) gap of 6 then DOES fall
         # inside it. (Real fits pass the small user step, so this can't fire.)
-        @test JuMinuit._retry_is_fixed_point(bfm_b, visited_a, [1000.0, 1000.0])
+        @test NativeMinuit._retry_is_fixed_point(bfm_b, visited_a, [1000.0, 1000.0])
     end
 
 end

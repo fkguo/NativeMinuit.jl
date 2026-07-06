@@ -8,7 +8,7 @@
 # benchmark/.julia-perf/runs/latest/benchmarks.json.
 
 cmake_minimum_required(VERSION 3.15)
-project(juminuit_cpp_bench LANGUAGES CXX)
+project(nativeminuit_cpp_bench LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

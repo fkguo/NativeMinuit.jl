@@ -2,7 +2,7 @@
 
 Real fits constrain parameters: a width must stay positive, a mixing angle
 lives in `[0, π/2]`, a normalization is fixed by an external measurement.
-JuMinuit handles all of this through the [`Minuit`](@ref) object — bounds
+NativeMinuit handles all of this through the [`Minuit`](@ref) object — bounds
 and fixed flags are set at construction or mutated afterward, exactly like
 iminuit.
 
@@ -13,7 +13,7 @@ Pass `limits` — one entry per parameter. Each entry is `nothing`
 `(nothing, hi)` (upper only):
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 fcn(x) = (x[1] - 0.5)^2 + (x[2] - 3.0)^2
 
@@ -113,7 +113,7 @@ respect the bounds — but two effects are worth knowing.
 
 **The error at a bound is asymmetric and Jacobian-distorted.** Because the
 transform's slope vanishes at the boundary, a naive `√(V[i,i])` would
-*under-report* the error there. JuMinuit instead uses the C++
+*under-report* the error there. NativeMinuit instead uses the C++
 two-sided `Int2extError` formula for `m.errors`, which probes the map at
 `int ± err` and averages, capturing the curvature near the bound. So the
 reported symmetric error stays sensible even close to a limit.

@@ -984,7 +984,7 @@ function save_ensemble(io::IO, ens::LikelihoodEnsemble; comment::AbstractString 
     # occurrence of each `# key: value`, so a comment line that happens to
     # look like one (e.g. "# up: 5 was too big") can never shadow the real
     # metadata on round-trip.
-    println(io, "# JuMinuit LikelihoodEnsemble v1")
+    println(io, "# NativeMinuit LikelihoodEnsemble v1")
     println(io, "# names: ", join(ens.names, ' '))
     println(io, "# free: ", join(Int.(ens.free), ' '))
     println(io, "# best: ", join(ens.best, ' '))

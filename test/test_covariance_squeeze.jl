@@ -9,7 +9,7 @@ using LinearAlgebra: Symmetric
         # Construct a 3×3 symmetric matrix and drop the middle row/col
         M = Float64[1 2 3; 0 4 5; 0 0 6]
         S = Symmetric(M, :U)
-        Sq = JuMinuit.squeeze_symmetric(S, 2)
+        Sq = NativeMinuit.squeeze_symmetric(S, 2)
         @test size(Sq) == (2, 2)
         # Remaining entries: (1,1), (1,3), (3,1)=(1,3), (3,3) → new indices (1,1), (1,2), (2,1), (2,2)
         @test Sq[1, 1] == 1.0
@@ -18,13 +18,13 @@ using LinearAlgebra: Symmetric
         @test Sq[2, 1] == 3.0  # symmetric read
 
         # Drop first row/col
-        Sq1 = JuMinuit.squeeze_symmetric(S, 1)
+        Sq1 = NativeMinuit.squeeze_symmetric(S, 1)
         @test Sq1[1, 1] == 4.0
         @test Sq1[1, 2] == 5.0
         @test Sq1[2, 2] == 6.0
 
         # Drop last row/col
-        Sq3 = JuMinuit.squeeze_symmetric(S, 3)
+        Sq3 = NativeMinuit.squeeze_symmetric(S, 3)
         @test Sq3[1, 1] == 1.0
         @test Sq3[1, 2] == 2.0
         @test Sq3[2, 2] == 4.0
@@ -32,11 +32,11 @@ using LinearAlgebra: Symmetric
 
     @testset "squeeze_symmetric — error cases" begin
         S = Symmetric([1.0 2.0; 0.0 3.0], :U)
-        @test_throws ArgumentError JuMinuit.squeeze_symmetric(S, 0)
-        @test_throws ArgumentError JuMinuit.squeeze_symmetric(S, 3)
+        @test_throws ArgumentError NativeMinuit.squeeze_symmetric(S, 0)
+        @test_throws ArgumentError NativeMinuit.squeeze_symmetric(S, 3)
         # 1x1 cannot squeeze
         S1 = Symmetric(reshape([1.0], 1, 1), :U)
-        @test_throws ArgumentError JuMinuit.squeeze_symmetric(S1, 1)
+        @test_throws ArgumentError NativeMinuit.squeeze_symmetric(S1, 1)
     end
 
     @testset "squeeze_error — invert/squeeze/re-invert round trip" begin
@@ -49,7 +49,7 @@ using LinearAlgebra: Symmetric
             0.05 0.2  1.5
         ], :U)
         err = MinimumError(V, 0.001)
-        sq = JuMinuit.squeeze_error(err, 2; prec)
+        sq = NativeMinuit.squeeze_error(err, 2; prec)
         @test size(sq) == (2, 2)
         @test is_valid(sq)
         @test sq.dcovar == 0.001  # preserved per C++
@@ -71,12 +71,12 @@ using LinearAlgebra: Symmetric
         # Hessian diag(1/V[i,i]); MnCovarianceSqueeze then squeezes that diagonal
         # and re-inverts it cleanly, yielding the VALID
         # `MinimumError(squeezed, err.Dcovar())` whose diagonal is diag(V[i,i]).
-        # Pre-fix JuMinuit mis-tagged this MnInvertFailed (audit §12).
+        # Pre-fix NativeMinuit mis-tagged this MnInvertFailed (audit §12).
         v = [1.0, 2.0, 3.0]
         Vsing_mat = v * v'                              # rank-1 ⇒ singular
         Vsing = Symmetric(0.5 * (Vsing_mat + Vsing_mat'), :U)
         err = MinimumError(Vsing, 0.5)
-        sq = JuMinuit.squeeze_error(err, 2; prec)
+        sq = NativeMinuit.squeeze_error(err, 2; prec)
         @test size(sq) == (2, 2)
         # C++-aligned status: VALID, not MnInvertFailed.
         @test is_valid(sq)
@@ -104,7 +104,7 @@ using LinearAlgebra: Symmetric
         # singular [[1,0],[0,0]].
         V = Symmetric(Float64[1 0 0; 0 0 1; 0 1 0], :U)
         err = MinimumError(V, 0.25)
-        sq = JuMinuit.squeeze_error(err, 2; prec)
+        sq = NativeMinuit.squeeze_error(err, 2; prec)
         @test size(sq) == (2, 2)
         @test invert_failed(sq)
         @test sq.status == MnInvertFailed

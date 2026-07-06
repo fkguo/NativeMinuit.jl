@@ -251,10 +251,10 @@ Macro form of [`model_fit`](@ref). Expands to
 """
 macro model_fit(model, data, start_values, kws...)
     expr = quote
-        local _chisq = par -> JuMinuit.chisq($(esc(model)), $(esc(data)), par)
+        local _chisq = par -> NativeMinuit.chisq($(esc(model)), $(esc(data)), par)
         $(isempty(kws) ?
-            :( JuMinuit.Minuit(_chisq, $(esc(start_values))) ) :
-            :( JuMinuit.Minuit(_chisq, $(esc(start_values));
+            :( NativeMinuit.Minuit(_chisq, $(esc(start_values))) ) :
+            :( NativeMinuit.Minuit(_chisq, $(esc(start_values));
                                 $(esc.(kws)...)) )
         )
     end
@@ -290,7 +290,7 @@ end
 # Plotting macros — IMinuit.jl-compatible.
 #
 # These expand to `Plots.scatter(...)` / `Plots.plot!(...)` calls; the
-# caller must have `using Plots` in scope at expansion time. JuMinuit
+# caller must have `using Plots` in scope at expansion time. NativeMinuit
 # itself uses RecipesBase, so this is a soft Plots.jl dependency.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -337,10 +337,10 @@ in any order — they're discriminated by type at runtime. Requires
 macro plt_best(dist, fit, data, kws...)
     _expr = quote
         _arr = ($dist, $fit, $data)
-        _fit_  = _arr[findfirst(x -> x isa JuMinuit.Minuit, _arr)]
+        _fit_  = _arr[findfirst(x -> x isa NativeMinuit.Minuit, _arr)]
         _dist_ = _arr[findfirst(x -> x isa Function, _arr)]
-        _data_ = _arr[findfirst(x -> x isa JuMinuit.Data, _arr)]
-        _paras = JuMinuit.args(_fit_)
+        _data_ = _arr[findfirst(x -> x isa NativeMinuit.Data, _arr)]
+        _paras = NativeMinuit.args(_fit_)
         _dis(x) = _dist_(x, _paras)
         _xrange = _data_.x
         _wv = LinRange(_xrange[1], _xrange[end], 100)
@@ -358,10 +358,10 @@ end
 macro plt_best!(dist, fit, data, kws...)
     _expr = quote
         _arr = ($dist, $fit, $data)
-        _fit_  = _arr[findfirst(x -> x isa JuMinuit.Minuit, _arr)]
+        _fit_  = _arr[findfirst(x -> x isa NativeMinuit.Minuit, _arr)]
         _dist_ = _arr[findfirst(x -> x isa Function, _arr)]
-        _data_ = _arr[findfirst(x -> x isa JuMinuit.Data, _arr)]
-        _paras = JuMinuit.args(_fit_)
+        _data_ = _arr[findfirst(x -> x isa NativeMinuit.Data, _arr)]
+        _paras = NativeMinuit.args(_fit_)
         _dis(x) = _dist_(x, _paras)
         _xrange = _data_.x
         _wv = LinRange(_xrange[1], _xrange[end], 100)
@@ -582,7 +582,7 @@ iminuit's `Minuit.contour`: evaluate the FCN on a 2D grid in the
 current (best-fit) values — a 2D **slice** of the FCN, the two-dimensional
 analogue of [`profile`](@ref). No minimization is performed. (Named
 `contour_grid` rather than iminuit's `contour` because the bare name
-collides with `Plots.contour` under `using JuMinuit, Plots`; this is also
+collides with `Plots.contour` under `using NativeMinuit, Plots`; this is also
 what IMinuit.jl exported as `contour`.)
 
 # Arguments
@@ -854,8 +854,8 @@ function draw_mnmatrix end
 # methods on stiff problems), then the user calls `hesse()` for the covariance.
 # The Julia-optimal analog bridges to Optim.jl — the native, AD-friendly
 # `scipy.optimize` equivalent — rather than shelling out to Python. The concrete
-# implementation lives in `ext/JuMinuitOptimExt.jl` (a package extension, like
-# JuMinuitForwardDiffExt / JuMinuitPlotsExt), activated by `using Optim`.
+# implementation lives in `ext/NativeMinuitOptimExt.jl` (a package extension, like
+# NativeMinuitForwardDiffExt / NativeMinuitPlotsExt), activated by `using Optim`.
 #
 # These thin entry points dispatch into the extension via `Base.get_extension`,
 # so a missing `using Optim` yields a helpful message instead of a bare
@@ -865,15 +865,15 @@ function draw_mnmatrix end
 # Helpful message when the Optim extension isn't loaded. A `const` so tests can
 # assert on its content independent of the loaded state.
 const _OPTIM_BRIDGE_NOT_LOADED =
-    "optim(m) / minimize_with(m) is JuMinuit's alternative-minimizer bridge, " *
+    "optim(m) / minimize_with(m) is NativeMinuit's alternative-minimizer bridge, " *
     "the Julia analog of iminuit's scipy.optimize escape hatch — powered by " *
-    "Optim.jl. Load it to enable: `using Optim`. (Or stay in pure JuMinuit with " *
+    "Optim.jl. Load it to enable: `using Optim`. (Or stay in pure NativeMinuit with " *
     "`migrad(m)` / `simplex(m)`.)"
 
 # Fetch the loaded Optim extension module, or throw the helpful "load Optim"
 # error. Centralised so `optim` and `minimize_with` share one dispatch point.
 function _optim_bridge_ext()
-    ext = Base.get_extension(@__MODULE__, :JuMinuitOptimExt)
+    ext = Base.get_extension(@__MODULE__, :NativeMinuitOptimExt)
     ext === nothing && throw(ArgumentError(_OPTIM_BRIDGE_NOT_LOADED))
     return ext
 end
@@ -932,7 +932,7 @@ For full control over the optimizer object itself, use [`minimize_with`](@ref):
 # Examples
 
 ```julia
-using JuMinuit, Optim
+using NativeMinuit, Optim
 m = Minuit(fcn, x0)
 optim(m; method=:lbfgs)   # or m |> optim
 hesse(m)                  # covariance, à la iminuit
@@ -953,7 +953,7 @@ The first positional argument may be an Optim optimizer object, bypassing the
 `method` name table for full control:
 
 ```julia
-using JuMinuit, Optim
+using NativeMinuit, Optim
 minimize_with(m, LBFGS())                       # optimizer object
 minimize_with(m, NelderMead())
 minimize_with(m; method=:bfgs, tol=1e-10)       # by name, like optim(m; …)

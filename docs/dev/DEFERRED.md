@@ -21,7 +21,7 @@ that this file documents.
   updates. The ROOT-recommended minimizer for histogram fits, but not
   the default for general fitting. iminuit/IMinuit.jl users have no
   built-in dependency on it.
-- **Revisit when**: a concrete user requests Fumili in JuMinuit.jl
+- **Revisit when**: a concrete user requests Fumili in NativeMinuit.jl
   (likely a HEP analysis with many histogram bins where the Fumili
   speedup matters), or when Phase 3 IMinuit.jl-compat scripts in the
   wild use Fumili and break.
@@ -54,7 +54,7 @@ ranks.
     clusters; is GC-aware and testable by spinning workers on one machine
     in CI. MPI.jl wins only in a narrow "very-many-params + moderate FCN
     + latency-bound" window or when slotting into an existing MPI
-    workflow — neither is JuMinuit's target.
+    workflow — neither is NativeMinuit's target.
   - Build on the **Phase G threaded-gradient abstraction** (the
     parallel-gradient executor already exists for threads): add a
     pluggable `:distributed` executor rather than a parallel code path
@@ -210,7 +210,7 @@ all of `inc/Math` and `inc/Fit`.
 
 ## Process: how to revisit something here
 
-1. Open an issue titled `[revisit-deferred] <topic>` in the JuMinuit.jl
+1. Open an issue titled `[revisit-deferred] <topic>` in the NativeMinuit.jl
    repo.
 2. Link to the section above.
 3. State the new evidence/demand that justifies revisiting (a user

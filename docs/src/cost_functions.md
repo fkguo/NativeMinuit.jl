@@ -1,7 +1,7 @@
 # Cost functions
 
 For common fits you do not have to write the χ² or negative-log-likelihood by
-hand. JuMinuit ships a small, Julia-native family of **cost-function objects**
+hand. NativeMinuit ships a small, Julia-native family of **cost-function objects**
 that carry their own data, model, and `errordef`, so MINOS/HESSE error scaling
 is automatic and several costs can be summed into a joint fit.
 
@@ -30,7 +30,7 @@ their CDF values through `Float64` buffers and are **not** currently AD-generic.
 ## Least squares
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 model(x, p) = p[1] * x + p[2]          # a straight line
 x  = [1.0, 2.0, 3.0, 4.0, 5.0]

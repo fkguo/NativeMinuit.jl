@@ -1,12 +1,12 @@
-# DFP iter-1 EDM divergence audit (JuMinuit vs iminuit, IAM x_jm)
+# DFP iter-1 EDM divergence audit (NativeMinuit vs iminuit, IAM x_jm)
 
 **Date**: 2026-05-28
 **Branch**: `feat/davidon-cxx-audit`
 
-## Symptom (from `iminuit` and JuMinuit traces at S=2 from x_jm)
+## Symptom (from `iminuit` and NativeMinuit traces at S=2 from x_jm)
 
 ```
-iminuit (C++ Minuit2 v6):                JuMinuit (post PR #6):
+iminuit (C++ Minuit2 v6):                NativeMinuit (post PR #6):
   iter 0: fval=325.8015  edm=7.7e-6        iter 0: fval=325.8015  edm=7.7e-6
   iter 1: fval=325.8015  edm=2.2e6  ← !    iter 1: fval=325.8015  edm=1.9e-5
   iter 2..7: gradual descent                (loop exits: edm < edmval)
@@ -52,7 +52,7 @@ larger than the natural parameter scale. The line search backtracks 11 times
 the net effect is that x moves substantially each DFP iteration. Across 8 DFP
 iterations, the algorithm walks from x_jm into the χ²=322 basin.
 
-[src/hesse.jl:438-449](src/hesse.jl:438) — JuMinuit's `_hesse_diagonal_failure`
+[src/hesse.jl:438-449](src/hesse.jl:438) — NativeMinuit's `_hesse_diagonal_failure`
 **explicitly removes that second clamp** (PR #6):
 
 ```julia
@@ -60,7 +60,7 @@ v = abs(g2[j]) > prec.eps2 ? 1.0 / g2[j] : 1.0
 M[j, j] = (isfinite(v) && v != 0.0) ? v : 1.0   # NO `< eps2 → 1` clamp
 ```
 
-JuMinuit therefore produces `V ≈ diag(1/g2) ≈ diag(1e-10)` at x_jm. The Newton
+NativeMinuit therefore produces `V ≈ diag(1/g2) ≈ diag(1e-10)` at x_jm. The Newton
 step `−V·g ≈ 1e-8` per coord is essentially zero. The line search finds tiny
 α, fval barely changes, edm drops, the inner DFP loop exits without exploring,
 and MIGRAD terminates back at 325.8.
@@ -109,13 +109,13 @@ is uniformly right.
    layer but with finer granularity inside `_hesse_diagonal_failure`.
 
 4. **Leave PR #6 as-is and rely on the retry+Simplex layer to find 322 from
-   x_jm**. Empirically tested (this audit): JuMinuit DFP + retry from x_jm
+   x_jm**. Empirically tested (this audit): NativeMinuit DFP + retry from x_jm
    stays at 325.8 (Simplex hop doesn't perturb enough to escape). Would need
    to make Simplex hops larger / multi-scale.
 
 ## Recommended next step
 
-**Option 1** — revert PR #6. This makes JuMinuit's `_hesse_diagonal_failure`
+**Option 1** — revert PR #6. This makes NativeMinuit's `_hesse_diagonal_failure`
 match C++ Minuit2 exactly. Verify both:
 - IAM x_jm warm start: reaches χ²=322.59 (matches iminuit)
 - IAM paras0 cold start + retry layer (PR #4 #8): doesn't regress catastrophically
@@ -130,7 +130,7 @@ trigger is enough, or whether option 2 (per-coord adaptive clamp) is needed.
   step refinement uses `step_size = 0` for all 9 coords (per the iminuit
   trace), so it effectively doesn't move x — both libraries match here.
 
-- The `while edm_corrected > edmval` check-first form of JuMinuit's inner DFP
+- The `while edm_corrected > edmval` check-first form of NativeMinuit's inner DFP
   loop (currently on main) skips iteration entirely when the warm-start edm
   is below threshold. C++ uses do-while (`while (cond) … } while (cond);`)
   semantics. The stashed do-while fix is necessary but **not sufficient** to
@@ -161,7 +161,7 @@ hybrid) across three commits on this branch:
 
    Added a status-gated entry shortcut at the top of the loop: when
    `(edm_corrected <= edmval) && (status == MnHesseValid)`, skip the body
-   immediately. This is a documented JuMinuit-only divergence from C++ that
+   immediately. This is a documented NativeMinuit-only divergence from C++ that
    preserves the warm-restart `function_cross_multi` / MINOS / contour_exact
    contract (no-op when seed is already converged and V is trustworthy).
    The placeholder-V cases (status `MnHesseFailed` / `MnMadePosDef` /

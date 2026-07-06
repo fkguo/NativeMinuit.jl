@@ -234,7 +234,7 @@ function minos(
     # `C++ xunit · m[ind,k] = sqrt(up/(2·V[ii,ii])) · 2·V[ik]
     #                       = sigma_i · V[ik]/V[ii]` since
     # `m = MinimumError::Matrix() = 2·V` (BasicMinimumError.h:104). The
-    # 2·up and 2× factors cancel in the ratio, so the JuMinuit formula
+    # 2·up and 2× factors cancel in the ratio, so the NativeMinuit formula
     # in V (internal inv_hessian) is identical to the C++ one in m.
     #
     # When `pars !== nothing` and some "other" param has external
@@ -342,7 +342,7 @@ function minos(
     # MinosError::Upper/Lower (MinosError.h:54) which return
     # `±State().Error(Parameter())` when the crossing search did not
     # converge. iminuit propagates this through `m.merrors[name].upper`
-    # / `.lower`, so JuMinuit's UX is now numerically interchangeable
+    # / `.lower`, so NativeMinuit's UX is now numerically interchangeable
     # with iminuit's published values regardless of `_valid` flags.
     # Consumers MUST gate on `e.upper_valid`/`e.lower_valid` to
     # distinguish a real crossing from the placeholder — sign and

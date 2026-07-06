@@ -2,7 +2,7 @@
 
 MIGRAD, MINOS, and the contour scans all need the gradient of the cost function.
 C++ Minuit2 has exactly one way to get it: a two-point central-difference
-**numerical** gradient (`2·n` FCN calls per refinement cycle). JuMinuit keeps
+**numerical** gradient (`2·n` FCN calls per refinement cycle). NativeMinuit keeps
 that as the default, and — because the FCN is an ordinary generic Julia function,
 not a `double`-locked virtual call — adds **two** options that C++ cannot offer:
 
@@ -44,13 +44,13 @@ no-op for it (passing `threaded_gradient=true` to an AD fit is silently ignored)
 
 ## AD gradients via ForwardDiff
 
-Loading ForwardDiff alongside JuMinuit auto-activates the extension that backs
+Loading ForwardDiff alongside NativeMinuit auto-activates the extension that backs
 the gradient factory. You then have two equivalent ways to wire AD in.
 
 **Pass `grad=` to [`Minuit`](@ref)** — the iminuit-style entry point:
 
 ```julia
-using JuMinuit, ForwardDiff          # extension auto-activates
+using NativeMinuit, ForwardDiff          # extension auto-activates
 
 function chi2(par)
     mass, coupling, width = par
@@ -72,7 +72,7 @@ minos!(m)
 gradient, handy when you want to reuse it or hand it straight to `migrad`:
 
 ```julia
-using JuMinuit, ForwardDiff
+using NativeMinuit, ForwardDiff
 
 cf  = CostFunctionAD(chi2, 1.0)      # up = 1 (χ²); 0.5 for an NLL
 fmin = migrad(cf, x0, errs)
@@ -86,7 +86,7 @@ memory pressure; the default lets ForwardDiff pick.
 !!! note "Calling `CostFunctionAD` without ForwardDiff"
     `CostFunctionAD` is only a stub until `using ForwardDiff` is loaded — calling
     it beforehand raises an informative error. ForwardDiff is a weak (optional)
-    dependency, so a plain `using JuMinuit` install stays lightweight.
+    dependency, so a plain `using NativeMinuit` install stays lightweight.
 
 ### The genericity requirement
 
@@ -111,7 +111,7 @@ numerical gradient below instead.
 
 ### The seed-time gradient check
 
-By default JuMinuit validates the AD (or hand-written) gradient against a
+By default NativeMinuit validates the AD (or hand-written) gradient against a
 numerical 2-point estimate **once**, at the seed point, and **warns** — never
 crashes — on disagreement beyond tolerance (the C++ Minuit2 `CheckGradient`
 diagnostic). A warning here almost always means the FCN is not actually generic
@@ -177,9 +177,9 @@ once, MIGRAD receives corrupted gradients, and it **silently converges to the
 wrong minimum** — a single-threaded χ² of 614 has been observed "converging" to
 987 once threaded. This is the failure mode the verification step exists to
 catch (worked failure case:
-[`BenchmarkExamples/IAM_2Pformfactor/`](https://github.com/fkguo/JuMinuit.jl/tree/main/BenchmarkExamples)).
+[`BenchmarkExamples/IAM_2Pformfactor/`](https://github.com/fkguo/NativeMinuit.jl/tree/main/BenchmarkExamples)).
 
-JuMinuit's *own* internal buffers are all per-thread; the contract is entirely on
+NativeMinuit's *own* internal buffers are all per-thread; the contract is entirely on
 your FCN. Two safety nets back it up:
 
 - **Automatic verification.** With `threaded_gradient=true` (and the default
@@ -190,7 +190,7 @@ your FCN. Two safety nets back it up:
   without throwing — useful to gate the decision yourself:
 
 ```julia
-using JuMinuit
+using NativeMinuit
 cf = CostFunction(my_chi2)
 m  = if Threads.nthreads() > 1 && is_thread_safe(cf, x0)
     Minuit(my_chi2, x0; error = errs, threaded_gradient = true)
@@ -234,7 +234,7 @@ function chi2(par)
 end
 ```
 
-Two details make this sound: JuMinuit threads the gradient with `Threads.@threads
+Two details make this sound: NativeMinuit threads the gradient with `Threads.@threads
 :static`, which **pins each loop iteration to a fixed thread**, so `threadid()`
 is stable within a call (under the `:dynamic` / `@spawn` schedules it would not
 be — do not use this pattern there). And the pool is sized with
@@ -247,13 +247,13 @@ Either way, confirm the fix with `is_thread_safe(cf, x0)` (or just let
 ## See also
 
 - AD gradient implementation:
-  [`src/ad_gradient.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/ad_gradient.jl)
+  [`src/ad_gradient.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/ad_gradient.jl)
   and the ForwardDiff extension
-  [`ext/JuMinuitForwardDiffExt.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/ext/JuMinuitForwardDiffExt.jl)
+  [`ext/NativeMinuitForwardDiffExt.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/ext/NativeMinuitForwardDiffExt.jl)
 - Numerical + threaded gradient:
-  [`src/gradient.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/gradient.jl);
+  [`src/gradient.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/gradient.jl);
   the thread-safety verification lives in
-  [`src/migrad.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/migrad.jl)
+  [`src/migrad.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/migrad.jl)
 - [Cost functions](../cost_functions.md) — AD works with generic FCNs and the
   `LeastSquares` / `UnbinnedNLL` / `ExtendedUnbinnedNLL` costs; the binned costs
   (`BinnedNLL` / `ExtendedBinnedNLL`) push their CDF values through `Float64`

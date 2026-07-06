@@ -14,7 +14,7 @@
         # The constrained 1D minimum varies as we move (x, y) away from
         # the minimum. At alpha = 1, x = 2 → fval = 1 + (y-2)² + 0 = 1.
         # So crossing at alpha = 1 (where fval = 1 = up).
-        cross = JuMinuit.function_cross_multi(
+        cross = NativeMinuit.function_cross_multi(
             fmin, cf, [1, 2], [1.0, 2.0], [1.0, 0.0]; tlr = 0.1)
         @test cross.valid
         @test cross.aopt ≈ 1.0 atol = 0.1
@@ -63,13 +63,13 @@
     @testset "function_cross_multi argument validation" begin
         cf = CostFunction(x -> sum(abs2, x))
         fmin = migrad(cf, [1.0, 2.0], [0.1, 0.1])
-        @test_throws DimensionMismatch JuMinuit.function_cross_multi(
+        @test_throws DimensionMismatch NativeMinuit.function_cross_multi(
             fmin, cf, [1], [1.0, 2.0], [1.0])
-        @test_throws DimensionMismatch JuMinuit.function_cross_multi(
+        @test_throws DimensionMismatch NativeMinuit.function_cross_multi(
             fmin, cf, [1, 2], [1.0, 2.0], [1.0])
         # n == npar (no free parameters) is now supported via the
         # all-fixed degenerate path used by 2D contour.
-        cr = JuMinuit.function_cross_multi(
+        cr = NativeMinuit.function_cross_multi(
             fmin, cf, [1, 2], [1.0, 2.0], [1.0, 0.0])
         @test cr.aopt isa Float64 || isnan(cr.aopt)
     end
@@ -113,19 +113,19 @@
         # DimensionMismatch when scratch.n != seed dim. Drivers preflight
         # via _get_scratch!, so this only fires under buggy external use.
         cf = CostFunction(x -> sum(abs2, x))
-        seed = JuMinuit.seed_state(cf, [1.0, 2.0, 3.0], [0.1, 0.1, 0.1])
-        bad_scratch = JuMinuit.MigradScratch(5)  # wrong size — seed is n=3
-        @test_throws DimensionMismatch JuMinuit._migrad_loop(
-            seed, cf, JuMinuit.Strategy(0), 0.1, 1000,
-            JuMinuit.MachinePrecision(); scratch = bad_scratch)
+        seed = NativeMinuit.seed_state(cf, [1.0, 2.0, 3.0], [0.1, 0.1, 0.1])
+        bad_scratch = NativeMinuit.MigradScratch(5)  # wrong size — seed is n=3
+        @test_throws DimensionMismatch NativeMinuit._migrad_loop(
+            seed, cf, NativeMinuit.Strategy(0), 0.1, 1000,
+            NativeMinuit.MachinePrecision(); scratch = bad_scratch)
         # nothing-scratch still works
-        fmin = JuMinuit._migrad_loop(seed, cf, JuMinuit.Strategy(0), 0.1, 1000,
-                                       JuMinuit.MachinePrecision(); scratch = nothing)
+        fmin = NativeMinuit._migrad_loop(seed, cf, NativeMinuit.Strategy(0), 0.1, 1000,
+                                       NativeMinuit.MachinePrecision(); scratch = nothing)
         @test fmin.is_valid
         # correct-size scratch works + reuses
-        good_scratch = JuMinuit.MigradScratch(3)
-        fmin2 = JuMinuit._migrad_loop(seed, cf, JuMinuit.Strategy(0), 0.1, 1000,
-                                        JuMinuit.MachinePrecision(); scratch = good_scratch)
+        good_scratch = NativeMinuit.MigradScratch(3)
+        fmin2 = NativeMinuit._migrad_loop(seed, cf, NativeMinuit.Strategy(0), 0.1, 1000,
+                                        NativeMinuit.MachinePrecision(); scratch = good_scratch)
         @test fmin2.is_valid
         @test fmin2.state.parameters.x ≈ fmin.state.parameters.x
     end
@@ -223,7 +223,7 @@
         cf_ad = CostFunctionWithGradient(f, g, 1.0)
 
         # Single-param fix: fix index 3 at value 0.5; free = (x1,x2,x4,x5)
-        cf_one = JuMinuit._fix_one_param(cf_ad, 3, 0.5, 5)
+        cf_one = NativeMinuit._fix_one_param(cf_ad, 3, 0.5, 5)
         @test cf_one isa CostFunctionWithGradient
         y4 = [0.1, 0.2, 0.4, 0.6]
         # f(y) with index 3 = 0.5
@@ -247,7 +247,7 @@
         # WRAPPER overhead is zero, not ForwardDiff's internal allocs.
 
         # Multi-param fix: fix indices [1, 3] at [0.5, 0.7]; free = (x2,x4,x5)
-        cf_multi = JuMinuit._fix_multi_params(cf_ad, [1, 3], [0.5, 0.7], 5)
+        cf_multi = NativeMinuit._fix_multi_params(cf_ad, [1, 3], [0.5, 0.7], 5)
         @test cf_multi isa CostFunctionWithGradient
         y3 = [0.2, 0.4, 0.6]
         # f at full = [0.5, 0.2, 0.7, 0.4, 0.6]
@@ -267,7 +267,7 @@
         # measures the real per-call alloc (0 on 1.11/1.12).
         _alloc(f, x) = @allocated f(x)
         cf = CostFunction(x -> sum(abs2, x), 1.0)
-        cf_one = JuMinuit._fix_one_param(cf, 3, 0.5, 5)
+        cf_one = NativeMinuit._fix_one_param(cf, 3, 0.5, 5)
         y4 = [0.1, 0.2, 0.3, 0.4]
         cf_one(y4); _alloc(cf_one, y4)  # warmup
         # Same numerical result as Phase A V3
@@ -275,7 +275,7 @@
         # Zero per-call alloc still holds (Phase G keeps Phase A invariant)
         @test _alloc(cf_one, y4) == 0
 
-        cf_multi = JuMinuit._fix_multi_params(cf, [1, 3], [0.5, 0.5], 5)
+        cf_multi = NativeMinuit._fix_multi_params(cf, [1, 3], [0.5, 0.5], 5)
         y3 = [0.1, 0.2, 0.3]
         cf_multi(y3); _alloc(cf_multi, y3)
         @test cf_multi(y3) ≈ 0.5^2 + 0.1^2 + 0.5^2 + 0.2^2 + 0.3^2
@@ -287,10 +287,10 @@
         # byte-identical to Phase F.
         f = x -> (x[1]-1)^2 + 10*(x[2]-2)^2 + (x[3]-3)^2
         cf = CostFunction(f, 1.0)
-        fmin_default = JuMinuit.migrad(cf, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1])
+        fmin_default = NativeMinuit.migrad(cf, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1])
 
         cf2 = CostFunction(f, 1.0)
-        fmin_explicit_false = JuMinuit.migrad(cf2, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1];
+        fmin_explicit_false = NativeMinuit.migrad(cf2, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1];
                                                 threaded_gradient = false)
 
         @test fmin_default.state.parameters.x ≈ fmin_explicit_false.state.parameters.x
@@ -301,7 +301,7 @@
         # producing identical result. Numerical result equivalence is the
         # blocking test; speedup is bench-only.
         cf3 = CostFunction(f, 1.0)
-        fmin_threaded = JuMinuit.migrad(cf3, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1];
+        fmin_threaded = NativeMinuit.migrad(cf3, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1];
                                           threaded_gradient = true)
         @test fmin_threaded.state.parameters.x ≈ fmin_default.state.parameters.x atol = 1e-10
         @test fmin_threaded.state.parameters.fval ≈ fmin_default.state.parameters.fval atol = 1e-10
@@ -316,15 +316,15 @@
     @testset "Phase D — _get_scratch! lazy/replace semantics" begin
         # Verify the holder pattern: nothing → allocate; right size → reuse;
         # wrong size → reallocate (caller's external ref is intact).
-        holder = Ref{Union{Nothing,JuMinuit.MigradScratch}}(nothing)
-        s_first = JuMinuit._get_scratch!(holder, 5)
+        holder = Ref{Union{Nothing,NativeMinuit.MigradScratch}}(nothing)
+        s_first = NativeMinuit._get_scratch!(holder, 5)
         @test s_first.n == 5
         @test holder[] === s_first   # holder now wraps s_first
         # Same size → returns same instance
-        s_same = JuMinuit._get_scratch!(holder, 5)
+        s_same = NativeMinuit._get_scratch!(holder, 5)
         @test s_same === s_first
         # Different size → new instance, old goes to GC eventually
-        s_new = JuMinuit._get_scratch!(holder, 8)
+        s_new = NativeMinuit._get_scratch!(holder, 8)
         @test s_new.n == 8
         @test s_new !== s_first
         @test holder[] === s_new

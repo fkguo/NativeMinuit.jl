@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # Tests for the `optim(m)` / `minimize_with(m)` alternative-minimizer bridge
-# (ext/JuMinuitOptimExt.jl). iminuit's `m.scipy(method=...)` minimises with
-# scipy.optimize then the user calls `hesse()`; the JuMinuit analog bridges to
+# (ext/NativeMinuitOptimExt.jl). iminuit's `m.scipy(method=...)` minimises with
+# scipy.optimize then the user calls `hesse()`; the NativeMinuit analog bridges to
 # Optim.jl. These assert: same minimum as MIGRAD on a quadratic, correct
 # covariance after `hesse`, bounds honoured via Fminbox, derivative-free
 # convergence, fixed-parameter handling, the gradient passthrough, and the
 # helpful error when Optim isn't loaded.
 
-using Optim   # activates JuMinuitOptimExt
+using Optim   # activates NativeMinuitOptimExt
 
 @testset "optim / minimize_with Optim bridge" begin
 
@@ -181,20 +181,20 @@ using Optim   # activates JuMinuitOptimExt
 
     @testset "extension is loaded; helpful message exists" begin
         # With Optim loaded the dispatch resolves to the extension module.
-        @test JuMinuit._optim_bridge_ext() isa Module
+        @test NativeMinuit._optim_bridge_ext() isa Module
         # The not-loaded message is helpful regardless of current load state.
-        msg = JuMinuit._OPTIM_BRIDGE_NOT_LOADED
+        msg = NativeMinuit._OPTIM_BRIDGE_NOT_LOADED
         @test occursin("Optim", msg)
         @test occursin("using Optim", msg)
     end
 
     @testset "Optim-not-loaded → helpful error (subprocess)" begin
         # Can't exercise the not-loaded branch in-process (Optim is loaded in
-        # the test target), so spawn a fresh Julia that loads JuMinuit WITHOUT
+        # the test target), so spawn a fresh Julia that loads NativeMinuit WITHOUT
         # Optim and confirm optim(m) throws a 'load Optim' message — not a bare
         # MethodError.
         code = """
-        using JuMinuit
+        using NativeMinuit
         m = Minuit(x -> sum(abs2, x), [1.0, 2.0])
         try
             optim(m)

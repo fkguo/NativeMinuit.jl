@@ -1,11 +1,11 @@
-# JuMinuit.jl Roadmap
+# NativeMinuit.jl Roadmap
 
 A native-Julia port of the C++ Minuit2 function minimization library
 (GooFit/Minuit2; ROOT::Math::Minuit2), targeting drop-in replacement of
 the iminuit/IMinuit.jl stack with C++-comparable performance.
 
 > **Status (2026-06 · v0.3.0 shipped, public).** All four phases below (0–3)
-> are **COMPLETE** — JuMinuit.jl is released. This file is preserved as the
+> are **COMPLETE** — NativeMinuit.jl is released. This file is preserved as the
 > original design/porting plan and reference; the **§7 module-mapping table**
 > and **§2 performance philosophy** are the live design record (and are cited
 > by `src/` comments as `ROADMAP §x`). The forward-looking sections — the phase
@@ -225,7 +225,7 @@ For long fits this is a per-iteration allocation Julia must control:
 ## 3. Phase 0 — Proof of concept
 
 > **[as-built — COMPLETE]** Phase 0 met its gate, and Phases 1–3 shipped on top
-> of it; JuMinuit is released (v0.3.0). Everything in §3 — the mandate, scope,
+> of it; NativeMinuit is released (v0.3.0). Everything in §3 — the mandate, scope,
 > the §3.1 file layout, the §3.2/§3.3 test + benchmark lists, and the §3.5
 > day-by-day schedule — is the **original Phase-0 plan**, kept as a record of
 > intent, **not** a description of the current code. For what actually shipped
@@ -271,7 +271,7 @@ Phase 1 starts.
 
 ```
 src/
-  JuMinuit.jl                # top-level module; reexports the public surface
+  NativeMinuit.jl                # top-level module; reexports the public surface
   precision.jl               # MachinePrecision: mirrors MnMachinePrecision
   strategy.jl                # Strategy: mirrors MnStrategy (levels 0/1/2)
   fcn.jl                     # CostFunction{F,T} wrapper; ncalls counter;
@@ -449,8 +449,8 @@ A merge to `main` enabling Phase 1 requires *all* of:
    `migrad(::Function, ::Vector{Float64}, ::Vector{Float64})` from the
    top-level entry point (not just internal builder functions).
    **[as-built]** SATISFIED — `test/test_aqua_jet.jl` runs
-   `JET.@report_opt target_modules=(JuMinuit,)` on this exact entry (and on
-   `migrad(::CostFunction, …)`), asserting zero JuMinuit-scoped runtime
+   `JET.@report_opt target_modules=(NativeMinuit,)` on this exact entry (and on
+   `migrad(::CostFunction, …)`), asserting zero NativeMinuit-scoped runtime
    dispatch. `@report_opt` (optimization analysis) is used rather than
    `@report_call` (error analysis): it's the one that catches FCN-call-site
    devirtualization loss, and the `target_modules` scope keeps it
@@ -501,7 +501,7 @@ and the four-pillar gate.
 
 1. **Day 0**: stand up `tools/cpp_trace_harness.cxx` + `regen_reference.sh`;
    produce all `test/reference_data/*.json` from the pinned C++ build.
-2. **Day 1–3**: scaffolding (`Project.toml`, `JuMinuit.jl`, `precision.jl`,
+2. **Day 1–3**: scaffolding (`Project.toml`, `NativeMinuit.jl`, `precision.jl`,
    `strategy.jl`, `state.jl`, `fcn.jl` with trivial Phase-0 boundary) +
    `test_precision.jl` / `test_strategy.jl` green.
 3. **Day 4–7**: `linalg.jl` + `test_linalg.jl`. Both dense and packed
@@ -632,14 +632,14 @@ than dependency.
 
 - **2.5 Result serialization**
   - `FunctionMinimum` → `Dict` and `Dict` → `FunctionMinimum` for easy
-    JSON/JLD2 persistence; useful for the JuMinuit-vs-Minuit regression
+    JSON/JLD2 persistence; useful for the NativeMinuit-vs-Minuit regression
     CI.
 
 - **2.x Closure-allocation diagnostic**
   - For users whose FCN allocates internally (e.g. `sum(log.(...))` in
     an unbinned NLL), provide `migrad`'s output with a `gc_time_pct`
     field and a hint if `@allocated migrad(fcn, x0, errors) > 0`. Phase
-    0's zero-alloc gate is *internal* to JuMinuit; user closures can
+    0's zero-alloc gate is *internal* to NativeMinuit; user closures can
     still allocate.
 
 ---
@@ -672,7 +672,7 @@ The user-facing entry point should let a user copy-paste from iminuit
   in `docs/src/`.
 
 **Exit criteria**: ten randomly chosen IMinuit.jl scripts in real-world
-HEP fits run, with at most a `using JuMinuit` substitution, to numerical
+HEP fits run, with at most a `using NativeMinuit` substitution, to numerical
 equivalence with the original (≤ 1e-8 on parameter values).
 
 ---
@@ -683,27 +683,27 @@ The porting compass. Read row-by-row against the C++ source.
 
 | C++ class / file | Julia module / type | Phase | Notes |
 |---|---|---|---|
-| `Minuit2Minimizer.h/.cxx` | `JuMinuit.Minuit` (struct) + `migrad!/hesse!/minos!` methods | 3 | The ROOT `Math::Minimizer` facade — algorithm enum, status conventions, plugin surface. Much broader than iminuit-style `Minuit`. Phase 3 only. |
+| `Minuit2Minimizer.h/.cxx` | `NativeMinuit.Minuit` (struct) + `migrad!/hesse!/minos!` methods | 3 | The ROOT `Math::Minimizer` facade — algorithm enum, status conventions, plugin surface. Much broader than iminuit-style `Minuit`. Phase 3 only. |
 | `MnApplication.h/.cxx` | (internal facade) | 1 | Bundles FCN + state + strategy. **Stays internal** — `MnMigrad`/`MnHesse` derive from it in C++, but Julia users don't see it. Phase 1 ships `migrad`/`hesse`/`minos` free functions; Phase 3 ships the `Minuit` struct as the user entry. |
 | `MnMigrad.h` | `migrad(fcn, x0, errors; ...)` free function (P0) and `Migrad(fcn, params; ...)` struct (P1) | 0 / 1 | Many overloads in C++; one keyword-driven Julia function. Default `maxfcn = 200 + 100n + 5n²` from `MnApplication.cxx:43`. |
-| `MnSimplex.h` + `SimplexMinimizer.h` + `SimplexBuilder.cxx` + `SimplexParameters.cxx` + `SimplexSeedGenerator.cxx` | `JuMinuit.simplex(fcn, x0; ...)` + `SimplexBuilder` | 1 or 2 | Nelder-Mead, no derivatives. ~200 lines C++. Could ship as a Phase 2.x add-on if Phase 1 schedule slips — gradient-free, conceptually independent of MIGRAD. |
-| `MnMinos.h/.cxx` + `MnCross.h` + `MinosError.h` | `JuMinuit.minos(fmin, fcn, ipar; ...)` + `MinosError` struct | 1 | Asymmetric errors. Uses `MnFunctionCross` under the hood. |
-| `MnFunctionCross.cxx` | `JuMinuit._function_cross!(...)` (internal) | 1 | **New row** (was missing in v1). Underpins both MINOS asymmetric errors and `MnContours` re-minimization. `MnFunctionCross.cxx:117–178` is the core: fixes a parameter to a target value, re-minimizes the rest, returns the crossing. |
-| `MnContours.h/.cxx` + `ContoursError.h` | `JuMinuit.contour(fmin, fcn, i, j; npoints=20)` | 1 | **Profile contour via re-minimization** with two parameters fixed (`MnContours.cxx:52–78,125–178`). First gets four MINOS axis points, then iterates `MnFunctionCross` at angles. Not a naive 2D grid scan and not a level set of the unprofiled likelihood. |
-| `MnHesse.h/.cxx` | `JuMinuit.hesse!(state; ...)` + invoked internally from MIGRAD when Strategy ≥ 1 (`VariableMetricBuilder.cxx:138–173`) | 1 | Full numerical Hessian, lines 100–315. Diagonal loop has 2 FCN/cycle × up-to-5 step retries per parameter; off-diagonal 1 FCN per pair. |
-| `MnScan.h/.cxx` + `ScanBuilder.cxx` + `MnParameterScan.cxx` | `JuMinuit.scan(fcn, ipar; ...)` | 2 | 1D function scan; mostly cosmetic. |
+| `MnSimplex.h` + `SimplexMinimizer.h` + `SimplexBuilder.cxx` + `SimplexParameters.cxx` + `SimplexSeedGenerator.cxx` | `NativeMinuit.simplex(fcn, x0; ...)` + `SimplexBuilder` | 1 or 2 | Nelder-Mead, no derivatives. ~200 lines C++. Could ship as a Phase 2.x add-on if Phase 1 schedule slips — gradient-free, conceptually independent of MIGRAD. |
+| `MnMinos.h/.cxx` + `MnCross.h` + `MinosError.h` | `NativeMinuit.minos(fmin, fcn, ipar; ...)` + `MinosError` struct | 1 | Asymmetric errors. Uses `MnFunctionCross` under the hood. |
+| `MnFunctionCross.cxx` | `NativeMinuit._function_cross!(...)` (internal) | 1 | **New row** (was missing in v1). Underpins both MINOS asymmetric errors and `MnContours` re-minimization. `MnFunctionCross.cxx:117–178` is the core: fixes a parameter to a target value, re-minimizes the rest, returns the crossing. |
+| `MnContours.h/.cxx` + `ContoursError.h` | `NativeMinuit.contour(fmin, fcn, i, j; npoints=20)` | 1 | **Profile contour via re-minimization** with two parameters fixed (`MnContours.cxx:52–78,125–178`). First gets four MINOS axis points, then iterates `MnFunctionCross` at angles. Not a naive 2D grid scan and not a level set of the unprofiled likelihood. |
+| `MnHesse.h/.cxx` | `NativeMinuit.hesse!(state; ...)` + invoked internally from MIGRAD when Strategy ≥ 1 (`VariableMetricBuilder.cxx:138–173`) | 1 | Full numerical Hessian, lines 100–315. Diagonal loop has 2 FCN/cycle × up-to-5 step retries per parameter; off-diagonal 1 FCN per pair. |
+| `MnScan.h/.cxx` + `ScanBuilder.cxx` + `MnParameterScan.cxx` | `NativeMinuit.scan(fcn, ipar; ...)` | 2 | 1D function scan; mostly cosmetic. |
 | `ModularFunctionMinimizer.h/.cxx` | (folded into `migrad`/`simplex`/...) | 0 | C++ class is an abstract dispatch over (SeedGenerator × Builder); Julia uses multiple dispatch on FCN type, no inheritance needed. |
 | `VariableMetricMinimizer.h` | (delete; not needed in Julia layout) | 0 | Just a (SeedGenerator, VariableMetricBuilder) bundle. |
-| `VariableMetricBuilder.h/.cxx` | `JuMinuit._migrad_outer!` + `JuMinuit._migrad_inner!` (internal) | 0 | C++ has **two** overloaded `Minimum(...)`: outer at lines 54–203 with the `maxfcn = floor(0.8 * maxfcn)` trick to leave budget for Hesse, inner at 205–375 with the 200-line MIGRAD iteration loop. Mirror the split. |
-| `MnSeedGenerator.h/.cxx` | `JuMinuit._seed_state(fcn, x0, errors, strategy)` | 0 | `MnSeedGenerator.cxx:42–101`. Invokes `NegativeG2LineSearch.HasNegativeG2()` **unconditionally** at line 80. User-supplied prior covariance branch (`MnSeedGenerator.cxx:63–67`) is Phase 1+. |
-| `MnLineSearch.h/.cxx` | `JuMinuit._line_search!(workspace, fcn, ...)` | 0 | Parabolic interpolation; `MnLineSearch.cxx:46–313`. Cubic and Brent variants are `#ifdef USE_OTHER_LS` — **do not port** (see Deferred §9). |
+| `VariableMetricBuilder.h/.cxx` | `NativeMinuit._migrad_outer!` + `NativeMinuit._migrad_inner!` (internal) | 0 | C++ has **two** overloaded `Minimum(...)`: outer at lines 54–203 with the `maxfcn = floor(0.8 * maxfcn)` trick to leave budget for Hesse, inner at 205–375 with the 200-line MIGRAD iteration loop. Mirror the split. |
+| `MnSeedGenerator.h/.cxx` | `NativeMinuit._seed_state(fcn, x0, errors, strategy)` | 0 | `MnSeedGenerator.cxx:42–101`. Invokes `NegativeG2LineSearch.HasNegativeG2()` **unconditionally** at line 80. User-supplied prior covariance branch (`MnSeedGenerator.cxx:63–67`) is Phase 1+. |
+| `MnLineSearch.h/.cxx` | `NativeMinuit._line_search!(workspace, fcn, ...)` | 0 | Parabolic interpolation; `MnLineSearch.cxx:46–313`. Cubic and Brent variants are `#ifdef USE_OTHER_LS` — **do not port** (see Deferred §9). |
 | `MnParabola.h/.cxx` + `MnParabolaFactory.h/.cxx` + `MnParabolaPoint.h` | inline helpers in `linesearch.jl` | 0 | Three tiny classes, fuse into local helpers. |
-| `Numerical2PGradientCalculator.h/.cxx` | `JuMinuit._numerical_gradient!(workspace, fcn, p, prev_grad, strategy)` | 0 | Two-point central diff at `Numerical2PGradientCalculator.cxx:63–230`. Phase 0 ports **no-limits code path only**; the `HasLimits()` branches at lines 136–139 (and `InitialGradientCalculator.cxx:47–58,66–69`) get `# TODO Phase 1: HasLimits branch` markers, not silent deletion. OpenMP block (lines 116–127) → Phase 2.2. |
-| `InitialGradientCalculator.h/.cxx` | `JuMinuit._initial_gradient!(workspace, p, fcn, trafo, strategy)` | 0 | Same HasLimits-elided-with-TODO-marker policy. |
-| `HessianGradientCalculator.h/.cxx` | `JuMinuit._hessian_gradient!(...)` | 1 | Refined gradient inside `MnHesse`. |
-| `AnalyticalGradientCalculator.h/.cxx` | `JuMinuit._analytical_gradient!(...)` (consumes user-provided `∇fcn`) | 1 / 2 | Phase 1 supports user-supplied gradient (with `DInt2Ext` chain rule); Phase 2.1 wires up AD. |
-| `DavidonErrorUpdator.h/.cxx` | `JuMinuit._davidon_update!(workspace, V, p1, g1, s0)` | 0 | `DavidonErrorUpdator.cxx:24–73`. **Rank-2 DFP base, always**, plus a **rank-1 additive correction ADDED on top** (NOT branched) when `delgam > gvg` (lines 60–65: `vUpd += gvg * Outer_product(...)`). The C++ comment "use rank 1 formula" is misleading — it's a rank-3 BFGS-style hybrid. Match FLOP order line-for-line to keep numerical equivalence under 1e-12 over many iterations. See Risk #1. |
-| `BFGSErrorUpdator.h/.cxx` | `JuMinuit._bfgs_update!(...)` | 2 | Alternative updator; `MnMigrad(BFGSType{})` path. Phase 2 opt-in. |
+| `Numerical2PGradientCalculator.h/.cxx` | `NativeMinuit._numerical_gradient!(workspace, fcn, p, prev_grad, strategy)` | 0 | Two-point central diff at `Numerical2PGradientCalculator.cxx:63–230`. Phase 0 ports **no-limits code path only**; the `HasLimits()` branches at lines 136–139 (and `InitialGradientCalculator.cxx:47–58,66–69`) get `# TODO Phase 1: HasLimits branch` markers, not silent deletion. OpenMP block (lines 116–127) → Phase 2.2. |
+| `InitialGradientCalculator.h/.cxx` | `NativeMinuit._initial_gradient!(workspace, p, fcn, trafo, strategy)` | 0 | Same HasLimits-elided-with-TODO-marker policy. |
+| `HessianGradientCalculator.h/.cxx` | `NativeMinuit._hessian_gradient!(...)` | 1 | Refined gradient inside `MnHesse`. |
+| `AnalyticalGradientCalculator.h/.cxx` | `NativeMinuit._analytical_gradient!(...)` (consumes user-provided `∇fcn`) | 1 / 2 | Phase 1 supports user-supplied gradient (with `DInt2Ext` chain rule); Phase 2.1 wires up AD. |
+| `DavidonErrorUpdator.h/.cxx` | `NativeMinuit._davidon_update!(workspace, V, p1, g1, s0)` | 0 | `DavidonErrorUpdator.cxx:24–73`. **Rank-2 DFP base, always**, plus a **rank-1 additive correction ADDED on top** (NOT branched) when `delgam > gvg` (lines 60–65: `vUpd += gvg * Outer_product(...)`). The C++ comment "use rank 1 formula" is misleading — it's a rank-3 BFGS-style hybrid. Match FLOP order line-for-line to keep numerical equivalence under 1e-12 over many iterations. See Risk #1. |
+| `BFGSErrorUpdator.h/.cxx` | `NativeMinuit._bfgs_update!(...)` | 2 | Alternative updator; `MnMigrad(BFGSType{})` path. Phase 2 opt-in. |
 | `FumiliBuilder/FumiliMinimizer/Fumili*` (10 files) | (deferred) | — | See §9. |
 | `MinimumBuilder.h/.cxx` | folded into builder functions | 0 | Print level + tracer + storage level become fields on the builder. |
 | `MinimumSeed.h` + `BasicMinimumSeed.h` | `MinimumSeed` (immutable struct) | 0 | No shared-ptr indirection needed. |
@@ -763,11 +763,11 @@ reference-data harness).
 | 1 | **DFP Hessian update numerical drift** vs C++. The C++ formula at `DavidonErrorUpdator.cxx:60–65` computes the rank-2 base **always** and **adds** a rank-1 correction when `delgam > gvg` (a rank-3 BFGS hybrid, not an either/or branch). Implementing it as an if/else picking rank-2 *or* rank-1 silently diverges from C++ after one update. Even bit-identical math through Julia BLAS vs reference BLAS will then diverge over many iterations due to FLOP-order differences. | High | High — breaks the 1e-10 acceptance criterion on long fits. | (a) Compare iteration-by-iteration `inv_hessian` to a captured C++ trace on Rosenbrock-10 for ≤ 50 iter; flag the first iteration where any element diverges past 1e-12 and root-cause. (b) Accept that final answers agree to 1e-10 even if iteration counts drift by ±5 (gate NFcn tolerance widened from ±2 in v1). (c) Implement the matrix updates in **exactly the same FLOP order** as `DavidonErrorUpdator.cxx:58–69`: compute base rank-2, test `delgam > gvg`, then `vUpd += gvg * Outer_product(dx/delgam − vg/gvg)` *additively*. |
 | 2 | **BLAS thread interaction** when a user wires multi-threaded likelihoods (Phase 2). Nested OpenMP-in-OpenBLAS deadlocks or wastes cycles. Also a **Phase 0 benchmark hygiene** issue: OpenBLAS spinning up multiple threads at small n slows DSYMV via thread-spawn overhead. | Medium | Medium | Default `BLAS.set_num_threads(1)` when `Threads.nthreads() > 1`; document; provide a `with_blas_threads` helper. Gate script (`scripts/run_perf.jl`) sets it explicitly and records in `manifest.json`. |
 | 3 | **Intermediate-buffer allocation in arithmetic expressions** (was "ABObj substitute under-performs" in v1; rephrased per Opus review). Writing `vUpd = (dx*dx')/delgam - (vg*vg')/gvg` in idiomatic Julia allocates **three** intermediate `Matrix` temporaries per iteration. The risk is not "missed BLAS fusion" — Julia + LAPACK saturate BLAS — but heap allocation that breaks the §3.4 zero-alloc gate. | Medium | High at Phase 0 gate | Replace arithmetic-style code with explicit `BLAS.syr!`/`BLAS.spr!`/`mul!`/`axpy!` into pre-allocated workspace buffers. Verified by `@allocated` per the §3.4 exit gate (criterion 3). |
-| 4 | **Closure non-specialization** at the public API boundary. If `migrad(fcn::Function, x0, errors)` doesn't immediately wrap `fcn` into `CostFunction{typeof(fcn)}`, every FCN call goes through dynamic dispatch. iminuit users may pass closures from notebooks. | Medium | High | Wrap on entry. **[as-built]** SATISFIED: `migrad` wraps the FCN into `CostFunction{F}` on entry (fcn.jl) and `test/test_aqua_jet.jl` guards the top-level `migrad(::Function, x0, errs)` entry with `JET.@report_opt target_modules=(JuMinuit,)` (not `@report_call` — the narrow `target_modules` scope avoids cross-version stdlib false positives; see §3.4 criterion 4). |
+| 4 | **Closure non-specialization** at the public API boundary. If `migrad(fcn::Function, x0, errors)` doesn't immediately wrap `fcn` into `CostFunction{typeof(fcn)}`, every FCN call goes through dynamic dispatch. iminuit users may pass closures from notebooks. | Medium | High | Wrap on entry. **[as-built]** SATISFIED: `migrad` wraps the FCN into `CostFunction{F}` on entry (fcn.jl) and `test/test_aqua_jet.jl` guards the top-level `migrad(::Function, x0, errs)` entry with `JET.@report_opt target_modules=(NativeMinuit,)` (not `@report_call` — the narrow `target_modules` scope avoids cross-version stdlib false positives; see §3.4 criterion 4). |
 | 5 | **Numerical instabilities with bounded parameters**. The sin transform (`SinParameterTransformation.cxx:38`) clamps internal values to `[-π/2, π/2)` minus a margin. Float64 vs C++ may handle the boundary case slightly differently, drifting MIGRAD iteration counts on bounded fits. The C++ chain rule sign for upper-only bounds is **negative** (`SqrtUpParameterTransformation.cxx:40–45`), so off-diagonal covariance signs must be tested explicitly. | Medium | Medium | Phase 1 scope; dedicated stress test fitting a Gaussian where the parameter starts at the bound. Use the same `prec.Eps2()` formula as C++ (`MnMachinePrecision.h:41`). |
 | 6 | **Reference data generation cost**. Building the C++ benchmark/reference binaries is itself a multi-hour task (CMake + Minuit2 standalone). | Medium | Low | Commit JSON reference dumps under `test/reference_data/`; CI does not require the C++ build. Document the regen procedure under `tools/regen_reference.md`. Cap at 10 reference cases. **Pin to `57dc936` (v6.24.0)** — Decision Q8 locked. |
 | 7 | **MnPosDef eigenvalue path divergence**. When the Hessian goes non-pos-def, `MnPosDef.cxx:80` calls `eigenvalues` on the *normalized correlation matrix* then adds to the diagonal of the original. Different eigenvalue routines (LAPACK `spev` vs Julia's default) may pick a different perturbation. | Low-Medium | Medium | Use `LAPACK.spev!` directly to match C++'s eigensolver choice. If still divergent, port the C++ Jacobi (`mnteigen.cxx`) verbatim for the pos-def branch only. |
-| 8 | **API churn between Phases 0 → 1 → 3**. A Phase 0 user shouldn't see breaking changes. But the iminuit-style `Minuit(...)` constructor of Phase 3 is structurally different from the free-function `migrad(...)` of Phase 0. | Medium | Low-Medium | Phase 0 ships `JuMinuit.migrad` as the only public function. Phase 1 adds `Migrad`/`Hesse`/`Minos` types. Phase 3 adds `Minuit` as a new symbol. Nothing in Phase 0 is removed. Document this commitment in `CHANGELOG.md`. |
+| 8 | **API churn between Phases 0 → 1 → 3**. A Phase 0 user shouldn't see breaking changes. But the iminuit-style `Minuit(...)` constructor of Phase 3 is structurally different from the free-function `migrad(...)` of Phase 0. | Medium | Low-Medium | Phase 0 ships `NativeMinuit.migrad` as the only public function. Phase 1 adds `Migrad`/`Hesse`/`Minos` types. Phase 3 adds `Minuit` as a new symbol. Nothing in Phase 0 is removed. Document this commitment in `CHANGELOG.md`. |
 | 9 | **User FCN with mutation or global state** breaks threaded numerical gradients (Phase 2.2) even if workspace buffers are per-thread. | Medium | Medium | Document in Phase 2.2: `threaded_grad=true` requires a *pure* FCN (no captures over `Ref` / global / I/O). Provide a `JET`-style lint in CI to flag obvious cases. |
 | 10 | **AD compatibility blocked by Phase-0 `Vector{Float64}` hard-coding**. If Phase 0 boundary signatures bake in `Vector{Float64}` everywhere, `ForwardDiff.Dual`/Enzyme paths in Phase 2.1 will require a disruptive rewrite. | Medium | Medium | Even in Phase 0, define the user-facing FCN call boundary via `eltype(x)` rather than literal `Float64`. Internal scratch and BLAS buffers stay Float64 in Phase 0 (numerical-gradient MIGRAD doesn't need AD); the *interface* is generic. |
 | 11 | **GC latency in long cheap-FCN fits** dominates wall time even if `@allocated` for one isolated iteration is 0. The user's closure may allocate. | Medium | Medium | Phase 2.x ships a `gc_time_pct` diagnostic + advisory hint when `@allocated migrad(...)` > 0. The §3.4 gate measures the internal-only allocation; benchmark `bench_long_fit.jl` reports GC time separately. |
@@ -867,7 +867,7 @@ ends.
 
 ### Still open (at the time of writing)
 
-> **[as-built]** Phase 0 is long complete and JuMinuit shipped as v0.3.0, so
+> **[as-built]** Phase 0 is long complete and NativeMinuit shipped as v0.3.0, so
 > none of these are open anymore — they were resolved as the project matured.
 > The notable resolutions are recorded inline below; see `DESIGN.md`,
 > `GAP_AUDIT.md`, and `CHANGELOG.md` for the rest.
@@ -877,7 +877,7 @@ ends.
   iminuit / IMinuit.jl), or also expose the internal representation
   (mirroring C++ `MnUserParameterState::IntCovariance()`) for advanced
   users? **Recommendation**: external as default; internal accessible
-  via `JuMinuit.internal_covariance(m)` for debugging.
+  via `NativeMinuit.internal_covariance(m)` for debugging.
 - **Q4 AD backend choice for Phase 2.1**. ForwardDiff.jl mature, composes
   with all Float64 code; Enzyme.jl faster on hot inner loops but rougher
   edges. **Recommendation**: ForwardDiff primary, Enzyme opt-in. Defer
@@ -905,7 +905,7 @@ ends.
   (b) instrument the existing C++ MIGRAD with `printf` directly
   (faster, less precise).
 - **Q13 Public `ErrorDef`/`up` mutation API**. iminuit exposes
-  `m.errordef = X`; should JuMinuit allow post-construction mutation
+  `m.errordef = X`; should NativeMinuit allow post-construction mutation
   of `up`? Defaults: 1.0 (χ²) / 0.5 (NLL).
 - **Q14 Minimum Julia version + dependency policy — [DECIDED]**. Pin in
   `[compat]`: **`julia = "1.11"`** (1.10 LTS was dropped — see Risk #14).

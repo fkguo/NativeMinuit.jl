@@ -1,4 +1,4 @@
-# JuMinuit vs C++ Minuit2 — Gap Audit
+# NativeMinuit vs C++ Minuit2 — Gap Audit
 
 Date: 2026-05-27 · Reference: GooFit/Minuit2 v6.24.0 @ 57dc936 ·
 Comparison: `reference/Minuit2_cpp/{inc,src}/*` vs `src/*.jl`
@@ -77,12 +77,12 @@ Pre-closure / historical state preserved below for context.
 C++: `MnTraceObject.h/.cxx` + `MinimumBuilder::TraceIteration` (cf.
 `VariableMetricBuilder.cxx:47`).
 
-JuMinuit state: `Minuit.print_level` is stored as a field (set/get
+NativeMinuit state: `Minuit.print_level` is stored as a field (set/get
 via `setproperty!`) but **never consumed** by `migrad.jl` / `hesse.jl`
 / `minos.jl`. No `@debug` / `@info` emitted from the inner loops.
 
 Impact: iminuit users routinely set `m.print_level = 2` to debug a
-non-converging fit. JuMinuit silently swallows the setting — looks
+non-converging fit. NativeMinuit silently swallows the setting — looks
 like a bug to the user. ROADMAP §7 originally tagged this "Phase 1 /
 2, mandatory for the line-by-line iteration-equivalence test"; the
 test never landed.
@@ -115,13 +115,13 @@ C++: `MnUserParameters.h:75-95` + `MnApplication.cxx:117-180` —
 `SetLimits(i,lo,up)`, `RemoveLimits(i)`, `Add(name,val,err)`,
 `SetName(i,name)` with name-overloads.
 
-JuMinuit state: `Minuit` exposes **bulk** setters via `setproperty!`
+NativeMinuit state: `Minuit` exposes **bulk** setters via `setproperty!`
 (`m.values=[...]`, `m.fixed=[...]`, `m.limits=[...]` at
 `src/minuit.jl:751-770`). No **per-parameter** mutators by index or
 name. Bulk replacement drops `m.fmin` and `m.minos_errors`.
 
 Impact: iminuit's idiomatic pattern is `m.fixed["alpha"] = True` for
-fix-fit-release-fit profile-likelihood scans. JuMinuit forces full
+fix-fit-release-fit profile-likelihood scans. NativeMinuit forces full
 vector replacement, breaking common interactive workflows.
 
 Recommended fix: add `fix!(m, par)`, `release!(m, par)`,
@@ -135,7 +135,7 @@ bulk helpers.
 C++: `MinosError.h:73-74` — full `MnUserParameterState` snapshot at
 the ±σ MINOS crossing point.
 
-JuMinuit state: `MinosError` struct (`src/minos.jl:48-58`) carries
+NativeMinuit state: `MinosError` struct (`src/minos.jl:48-58`) carries
 errors, validity flags, and nfcn but **no per-parameter snapshot** at
 the crossing endpoints. Boolean `*_par_limit` partially covers
 "hit a bound" but loses parameter values.
@@ -154,7 +154,7 @@ C++: `MnSeedGenerator.cxx:63-67` — when `state.HasCovariance()` the
 seed uses the user-supplied `MnUserCovariance` and sets `dcovar=0`
 instead of the default `dcovar=1.0`.
 
-JuMinuit state: `src/seed.jl:11` documents *"No user-supplied
+NativeMinuit state: `src/seed.jl:11` documents *"No user-supplied
 covariance prior (dcovar = 1.0 always)."* The `seed_state` /
 `warm_restart_state` functions do not accept a prior covariance
 argument.
@@ -171,7 +171,7 @@ Recommended fix: `seed_state(cf, x0, errs, strategy, prec; prior_cov::Union{Noth
 C++: `BasicFunctionMinimum.h:109,165` — vector of per-iteration
 `MinimumState`, gated by `storage_level`.
 
-JuMinuit state: `FunctionMinimum` (`src/result.jl:33-42`) stores only
+NativeMinuit state: `FunctionMinimum` (`src/result.jl:33-42`) stores only
 the final `state` + `seed`, no history. `result.jl:8-10` notes Phase 1
 will add `storage_level=1`, but the kwarg/field doesn't exist
 anywhere yet.
@@ -192,7 +192,7 @@ C++: `HessianGradientCalculator.h/.cxx` ~220 LOC; called from
 `MnHesse.cxx:228-236` between diagonal and off-diagonal Hessian passes
 when `Strategy ≥ 1`.
 
-JuMinuit state: `src/hesse.jl:188-198` documents the no-op;
+NativeMinuit state: `src/hesse.jl:188-198` documents the no-op;
 `strategy.hessian_grad_ncycles` is set but never consumed.
 
 Impact: Strategy(1) HESSE produces slightly less accurate errors than
@@ -208,7 +208,7 @@ Recommended: port `HessianGradientCalculator` (~150 LOC Julia).
 C++: `MnHesse.cxx:118-126` — when analytical gradient is supplied,
 refreshes `gst`/`dirin`/`g2` triplet via `InitialGradientCalculator`.
 
-JuMinuit state: when `m.cfwg !== nothing` (user supplied a `grad=...`)
+NativeMinuit state: when `m.cfwg !== nothing` (user supplied a `grad=...`)
 the HESSE refresh of the numerical companions is skipped
 (`src/hesse.jl:202-209`).
 
@@ -223,7 +223,7 @@ Recommended: couple fix with P1.
 C++: `MnContours.cxx:52-78,125-178` — re-minimization contour is the
 default.
 
-JuMinuit state: `contour_exact` IS implemented C++-faithfully
+NativeMinuit state: `contour_exact` IS implemented C++-faithfully
 (`src/contours.jl:89-241`). The default `contour(...)` is an
 ellipse-from-MINOS-errors approximation. `mncontour` routes through
 `contour_exact`, but the bare `contour` does not.
@@ -232,7 +232,7 @@ Impact: a user copying iminuit's `m.contour("x", "y")` (note: iminuit
 also calls its ellipse `contour` and its re-minimization
 `mncontour` — so behavior matches!) gets an ellipse. This is
 **actually iminuit-compatible** — `m.contour` in iminuit is the same
-ellipse approximation. Confirm by inspection that JuMinuit's naming
+ellipse approximation. Confirm by inspection that NativeMinuit's naming
 follows iminuit, NOT C++. If so, this is documented behavior, not a
 gap; promote to "✓ Verified API parity with iminuit" instead.
 
@@ -249,12 +249,12 @@ Recommended: verify and document, no functional change.
 
 The Julia API returns `Symmetric{Float64,Matrix{Float64}}` (per
 DR Q3) rather than C++'s flat lower-triangular `fData` vector.
-Matters only for binary interop with ROOT/iminuit which JuMinuit
+Matters only for binary interop with ROOT/iminuit which NativeMinuit
 explicitly does not target. No action.
 
 ### P5 · `minos(...; sigma=k)` for k ≠ 1 (NICE-TO-HAVE)
 
-JuMinuit state: `src/minuit.jl:1003-1004` throws `ArgumentError` for
+NativeMinuit state: `src/minuit.jl:1003-1004` throws `ArgumentError` for
 `sigma != 1` ("Phase 1.x deferred").
 
 Impact: 5σ discovery / 95 % CL upper-limit studies need 2σ or higher.

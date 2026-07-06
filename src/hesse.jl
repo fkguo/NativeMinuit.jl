@@ -142,7 +142,7 @@ function hesse(
     # `Numerical2PGradientCalculator::operator()(par)` overload, which
     # internally constructs a fresh `InitialGradientCalculator` that
     # reads per-parameter user errors from `MnUserTransformation`
-    # (`InitialGradientCalculator.cxx:25-75`). JuMinuit's `MinimumState`
+    # (`InitialGradientCalculator.cxx:25-75`). NativeMinuit's `MinimumState`
     # does not retain those user errors past MIGRAD (`migrad.jl:672`
     # builds `MinimumParameters(nx_buf, pp.y)` with the no-step
     # constructor that zeros `dirin`), so we instead seed the
@@ -157,7 +157,7 @@ function hesse(
     #
     # NOTE — gate fidelity vs C++:
     # C++ `MnHesse.cxx:120` gates on `st.Gradient().IsAnalytical()` —
-    # the `analytical` flag on the input `FunctionGradient`. JuMinuit's
+    # the `analytical` flag on the input `FunctionGradient`. NativeMinuit's
     # gate is `cf isa CostFunctionWithGradient` because today neither
     # `analytical_gradient!` (`src/ad_gradient.jl:184-208`) nor
     # `migrad.jl:677` sets the `FunctionGradient.analytical` flag to
@@ -201,7 +201,7 @@ function hesse(
     # diagonal pass is byte-identical to the no-clamp path. The bounded
     # callers (`migrad(cf, params)`, `hesse(m::Minuit)`) pass a length-n
     # vector indexed by INTERNAL/free-parameter position
-    # (`_has_limits_internal`), the JuMinuit analogue of C++
+    # (`_has_limits_internal`), the NativeMinuit analogue of C++
     # `trafo.Parameter(i).HasLimits()`.
     has_limits === nothing || length(has_limits) == n ||
         throw(DimensionMismatch(
@@ -473,7 +473,7 @@ intuition, removing it. But the empirical IAM x_jm warm-start audit
   per coord — sub-precision, no walk, MIGRAD bails at χ²=325.80.
 - The OTHER regime PR #6 cared about (paras0 cold seed with
   `|g| ≈ 1e6`): C++ `V ≈ I` does cause line-search blowup, MIGRAD
-  bails. iminuit hits the same trap. The "fix" was JuMinuit-only.
+  bails. iminuit hits the same trap. The "fix" was NativeMinuit-only.
 
 We restored the C++ clamp here because the IAM x_jm correctness gain
 outweighs the paras0 cold-seed regression (which exists in iminuit

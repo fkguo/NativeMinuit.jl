@@ -30,7 +30,7 @@ Status flags (mirror C++ `FunctionMinimum`):
 - `hesse_failed` — Hesse refinement (Phase 1) failed.
 - `made_pos_def` — MnPosDef perturbed the error matrix.
 
-P6 non-finite-FCN diagnostics (JuMinuit additions; C++ FunctionMinimum
+P6 non-finite-FCN diagnostics (NativeMinuit additions; C++ FunctionMinimum
 carries no analogue, but the observable verdict matches iminuit —
 a NaN incumbent there also surfaces as `valid=False`):
 
@@ -103,7 +103,7 @@ nfcn(m::FunctionMinimum) = m.state.nfcn
 parameters(m::FunctionMinimum) = m.state.parameters
 errors(m::FunctionMinimum) = m.state.error
 gradient(m::FunctionMinimum) = m.state.gradient
-# Overload Base.values rather than introducing a clashing JuMinuit-local
+# Overload Base.values rather than introducing a clashing NativeMinuit-local
 # `values` symbol. Phase 3 will add `m.values` property access via
 # getproperty for iminuit copy-paste compatibility.
 Base.values(m::FunctionMinimum) = m.state.parameters.x

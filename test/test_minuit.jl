@@ -114,7 +114,7 @@
         minos!(m, 1)
         @test haskey(m.minos_errors, 1)
         e = m.minos_errors[1]
-        @test JuMinuit.is_valid(e)
+        @test NativeMinuit.is_valid(e)
         @test e.upper ≈ 1.0 atol = 0.1
         @test e.lower ≈ -1.0 atol = 0.1
 
@@ -139,17 +139,17 @@
         # (a) The default per-cross-search budget equals the C++/iminuit
         #     formula (the value the `maxcall == 0` path forwards).
         for nvar in (1, 2, 5, 9)
-            @test JuMinuit._minos_default_maxcalls(nvar) ==
+            @test NativeMinuit._minos_default_maxcalls(nvar) ==
                   2 * (nvar + 1) * (200 + 100 * nvar + 5 * nvar^2)
         end
-        @test JuMinuit._minos_default_maxcalls(9) == 30100   # the audit's figure
-        @test JuMinuit._minos_default_maxcalls(2) > 1000     # beats legacy default
+        @test NativeMinuit._minos_default_maxcalls(9) == 30100   # the audit's figure
+        @test NativeMinuit._minos_default_maxcalls(2) > 1000     # beats legacy default
 
         # (b) Fixed parameters are excluded from nvar (matches C++
         #     MnUserParameterState::VariableParameters()).
         mf = Minuit(x -> sum(abs2, x), [1.0, 2.0, 3.0];
                     names = ["a", "b", "c"], fixed = [false, true, false])
-        @test JuMinuit.n_free(mf.params) == 2
+        @test NativeMinuit.n_free(mf.params) == 2
 
         # (c) Default (maxcall=0 sentinel) succeeds with the n-scaled
         #     budget; an explicit tiny `maxcall` is RESPECTED — it
@@ -160,10 +160,10 @@
         migrad!(m)
         minos!(m, 1)                       # default budget
         minos!(m, 2; maxcall = 1)          # explicit tiny override
-        @test JuMinuit.is_valid(m.minos_errors[1])
+        @test NativeMinuit.is_valid(m.minos_errors[1])
         @test !m.minos_errors[1].upper_fcn_limit
         @test !m.minos_errors[1].lower_fcn_limit
-        @test !JuMinuit.is_valid(m.minos_errors[2])
+        @test !NativeMinuit.is_valid(m.minos_errors[2])
         @test m.minos_errors[2].upper_fcn_limit || m.minos_errors[2].lower_fcn_limit
     end
 
@@ -227,7 +227,7 @@
         migrad(m)
         @test m.is_valid
         # At-limit detector should flag `a` (lower edge within 1σ)
-        @test 1 in JuMinuit._at_limit_indices(m)
+        @test 1 in NativeMinuit._at_limit_indices(m)
         # Warning visible in text/plain output
         buf = IOBuffer()
         show(buf, MIME"text/plain"(), m)
@@ -241,7 +241,7 @@
         cf2 = x -> (x[1] - 5.0)^2
         m2 = Minuit(cf2, [4.0]; name = ["a"], limit_a = (-100.0, 100.0))
         migrad(m2)
-        @test isempty(JuMinuit._at_limit_indices(m2))
+        @test isempty(NativeMinuit._at_limit_indices(m2))
         buf2 = IOBuffer()
         show(buf2, MIME"text/plain"(), m2)
         s2 = String(take!(buf2))
@@ -466,7 +466,7 @@
         m_lo = Minuit(cf, [0.6]; name = ["a"], limit_a = (0.45, nothing))
         migrad(m_lo)
         @test m_lo.is_valid
-        @test 1 in JuMinuit._at_limit_indices(m_lo)
+        @test 1 in NativeMinuit._at_limit_indices(m_lo)
         buf = IOBuffer()
         show(buf, MIME"text/plain"(), m_lo)
         s = String(take!(buf))
@@ -477,7 +477,7 @@
         cf2 = x -> (x[1] - 5.0)^2
         m_up = Minuit(cf2, [4.9]; name = ["b"], limit_b = (nothing, 5.05))
         migrad(m_up)
-        @test 1 in JuMinuit._at_limit_indices(m_up)
+        @test 1 in NativeMinuit._at_limit_indices(m_up)
         buf2 = IOBuffer()
         show(buf2, MIME"text/plain"(), m_up)
         s2 = String(take!(buf2))
@@ -495,18 +495,18 @@
         migrad(m)
         bfm = m.fmin
         # Inject artificial prior failure flags.
-        fm_bad = JuMinuit.FunctionMinimum(
+        fm_bad = NativeMinuit.FunctionMinimum(
             bfm.internal.state, bfm.internal.seed, bfm.internal.up;
             is_valid = false,           # was failed
             hesse_failed = true,        # was failed
             made_pos_def = true,        # was perturbed
         )
-        m.fmin = JuMinuit.BoundedFunctionMinimum(
+        m.fmin = NativeMinuit.BoundedFunctionMinimum(
             fm_bad, bfm.params, bfm.ext_values, bfm.ext_errors,
             bfm.ext_covariance, bfm.internal_cf,
         )
         # Now run hesse — should recover.
-        JuMinuit.hesse(m)
+        NativeMinuit.hesse(m)
         @test m.fmin.internal.hesse_failed == false   # cleared
         @test m.fmin.internal.made_pos_def == false   # cleared (new HESSE pos-def)
         @test m.is_valid == true                       # recovered
@@ -577,12 +577,12 @@
         @test_throws ArgumentError Minuit(x -> 0.0, [1.0, 2.0]; names = ["x"])
         m = Minuit(x -> sum(abs2, x), [1.0, 2.0])
         @test_throws ArgumentError minos!(m, 1)  # no migrad! yet
-        @test_throws ArgumentError JuMinuit.hesse(m)  # no migrad! yet
+        @test_throws ArgumentError NativeMinuit.hesse(m)  # no migrad! yet
     end
 
     @testset "hesse! is the exported bang alias of hesse" begin
-        @test JuMinuit.hesse! === JuMinuit.hesse
-        @test :hesse! in names(JuMinuit)
+        @test NativeMinuit.hesse! === NativeMinuit.hesse
+        @test :hesse! in names(NativeMinuit)
         cf_fn = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
         m = Minuit(cf_fn, [0.0, 0.0]; errors = [0.1, 0.1])
         migrad!(m)
@@ -602,7 +602,7 @@
         migrad(m_s0; strategy = Strategy(0))
         cov_s0_dfp = collect(m_s0.covariance)   # DFP estimate
 
-        JuMinuit.hesse(m_s0; strategy = Strategy(1))
+        NativeMinuit.hesse(m_s0; strategy = Strategy(1))
         cov_s0_hesse = collect(m_s0.covariance)   # numerical HESSE
         @test m_s0.is_valid
         # Strategy(2) MIGRAD also ends with numerical HESSE.
@@ -623,7 +623,7 @@
                                           limit_x0 = (-5.0, 5.0))
         migrad(m_bnd; strategy = Strategy(0))
         cov_bnd_pre = collect(m_bnd.covariance)
-        JuMinuit.hesse(m_bnd; strategy = Strategy(1))
+        NativeMinuit.hesse(m_bnd; strategy = Strategy(1))
         @test m_bnd.is_valid
         cov_bnd_post = collect(m_bnd.covariance)
         # Bounded path: covariance shape preserved, diagonals positive.
@@ -635,7 +635,7 @@
         # hesse(m) returns m for chaining.
         m_chain = Minuit(cf_fn, [0.0, 0.0]; errors = [0.1, 0.1])
         migrad(m_chain)
-        @test JuMinuit.hesse(m_chain) === m_chain
+        @test NativeMinuit.hesse(m_chain) === m_chain
     end
 
     @testset "hesse(m) works when m was built with grad=" begin
@@ -648,13 +648,13 @@
         cf_grad = x -> [2*(x[1] - 1.0), 2*(x[2] - 2.0)]
         m = Minuit(cf_fn, [0.0, 0.0]; errors = [0.1, 0.1], grad = cf_grad)
         migrad(m; strategy = Strategy(0))
-        @test JuMinuit.hesse(m) === m   # no MethodError
+        @test NativeMinuit.hesse(m) === m   # no MethodError
         @test m.is_valid
         # Cov matches the numerical-gradient path on a pure quadratic.
         cov_grad = collect(m.covariance)
         m_num = Minuit(cf_fn, [0.0, 0.0]; errors = [0.1, 0.1])
         migrad(m_num; strategy = Strategy(0))
-        JuMinuit.hesse(m_num)
+        NativeMinuit.hesse(m_num)
         cov_num = collect(m_num.covariance)
         @test cov_grad ≈ cov_num atol = 1e-8
     end

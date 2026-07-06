@@ -10,7 +10,7 @@
         @test e.min_par_value == 1.5
         @test e.upper == 0.5
         @test e.lower == -0.5
-        @test JuMinuit.is_valid(e)
+        @test NativeMinuit.is_valid(e)
     end
 
     @testset "Symmetric quadratic — MINOS ≈ Hesse" begin
@@ -22,13 +22,13 @@
         @test fmin.is_valid
 
         e1 = minos(fmin, cf, 1)
-        @test JuMinuit.is_valid(e1)
+        @test NativeMinuit.is_valid(e1)
         # Symmetric → upper ≈ -lower
         @test e1.upper ≈ 1.0 atol = 0.1
         @test e1.lower ≈ -1.0 atol = 0.1
 
         e2 = minos(fmin, cf, 2)
-        @test JuMinuit.is_valid(e2)
+        @test NativeMinuit.is_valid(e2)
         @test e2.upper ≈ 1.0 atol = 0.1
         @test e2.lower ≈ -1.0 atol = 0.1
     end
@@ -38,7 +38,7 @@
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
         errs = minos(fmin, cf)
         @test length(errs) == 2
-        @test all(JuMinuit.is_valid, errs)
+        @test all(NativeMinuit.is_valid, errs)
     end
 
     @testset "Argument validation" begin
@@ -57,11 +57,11 @@
         cf = CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
         # Upper direction along param 1
-        cr_up = JuMinuit.function_cross(fmin, cf, 1, +1.0)
+        cr_up = NativeMinuit.function_cross(fmin, cf, 1, +1.0)
         @test cr_up.valid
         @test cr_up.aopt > 0.5
         # Lower direction along param 1
-        cr_lo = JuMinuit.function_cross(fmin, cf, 1, -1.0)
+        cr_lo = NativeMinuit.function_cross(fmin, cf, 1, -1.0)
         @test cr_lo.valid
         @test cr_lo.aopt > 0.5  # aopt is the magnitude regardless of sign
     end
@@ -76,8 +76,8 @@
         # iterations vs many for the linear-only path.
         cf = CostFunction(x -> 4.0 * (x[1] - 1.0)^4 + (x[2] - 2.0)^2)
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
-        @test JuMinuit.is_valid(fmin)
-        cr_up = JuMinuit.function_cross(fmin, cf, 1, +1.0)
+        @test NativeMinuit.is_valid(fmin)
+        cr_up = NativeMinuit.function_cross(fmin, cf, 1, +1.0)
         @test cr_up.valid
         # For x[1], the crossing is at x = 1 + (1/4)^(1/4) ≈ 1.707;
         # the 1σ post-fit step is also nonquadratic-skewed but the
@@ -90,14 +90,14 @@
     @testset "parabola helpers — direct unit tests" begin
         # A·x² + B·x + C through (0, 1), (1, 0), (2, 1)
         # Expected: A=1, B=-2, C=1   (i.e., f(x) = (x-1)²)
-        A, B, C = JuMinuit._parabola_fit3([0.0, 1.0, 2.0], [1.0, 0.0, 1.0])
+        A, B, C = NativeMinuit._parabola_fit3([0.0, 1.0, 2.0], [1.0, 0.0, 1.0])
         @test A ≈ 1.0
         @test B ≈ -2.0
         @test C ≈ 1.0
 
         # Solve (x-1)² = 2 → roots 1 ± √2. Positive-slope root is 1+√2.
-        prec = JuMinuit.MachinePrecision()
-        sol = JuMinuit._parabola_solve_for_aim(1.0, -2.0, 1.0, 2.0, prec)
+        prec = NativeMinuit.MachinePrecision()
+        sol = NativeMinuit._parabola_solve_for_aim(1.0, -2.0, 1.0, 2.0, prec)
         @test sol !== nothing
         x_sol, slope = sol
         @test x_sol ≈ 1.0 + sqrt(2.0)
@@ -106,17 +106,17 @@
         # Negative-curvature (A < 0) parabola: f(x) = -(x-1)² + 2.
         # Solve = 1 needs determ = B² - 4A(C-aim) = 4 - 4·(-1)·(2-1-2) = 4 - 4 = 0
         # → single root x=1. Discriminant ≥ 0 means we still get a result.
-        sol2 = JuMinuit._parabola_solve_for_aim(-1.0, 2.0, 1.0, 1.0, prec)
+        sol2 = NativeMinuit._parabola_solve_for_aim(-1.0, 2.0, 1.0, 1.0, prec)
         @test sol2 !== nothing
         # Negative curvature with too-high aim → discriminant < 0
-        sol3 = JuMinuit._parabola_solve_for_aim(-1.0, 2.0, 1.0, 5.0, prec)
+        sol3 = NativeMinuit._parabola_solve_for_aim(-1.0, 2.0, 1.0, 5.0, prec)
         @test sol3 === nothing
     end
 
     @testset "three-point classifier — direct unit tests" begin
         # 3 points around aim=0: f = (-1, -0.5, +1). noless=2, ibest=2 (closest to 0).
         ibest, iworst, ileft, iright, iout, noless, ecmn, ecmx =
-            JuMinuit._three_point_classify([0.0, 0.5, 1.0], [-1.0, -0.5, 1.0], 0.0)
+            NativeMinuit._three_point_classify([0.0, 0.5, 1.0], [-1.0, -0.5, 1.0], 0.0)
         @test noless == 2
         @test ibest == 2          # |−0.5−0| = 0.5 is smallest
         @test iworst == 1         # |−1−0| = 1, |1−0| = 1; first-seen wins iworst
@@ -126,23 +126,23 @@
 
         # All three above aim: noless=0
         _, _, _, _, _, noless0, _, _ =
-            JuMinuit._three_point_classify([0.0, 1.0, 2.0], [2.0, 3.0, 5.0], 1.0)
+            NativeMinuit._three_point_classify([0.0, 1.0, 2.0], [2.0, 3.0, 5.0], 1.0)
         @test noless0 == 0
 
         # All three below aim: noless=3
         _, _, _, _, _, noless3, _, _ =
-            JuMinuit._three_point_classify([0.0, 1.0, 2.0], [-2.0, -1.0, -0.5], 1.0)
+            NativeMinuit._three_point_classify([0.0, 1.0, 2.0], [-2.0, -1.0, -0.5], 1.0)
         @test noless3 == 3
 
         # default_ibest tie-break (Opus review IMPORTANT #5): when all three
         # |f - aim| are equal, the initial classifier uses default_ibest=3.
         ib_init, _, _, _, _, _, _, _ =
-            JuMinuit._three_point_classify([0.0, 0.5, 1.0], [1.0, 1.0, 1.0], 0.0;
+            NativeMinuit._three_point_classify([0.0, 0.5, 1.0], [1.0, 1.0, 1.0], 0.0;
                                             default_ibest = 3)
         @test ib_init == 3
         # L500 classifier uses default_ibest=1
         ib_l500, _, _, _, _, _, _, _ =
-            JuMinuit._three_point_classify([0.0, 0.5, 1.0], [1.0, 1.0, 1.0], 0.0;
+            NativeMinuit._three_point_classify([0.0, 0.5, 1.0], [1.0, 1.0, 1.0], 0.0;
                                             default_ibest = 1)
         @test ib_l500 == 1
     end
@@ -158,7 +158,7 @@
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
         # The analytic 1σ crossing along x[1] is at α = 1.0 (since
         # σ_x = sqrt(2·1·0.5) = 1 and the crossing at f=fmin+1 is x = 1+1·σ_x).
-        cr = JuMinuit.function_cross(fmin, cf, 1, +1.0)
+        cr = NativeMinuit.function_cross(fmin, cf, 1, +1.0)
         @test cr.valid
         # Tight 1% tolerance — without the C++ tlr=0.01 override this
         # would have a 10× looser allowable error.
@@ -168,7 +168,7 @@
         # the crossing tlf=0.01·up should still pin aopt within ~1%
         # because the override decouples user-tlr from the convergence
         # check (only inner-MIGRAD sees `tol = 0.5·tlr`).
-        cr_loose = JuMinuit.function_cross(fmin, cf, 1, +1.0; tlr = 0.5)
+        cr_loose = NativeMinuit.function_cross(fmin, cf, 1, +1.0; tlr = 0.5)
         @test cr_loose.valid
         @test cr_loose.aopt ≈ 1.0 atol = 0.05  # inner-MIGRAD looseness only
     end
@@ -184,7 +184,7 @@
         # algorithm DOES converge to a valid crossing.
         cf = CostFunction(x -> 4.0 * (x[1] - 1.0)^4 + (x[2] - 2.0)^2)
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
-        cr = JuMinuit.function_cross(fmin, cf, 1, +1.0)
+        cr = NativeMinuit.function_cross(fmin, cf, 1, +1.0)
         @test cr.valid                # would be false if fall-through missing
         @test cr.aopt > 0.0
         @test cr.nfcn < 1500          # bounded call count
@@ -207,7 +207,7 @@
         # test_migrad_bounded.jl.
         _alloc(f, x) = @allocated f(x)
         cf = CostFunction(x -> sum(abs2, x), 1.0)
-        cf_one = JuMinuit._fix_one_param(cf, 3, 0.5, 5)
+        cf_one = NativeMinuit._fix_one_param(cf, 3, 0.5, 5)
         y4 = [0.1, 0.2, 0.3, 0.4]
         # Warmup (compile)
         cf_one(y4); _alloc(cf_one, y4)
@@ -219,7 +219,7 @@
         # must too; @inferred fails if Julia infers Any/Union).
         @test (@inferred cf_one(y4)) isa Float64
 
-        cf_multi = JuMinuit._fix_multi_params(cf, [1, 3], [0.5, 0.5], 5)
+        cf_multi = NativeMinuit._fix_multi_params(cf, [1, 3], [0.5, 0.5], 5)
         y3 = [0.1, 0.2, 0.3]
         cf_multi(y3); _alloc(cf_multi, y3)
         @test _alloc(cf_multi, y3) == 0
@@ -281,8 +281,8 @@
         # central-basin call should NOT match this. Tests that the
         # `other_param_seed` kwarg actually affects probe-1 behavior
         # (gemini v2 BLOCKING — the prior assertion was vacuous).
-        cr_up_default = JuMinuit.function_cross(fmin, cf, 1, +1.0)
-        cr_up_wrong_basin = JuMinuit.function_cross(fmin, cf, 1, +1.0;
+        cr_up_default = NativeMinuit.function_cross(fmin, cf, 1, +1.0)
+        cr_up_wrong_basin = NativeMinuit.function_cross(fmin, cf, 1, +1.0;
             other_param_seed = [0.1])  # explicitly seed into the OTHER well
         if cr_up_default.valid && cr_up_wrong_basin.valid
             # If both succeed in the SAME basin (the function_cross
@@ -315,7 +315,7 @@
         # Test 1: dimension validation
         cf = CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
-        @test_throws DimensionMismatch JuMinuit.function_cross(
+        @test_throws DimensionMismatch NativeMinuit.function_cross(
             fmin, cf, 1, +1.0; other_param_seed = [1.0, 2.0])
 
         # Test 2: basin-sensitive FCN where seed actually matters
@@ -331,9 +331,9 @@
         # Seed at the converged value vs at a perturbed location must
         # give the same aopt at convergence (algorithm is robust to
         # initialization in the SAME basin), modulo MIGRAD tolerance.
-        cr_default = JuMinuit.function_cross(fmin_b, cf_b, 1, +1.0)
+        cr_default = NativeMinuit.function_cross(fmin_b, cf_b, 1, +1.0)
         # Seed near outer min — should match default
-        cr_near = JuMinuit.function_cross(fmin_b, cf_b, 1, +1.0;
+        cr_near = NativeMinuit.function_cross(fmin_b, cf_b, 1, +1.0;
             other_param_seed = [fmin_b.state.parameters.x[2]])
         if cr_default.valid && cr_near.valid
             @test cr_default.aopt ≈ cr_near.aopt atol = 0.1
@@ -341,7 +341,7 @@
     end
 
     @testset "Invalid-side placeholder = ±σ_HESSE (C++ MinosError.h:54 parity)" begin
-        # When MINOS fails on a side, JuMinuit publishes ±σ_HESSE
+        # When MINOS fails on a side, NativeMinuit publishes ±σ_HESSE
         # (= sqrt(2·up·V[i,i])) as the placeholder — the same UX
         # iminuit propagates from C++ `MinosError::Upper()/Lower()`,
         # which returns `±State().Error(Parameter())` when invalid

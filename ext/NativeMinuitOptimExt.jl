@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# JuMinuitOptimExt — the `optim(m)` / `minimize_with(m)` alternative-minimizer
+# NativeMinuitOptimExt — the `optim(m)` / `minimize_with(m)` alternative-minimizer
 # bridge, powered by Optim.jl.
 #
 # iminuit's `m.scipy(method=...)` minimises the FCN with `scipy.optimize.minimize`
@@ -12,16 +12,16 @@
 #
 # The Julia-optimal analog bridges to Optim.jl — the native, AD-friendly
 # `scipy.optimize` equivalent and the community standard — instead of shelling
-# out to Python. This is a package extension (mirrors JuMinuitForwardDiffExt /
-# JuMinuitPlotsExt / JuMinuitDataFramesExt): Optim pulls in a sizeable transitive
+# out to Python. This is a package extension (mirrors NativeMinuitForwardDiffExt /
+# NativeMinuitPlotsExt / NativeMinuitDataFramesExt): Optim pulls in a sizeable transitive
 # stack (NLSolversBase, LineSearches, PositiveFactorizations, …), so making it a
-# hard dependency would inflate every JuMinuit install. `using Optim` activates
+# hard dependency would inflate every NativeMinuit install. `using Optim` activates
 # the bridge; the thin `optim` / `minimize_with` entry points in
 # `src/iminuit_compat.jl` dispatch here via `Base.get_extension`, and emit a
 # helpful "load Optim" message when it is absent (rather than a bare MethodError).
 #
 # Design: Optim optimises in EXTERNAL parameter coordinates with native box
-# constraints (Fminbox) — cleaner than re-using JuMinuit's internal sin/sqrt
+# constraints (Fminbox) — cleaner than re-using NativeMinuit's internal sin/sqrt
 # bound transform, and exactly how a Julia user would reach for Optim directly.
 # Fixed parameters are held out of the optimisation vector. The converged point
 # is written back by constructing a `BoundedFunctionMinimum` the SAME way
@@ -30,13 +30,13 @@
 # covariance, matching iminuit's scipy-then-hesse flow.
 # ─────────────────────────────────────────────────────────────────────────────
 
-module JuMinuitOptimExt
+module NativeMinuitOptimExt
 
-using JuMinuit
+using NativeMinuit
 using Optim
 
-# Core types/helpers reused from JuMinuit's own bounded-MIGRAD build path. The
-# exported names (Minuit, Parameters, …) come in via `using JuMinuit`; the
+# Core types/helpers reused from NativeMinuit's own bounded-MIGRAD build path. The
+# exported names (Minuit, Parameters, …) come in via `using NativeMinuit`; the
 # underscore-internal helpers are referenced fully-qualified below.
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ end
 # The bridge
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Called by `JuMinuit.optim` / `JuMinuit.minimize_with` (which dispatch here
+# Called by `NativeMinuit.optim` / `NativeMinuit.minimize_with` (which dispatch here
 # through `Base.get_extension`). `optimizer`, when non-`nothing`, is an Optim
 # optimizer object that overrides `method`.
 function _scipy_optim(m::Minuit, optimizer = nothing;
@@ -237,7 +237,7 @@ function _scipy_optim(m::Minuit, optimizer = nothing;
 end
 
 # Write the Optim optimum back into `m`: build a `BoundedFunctionMinimum` at the
-# converged point using JuMinuit's own seed machinery (identical to what
+# converged point using NativeMinuit's own seed machinery (identical to what
 # `migrad(cf, params)` constructs, minus the DFP loop). After this `m.values` /
 # `m.fval` are correct and `hesse(m)` refines `m.covariance` / `m.errors`.
 function _writeback!(m::Minuit, params, free_idx::Vector{Int},
@@ -267,10 +267,10 @@ function _writeback!(m::Minuit, params, free_idx::Vector{Int},
     # first MIGRAD step does — for a clean quadratic this is already the exact
     # diagonal covariance; `hesse(m)` recovers the full (off-diagonal) matrix.
     cf = m.cfwg === nothing ? m.fcn : m.cfwg
-    cf_internal = JuMinuit._wrap_fcn_internal_to_external(cf, params_opt)
-    int_vals = JuMinuit.initial_int_values(params_opt)
-    int_errs = JuMinuit.initial_int_errors(params_opt)
-    seed = JuMinuit.seed_state(cf_internal, int_vals, int_errs, m.strategy, m.prec)
+    cf_internal = NativeMinuit._wrap_fcn_internal_to_external(cf, params_opt)
+    int_vals = NativeMinuit.initial_int_values(params_opt)
+    int_errs = NativeMinuit.initial_int_errors(params_opt)
+    seed = NativeMinuit.seed_state(cf_internal, int_vals, int_errs, m.strategy, m.prec)
 
     # Surface Optim's function-evaluation count as the fmin's nfcn (the seed
     # itself only spent ~1 + gradient calls); the converged-status flag drives
@@ -280,14 +280,14 @@ function _writeback!(m::Minuit, params, free_idx::Vector{Int},
     fmin_int = FunctionMinimum(state, seed, cf.up; is_valid = converged)
 
     ext_values, ext_errors_vec, ext_cov =
-        JuMinuit._internal_to_external_results(fmin_int, params_opt, cf.up)
+        NativeMinuit._internal_to_external_results(fmin_int, params_opt, cf.up)
     m.fmin = BoundedFunctionMinimum(fmin_int, params_opt, ext_values,
                                      ext_errors_vec, ext_cov, cf_internal)
     empty!(m.minos_errors)   # any cached MINOS errors are stale at the new point
     return m
 end
 
-# NOTE: both `JuMinuit.optim` and `JuMinuit.minimize_with` are defined in
+# NOTE: both `NativeMinuit.optim` and `NativeMinuit.minimize_with` are defined in
 # src/iminuit_compat.jl and dispatch into `_scipy_optim` here via
 # `Base.get_extension` — so this module deliberately does NOT add methods to
 # them (which would overwrite the src dispatch + helpful-error fallback). The
@@ -297,8 +297,8 @@ end
 # Precompile the `optim(m)` bridge so the first `optim(m; method=:lbfgs)` after
 # `using Optim` doesn't cold-compile the whole Optim path (objective closure,
 # LBFGS, the seed-at-optimum write-back). Calls `_scipy_optim` DIRECTLY rather
-# than the `JuMinuit.optim` entry point: during this extension's own
-# precompilation `Base.get_extension(JuMinuit, :JuMinuitOptimExt)` is not yet
+# than the `NativeMinuit.optim` entry point: during this extension's own
+# precompilation `Base.get_extension(NativeMinuit, :NativeMinuitOptimExt)` is not yet
 # resolvable, so `optim(m)` would take the "load Optim" fallback and compile
 # nothing. try/catch-wrapped so a workload hiccup never breaks precompilation.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -316,4 +316,4 @@ PrecompileTools.@setup_workload begin
     end
 end
 
-end # module JuMinuitOptimExt
+end # module NativeMinuitOptimExt

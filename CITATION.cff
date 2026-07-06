@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: >-
-  If you use JuMinuit.jl in a publication, please cite both this software and
+  If you use NativeMinuit.jl in a publication, please cite both this software and
   the upstream Minuit algorithms (James & Roos 1975) that it ports.
-title: "JuMinuit.jl: a native-Julia port of Minuit2"
+title: "NativeMinuit.jl: a native-Julia port of Minuit2"
 abstract: >-
   Native-Julia port of the C++ Minuit2 function-minimization library — a
   drop-in replacement for IMinuit.jl, with an iminuit-style API and
@@ -14,10 +14,10 @@ authors:
     given-names: Feng-Kun
     orcid: "https://orcid.org/0000-0002-2919-2064"
     website: "https://inspirehep.net/authors/1027513"
-repository-code: "https://github.com/fkguo/JuMinuit.jl"
-url: "https://github.com/fkguo/JuMinuit.jl"
+repository-code: "https://github.com/fkguo/NativeMinuit.jl"
+url: "https://github.com/fkguo/NativeMinuit.jl"
 license: LGPL-2.1-or-later
-date-released: "2026-06-13"
+date-released: "2026-07-06"
 keywords:
   - Julia
   - Minuit

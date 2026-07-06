@@ -9,10 +9,10 @@
 #   asserting type-stability — each call must have a concretely inferrable
 #   return type for the closure type the user supplied.
 # - JET `@report_opt` (below): a NARROW optimization-analysis guard on the
-#   low-level `migrad` entry points, scoped via `target_modules=(JuMinuit,)`.
+#   low-level `migrad` entry points, scoped via `target_modules=(NativeMinuit,)`.
 #   `@inferred` only checks the top-level return type; this walks the call
 #   graph and catches a silent FCN-call-site dispatch regression the perf
-#   claim can't afford (ROADMAP risk #4). The narrow, JuMinuit-scoped target
+#   claim can't afford (ROADMAP risk #4). The narrow, NativeMinuit-scoped target
 #   avoids the noisy cross-version false positives (e.g. Julia 1.10's
 #   BLAS.hemv! drift) that forced the earlier broad JET scan's removal — and
 #   1.10, the worst offender, is no longer supported.
@@ -24,7 +24,7 @@ using RecipesBase
 # point releases (e.g. JET 0.11.3 fails to *precompile* on Julia 1.12.x —
 # `MethodError: add_active_gotos!(…, ::Compiler.GenericDomTree{true})`), which
 # would abort the WHOLE `Pkg.test()` at the dependency-precompile stage, before
-# any JuMinuit test runs. JET is a dev-only optimization diagnostic, so it is
+# any NativeMinuit test runs. JET is a dev-only optimization diagnostic, so it is
 # NOT in the `[targets] test` deps: load it opportunistically and SKIP its check
 # when unavailable, instead of letting a tooling/Julia-version incompatibility
 # block CI and releases. Aqua + the `@inferred` block below (the real
@@ -50,7 +50,7 @@ end
         # flag this one recipe. The recipes on our own result types
         # (BootstrapResult, JackknifeResult, SolutionModes/SolutionMode) are
         # non-pirating and need no exemption.
-        Aqua.test_all(JuMinuit; ambiguities = false,
+        Aqua.test_all(NativeMinuit; ambiguities = false,
                       piracies = (treat_as_own = [RecipesBase.apply_recipe],))
     end
 
@@ -77,30 +77,30 @@ end
         fmin = migrad(cf, x0, errs)
 
         # hesse — standalone HESSE on a converged state
-        @test (@inferred JuMinuit.hesse(cf, fmin.state, Strategy(1))) isa
-                JuMinuit.MinimumState
+        @test (@inferred NativeMinuit.hesse(cf, fmin.state, Strategy(1))) isa
+                NativeMinuit.MinimumState
 
         # minos — asymmetric error on one parameter
-        @test (@inferred JuMinuit.minos(fmin, cf, 1)) isa MinosError
+        @test (@inferred NativeMinuit.minos(fmin, cf, 1)) isa MinosError
 
         # contour — ellipse approximation
-        @test (@inferred JuMinuit.contour(fmin, cf, 1, 2)) isa ContoursError
+        @test (@inferred NativeMinuit.contour(fmin, cf, 1, 2)) isa ContoursError
 
         # contour_exact — multi-param function_cross
-        @test (@inferred JuMinuit.contour_exact(fmin, cf, 1, 2;
+        @test (@inferred NativeMinuit.contour_exact(fmin, cf, 1, 2;
                                                   npoints = 8)) isa ContoursError
 
         # function_cross — single-param MINOS-style root find
-        @test (@inferred JuMinuit.function_cross(fmin, cf, 1, +1.0)) isa
-                JuMinuit.MnCross
+        @test (@inferred NativeMinuit.function_cross(fmin, cf, 1, +1.0)) isa
+                NativeMinuit.MnCross
 
         # function_cross_multi — multi-param variant
-        @test (@inferred JuMinuit.function_cross_multi(
-                fmin, cf, [1, 2], [0.0, 0.0], [1.0, 0.5])) isa JuMinuit.MnCross
+        @test (@inferred NativeMinuit.function_cross_multi(
+                fmin, cf, [1, 2], [0.0, 0.0], [1.0, 0.5])) isa NativeMinuit.MnCross
 
         # estimate_edm — used inside MIGRAD's hot loop; must be inferable
         # for the inner-loop type-stability contract.
-        @test (@inferred JuMinuit.estimate_edm(fmin.state.gradient,
+        @test (@inferred NativeMinuit.estimate_edm(fmin.state.gradient,
                                                 fmin.state.error)) isa Float64
 
         # Minuit wrapper — high-level user-facing constructor + migrad!

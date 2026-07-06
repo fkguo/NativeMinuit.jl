@@ -1,19 +1,19 @@
-# X(6200) — two-channel di-J/ψ fit (JuMinuit benchmark + Bayesian example)
+# X(6200) — two-channel di-J/ψ fit (NativeMinuit benchmark + Bayesian example)
 
-A native-JuMinuit reproduction of the published coupled-channel analysis of the
+A native-NativeMinuit reproduction of the published coupled-channel analysis of the
 **X(6200)**, the near-threshold state in the J/ψJ/ψ system, followed by Bayesian
 propagation of its pole / scattering length / effective range / compositeness.
 
 It does five things, each verified against the published numbers:
 
-1. **Fits the real LHCb double-J/ψ spectrum** with JuMinuit (7 free parameters) —
+1. **Fits the real LHCb double-J/ψ spectrum** with NativeMinuit (7 free parameters) —
    recovers the published best fit at χ²/dof = 28.708/29 = 0.99.
 2. **Finds the X(6200) pole** by a search on the four Riemann sheets of the
    T-matrix (det(1 − G·V) = 0): a sheet-II pole at ≈ 6.203 GeV, just above the
    J/ψJ/ψ threshold (6.194 GeV), plus the broad sheet-III pole near 6.82 GeV.
 3. **Reproduces the published error bars** by propagating the derived quantities
    over the paper's Δχ² parameter ensemble (the frequentist method it used).
-4. **Propagates them with JuMinuit's Bayesian posterior sampling** (`posterior_sample` +
+4. **Propagates them with NativeMinuit's Bayesian posterior sampling** (`posterior_sample` +
    `derived_interval`): classifies the near-threshold pole sheet-by-sheet — bound
    state (sheet I) vs virtual / resonance (sheet II) — to quantify the X(6200)'s
    two-fold interpretation, and shows why a near-unitary scattering length must be
@@ -36,7 +36,7 @@ It does five things, each verified against the published numbers:
 julia --project=. BenchmarkExamples/X6200_double_jpsi/x6200_double_jpsi.jl
 ```
 
-Needs only `JuMinuit` plus the standard library (`DelimitedFiles`, `Statistics`,
+Needs only `NativeMinuit` plus the standard library (`DelimitedFiles`, `Statistics`,
 `LinearAlgebra`). Runs in a few seconds.
 
 ## Physics context
@@ -59,7 +59,7 @@ T(k)⁻¹ = -8π√s [ 1/a + ½ r k² - i k + O(k⁴) ].
 
 ## Results (reproduced)
 
-| Quantity | Published (Dong *et al.*) | JuMinuit, this example |
+| Quantity | Published (Dong *et al.*) | NativeMinuit, this example |
 |---|---|---|
 | χ²/dof | 28.708 / 29 = 0.99 | **0.99** (same best fit) |
 | X(6200) pole (sheet II) | ≈ 6.20 GeV near threshold | **6.203 + 0.012 i GeV** |

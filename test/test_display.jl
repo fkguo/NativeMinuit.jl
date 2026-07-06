@@ -5,10 +5,10 @@
 # checklist, the correlation-matrix heatmap, strong-correlation warnings,
 # the χ²/ndf + p-value header, the LaTeX export, and graceful degradation.
 
-using JuMinuit
+using NativeMinuit
 using Test
 
-const _D = JuMinuit   # reach the un-exported display helpers
+const _D = NativeMinuit   # reach the un-exported display helpers
 
 html(m) = (io = IOBuffer(); show(io, MIME"text/html"(), m); String(take!(io)))
 plain(m) = (io = IOBuffer(); show(io, MIME"text/plain"(), m); String(take!(io)))
@@ -385,14 +385,14 @@ plain(m) = (io = IOBuffer(); show(io, MIME"text/plain"(), m); String(take!(io)))
         end
         # to_latex(::MinosError) with a non-converged (non-finite) side falls
         # back to the central value — no Inf/NaN leaks into the LaTeX.
-        bad = JuMinuit.MinosError(1, 2.5, Inf, -0.3, false, true,
+        bad = NativeMinuit.MinosError(1, 2.5, Inf, -0.3, false, true,
                                   false, false, false, false, 0)
         ls = to_latex(bad)
         @test !occursin("Inf", ls) && !occursin("NaN", ls)
         @test !occursin("^{+", ls)
         @test occursin("2.5", ls)
         # A well-formed MinosError still renders the asymmetric form.
-        good = JuMinuit.MinosError(1, 2.5, 0.32, -0.28, true, true,
+        good = NativeMinuit.MinosError(1, 2.5, 0.32, -0.28, true, true,
                                    false, false, false, false, 0)
         @test occursin("^{+", to_latex(good))
 

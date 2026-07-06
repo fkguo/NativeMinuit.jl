@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-using JuMinuit
+using NativeMinuit
 using Test
 using LinearAlgebra
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-using JuMinuit
+using NativeMinuit
 using Random
 using Statistics
 using DataFrames
@@ -164,7 +164,7 @@ using Test
         # jackknife and bootstrap estimate the same correlation
         @test Cj[1, 2] ≈ Cb[1, 2] rtol = 0.15
         # degenerate: <2 valid samples → NaN correlation matrix (no throw)
-        Cnan = JuMinuit._sample_correlation(jk.samples, falses(jk.g), 2)
+        Cnan = NativeMinuit._sample_correlation(jk.samples, falses(jk.g), 2)
         @test all(isnan, Cnan)
 
         # correlation(m::Minuit) — HESSE correlation matrix (iminuit parity with
@@ -209,7 +209,7 @@ using Test
     end
 
     @testset "generic refit interface" begin
-        refit = dd -> JuMinuit.args(migrad!(model_fit(linmodel, dd, [1.0, 0.0])))
+        refit = dd -> NativeMinuit.args(migrad!(model_fit(linmodel, dd, [1.0, 0.0])))
         bg = bootstrap(refit, d; nresample = 500, seed = 3, names = ["a", "b"])
         @test bg.names == ["a", "b"]
         @test bg.kind === :nonparametric
@@ -262,7 +262,7 @@ using Test
         @test_throws ArgumentError jackknife(linmodel, d, m; d = 0)
         @test_throws ArgumentError jackknife(linmodel, d, m; d = N + 1)
         # generic: names length mismatch
-        refit = dd -> JuMinuit.args(migrad!(model_fit(linmodel, dd, [1.0, 0.0])))
+        refit = dd -> NativeMinuit.args(migrad!(model_fit(linmodel, dd, [1.0, 0.0])))
         @test_throws ArgumentError bootstrap(refit, d; nresample = 10,
                                              names = ["only_one"])
     end
@@ -272,13 +272,13 @@ using Test
         # summary stats even when it is flagged valid, on BOTH the default
         # (filter_invalid=true) and the include-all (false) paths.
         samples = [1.0 2.0; 2.0 3.0; NaN NaN; 3.0 4.0]
-        @test JuMinuit._stat_mask(samples, [true, true, true, true], true) ==
+        @test NativeMinuit._stat_mask(samples, [true, true, true, true], true) ==
               [true, true, false, true]
         # filter_invalid=false ignores `valid` but STILL drops the NaN row
-        @test JuMinuit._stat_mask(samples, [true, false, true, false], false) ==
+        @test NativeMinuit._stat_mask(samples, [true, false, true, false], false) ==
               [true, true, false, true]
-        mask = JuMinuit._stat_mask(samples, [true, true, true, true], true)
-        μ, σ, lo, hi, cov, nv = JuMinuit._bootstrap_stats(samples, mask, 0.68, true)
+        mask = NativeMinuit._stat_mask(samples, [true, true, true, true], true)
+        μ, σ, lo, hi, cov, nv = NativeMinuit._bootstrap_stats(samples, mask, 0.68, true)
         @test nv == 3
         @test all(isfinite, μ)
         @test all(isfinite, σ)
@@ -319,7 +319,7 @@ using Test
 
         hesse_err = [mm.errors[1], mm.errors[2]]
         eA, ek = mm.merrors["A"], mm.merrors["k"]
-        @test JuMinuit.is_valid(eA) && JuMinuit.is_valid(ek)
+        @test NativeMinuit.is_valid(eA) && NativeMinuit.is_valid(ek)
         # near-Gaussian here ⇒ the MINOS half-width ≈ the symmetric HESSE error
         @test 0.5 * (eA.upper - eA.lower) ≈ hesse_err[1] rtol = 0.06
         @test 0.5 * (ek.upper - ek.lower) ≈ hesse_err[2] rtol = 0.06

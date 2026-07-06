@@ -1,11 +1,11 @@
-# JuMinuit.jl
+# NativeMinuit.jl
 
-[![Dev docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://fkguo.github.io/JuMinuit.jl/dev)
+[![Dev docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://fkguo.github.io/NativeMinuit.jl/dev)
 [![License: LGPL v2.1+](https://img.shields.io/badge/License-LGPL%20v2.1%2B-blue.svg)](LICENSE)
-[![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fv1%2Fmonthly_downloads%2FJuMinuit&query=total_requests&suffix=%2Fmonth&label=downloads&color=brightgreen)](https://juliapkgstats.com/pkg/JuMinuit)
+[![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fv1%2Fmonthly_downloads%2FNativeMinuit&query=total_requests&suffix=%2Fmonth&label=downloads&color=brightgreen)](https://juliapkgstats.com/pkg/NativeMinuit)
 
 Native-Julia port of the C++ [Minuit2](https://root.cern.ch/doc/master/Minuit2Page.html)
-function-minimization library — the workhorse of every HEP fit. JuMinuit is a
+function-minimization library — the workhorse of every HEP fit. NativeMinuit is a
 drop-in replacement for [IMinuit.jl](https://github.com/fkguo/IMinuit.jl) (the
 Julia wrapper of the Python [iminuit](https://github.com/scikit-hep/iminuit)),
 with an iminuit-style
@@ -17,22 +17,22 @@ intervals, three samplers), bootstrap / jackknife, and multi-modal detection.
 License: **LGPL 2.1 or later** (mirrors upstream Minuit2). This is a derivative
 work of C++ Minuit2 — see [`LICENSE`](LICENSE) and [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 
-[![IAM fit (Binder)](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
-[![X(3872) dip (Binder)](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
+[![IAM fit (Binder)](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
+[![X(3872) dip (Binder)](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
 
 ## Installation
 
 ```julia
 using Pkg
-Pkg.add(url = "https://github.com/fkguo/JuMinuit.jl")   # until registered in General
+Pkg.add(url = "https://github.com/fkguo/NativeMinuit.jl")   # until registered in General
 ```
 
-JuMinuit needs no compiled dependencies — it is pure Julia.
+NativeMinuit needs no compiled dependencies — it is pure Julia.
 
 ## Quick start
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 # iminuit-style API
 m = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2,
@@ -57,7 +57,7 @@ IMinuit.jl scripts largely work unchanged.
 
 C++ Minuit2 gives you MIGRAD / HESSE / MINOS / MnContours / Simplex / Scan with
 bounds, fixed parameters, and Strategy levels — all ported here. On top of that,
-JuMinuit adds, in pure Julia:
+NativeMinuit adds, in pure Julia:
 
 - **iminuit / IMinuit.jl-style front end** — `Minuit`, `migrad!`, `minos!`, `m.values` / `m.errors` / `m.merrors`, … (drop-in for IMinuit.jl).
 - **Julia-native cost functions** — `LeastSquares`, `UnbinnedNLL`, `BinnedNLL`, `ExtendedUnbinnedNLL`, `ExtendedBinnedNLL`, and their `CostSum`.
@@ -142,7 +142,7 @@ access, and Jupyter-first rich output (`to_latex`, HTML tables, plot recipes).
 ### Error analysis beyond HESSE and MINOS
 
 When MINOS can't close a contour (flat or strongly non-Gaussian likelihoods —
-common in coupled-channel / amplitude fits), JuMinuit adds:
+common in coupled-channel / amplitude fits), NativeMinuit adds:
 
 - **Derived-quantity intervals & profile bands** (`extremize`, `profile_band`)
   — MINOS for an arbitrary scalar `f(θ)` (a peak position, an amplitude ratio,
@@ -221,7 +221,7 @@ iminuit's `Minuit.scipy()`. Loads on `using Optim` (package extension).
 
 ## Migrating from iminuit / IMinuit.jl
 
-| iminuit / IMinuit.jl | JuMinuit |
+| iminuit / IMinuit.jl | NativeMinuit |
 |---|---|
 | `Minuit(fcn, x0; ...)` | same — `Minuit(fcn, x0; names, errors, limits, ...)` |
 | `m.migrad()` / `migrad(m)` | `migrad!(m)` |
@@ -249,7 +249,7 @@ Load `ForwardDiff` (or any AD that returns `Vector{Float64}`) and the gradient
 routes through AD end-to-end — MIGRAD, MINOS, and contour boundaries all use it.
 
 ```julia
-using JuMinuit, ForwardDiff     # extension auto-activates
+using NativeMinuit, ForwardDiff     # extension auto-activates
 
 function chi2(par)
     mass, coupling, width = par
@@ -301,16 +301,16 @@ The win scales with FCN cost and parameter count: an expensive FCN at higher
 > threads (module-level scratch buffers, RNG, file I/O). The classic HEP
 > anti-pattern is a `const T_BUF = zeros(ComplexF64, …)` mutated inside the FCN:
 > parallel calls race on it and MIGRAD silently converges to the **wrong**
-> minimum. JuMinuit ships a safety net — `threaded_gradient=true` auto-verifies
+> minimum. NativeMinuit ships a safety net — `threaded_gradient=true` auto-verifies
 > the threaded gradient against the sequential one on the first call (raises
-> `ThreadSafetyError` with a diagnostic), and `JuMinuit.is_thread_safe(cf, x0)`
-> probes it standalone. JuMinuit's own buffers are all per-thread; the contract
+> `ThreadSafetyError` with a diagnostic), and `NativeMinuit.is_thread_safe(cf, x0)`
+> probes it standalone. NativeMinuit's own buffers are all per-thread; the contract
 > is on your FCN. See the manual for the full treatment and the worked failure
 > case (`BenchmarkExamples/IAM_2Pformfactor/`).
 
 **Fixing a thread-unsafe FCN — give each thread its own buffer.** Yes: replacing
 a shared `const` scratch with one buffer per thread makes the FCN thread-safe.
-Indexing the pool by `Threads.threadid()` is sound here because JuMinuit threads
+Indexing the pool by `Threads.threadid()` is sound here because NativeMinuit threads
 the gradient with `Threads.@threads :static`, which pins each iteration to a
 fixed thread — so `threadid()` is stable within a call (under the `:dynamic` /
 `@spawn` schedules it would *not* be). Size the pool with `maxthreadid()`, not
@@ -330,7 +330,7 @@ inside the FCN — `c = zeros(ComplexF64, 3, 3)`, or
 `Matrix{Complex{eltype(par)}}(undef, 3, 3)` to stay AD-generic (a hard-coded
 `ComplexF64` buffer can't hold the `Complex{Dual}` values ForwardDiff produces).
 For a millisecond-scale FCN that allocation is negligible.
-Either way, confirm the fix with `JuMinuit.is_thread_safe(cf, x0)` (or just let
+Either way, confirm the fix with `NativeMinuit.is_thread_safe(cf, x0)` (or just let
 `threaded_gradient=true` auto-verify on the first call).
 
 ### When to choose which
@@ -352,7 +352,7 @@ Either way, confirm the fix with `JuMinuit.is_thread_safe(cf, x0)` (or just let
 
 On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
 
-- **X(3872) dip line shape** (3 params, J/ψρ + DD̄* coupled channels) — JuMinuit
+- **X(3872) dip line shape** (3 params, J/ψρ + DD̄* coupled channels) — NativeMinuit
   with AD gradients runs migrad+HESSE **1.6× faster than iminuit** (4.7 vs 7.4 ms)
   and MINOS **2.1×** faster (72.8 vs 154.7 ms); the numerical path is ~1.2×
   faster too. All schemes reach the published `fval = 0.0174`.
@@ -360,23 +360,23 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   **ill-conditioned**, multi-basin Inverse-Amplitude-Method fit (7 free LECs,
   paper-faithful) and the worked **thread-safety** case study above (the
   shared-buffer race). A **robustness stress-test**, not a speed/fval showcase:
-  JuMinuit and iminuit are numerically *identical* near a minimum (agree to
+  NativeMinuit and iminuit are numerically *identical* near a minimum (agree to
   ~10⁻⁹), but on a cold start which basin each reaches is path-sensitive on this
-  chaotic surface. Here JuMinuit happens to converge to a *valid* minimum at its
+  chaotic surface. Here NativeMinuit happens to converge to a *valid* minimum at its
   default (and runs MINOS/contours, which iminuit refuses on its invalid one)
   (details in [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)).
 - **Large coupled-channel amplitude fit** — 57 free parameters, from an
   independent unpublished analysis (single-threaded; a heavy, multi-second-per-call
   FCN). The FCN is the **same Julia code** for both backends, so it cancels from
   the comparison — only the optimizer differs. By the metric that reflects that,
-  JuMinuit lands on the **same minimum** (Δχ² ≈ 2×10⁻⁵; 55 of 57 free parameters
+  NativeMinuit lands on the **same minimum** (Δχ² ≈ 2×10⁻⁵; 55 of 57 free parameters
   agree to <1%, the rest weakly-constrained flat directions) in **nearly the same
   number of MIGRAD evaluations** (7562 vs 7446 — a 1.6% difference): its MIGRAD is
   about as call-efficient as C++ Minuit2's, which is what matters when each
   evaluation is expensive. Wall time is then just `nfcn × (shared FCN cost)` — the optimizer's
   own per-call overhead is negligible against a multi-second FCN, so here the FCN,
   not the optimizer, sets the clock. (The cheap-FCN benchmarks above are where
-  that optimizer overhead — and JuMinuit's call-site advantage — actually shows.)
+  that optimizer overhead — and NativeMinuit's call-site advantage — actually shows.)
 
 ## Reliability
 
@@ -393,7 +393,7 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
 
 ## Documentation
 
-- **[Manual](https://fkguo.github.io/JuMinuit.jl/dev)** — tutorials (quickstart,
+- **[Manual](https://fkguo.github.io/NativeMinuit.jl/dev)** — tutorials (quickstart,
   bounded parameters, MINOS & contours), error analysis, cost functions, and the
   full API reference.
 - **[Error-analysis guide](docs/src/error_analysis.md)** — which uncertainty method
@@ -406,10 +406,10 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
 - **[`docs/UPSTREAM.md`](docs/UPSTREAM.md)** — upstream provenance and LGPL
   attribution.
 
-## Using JuMinuit with an AI coding agent (agent skill)
+## Using NativeMinuit with an AI coding agent (agent skill)
 
 This repository ships an **agent skill** that teaches an AI coding agent the
-JuMinuit API — the `Minuit` / `migrad!` / `minos!` workflow, the Julia-native cost
+NativeMinuit API — the `Minuit` / `migrad!` / `minos!` workflow, the Julia-native cost
 functions, bounds and fixed parameters, AD & threaded gradients, and the
 error-analysis tools (`mncontour`, `get_contours_samples`, `mcmc_sample` /
 `quantile_band`, `bayesian` / `posterior_sample`, `bootstrap` / `jackknife`,
@@ -422,35 +422,35 @@ docstrings and [`docs/`](docs/), which it points to for depth.
 It is a plain `SKILL.md` agent skill — **not tied to one tool**: it works with any
 coding agent that can read a skill ([Claude Code](https://claude.com/claude-code),
 OpenAI Codex, Gemini CLI, …). It lives at
-[`skills/juminuit-usage/SKILL.md`](skills/juminuit-usage/SKILL.md).
+[`skills/nativeminuit-usage/SKILL.md`](skills/nativeminuit-usage/SKILL.md).
 
 - **Working inside this repository:** nothing to do for Claude Code — it
   auto-discovers the project skill.
-- **Using JuMinuit from your own projects:** symlink it once into your agent's
+- **Using NativeMinuit from your own projects:** symlink it once into your agent's
   skills directory, so a later `git pull` keeps it current:
 
   ```bash
-  ln -s "$PWD/skills/juminuit-usage" ~/.claude/skills/juminuit-usage   # Claude Code
-  ln -s "$PWD/skills/juminuit-usage" ~/.codex/skills/juminuit-usage    # OpenAI Codex
-  ln -s "$PWD/skills/juminuit-usage" ~/.gemini/skills/juminuit-usage   # Gemini CLI
+  ln -s "$PWD/skills/nativeminuit-usage" ~/.claude/skills/nativeminuit-usage   # Claude Code
+  ln -s "$PWD/skills/nativeminuit-usage" ~/.codex/skills/nativeminuit-usage    # OpenAI Codex
+  ln -s "$PWD/skills/nativeminuit-usage" ~/.gemini/skills/nativeminuit-usage   # Gemini CLI
   ```
 
   Claude Code then auto-discovers it; Codex / Gemini have no skill auto-load, so
   reference the file from `~/.codex/AGENTS.md` / `~/.gemini/GEMINI.md`.
 
 The agent then picks it up automatically whenever a task involves fitting with
-JuMinuit (writing a χ²/likelihood fit, running MIGRAD/MINOS, computing contours
+NativeMinuit (writing a χ²/likelihood fit, running MIGRAD/MINOS, computing contours
 or resampling errors, or porting iminuit / IMinuit.jl code).
 
 ## Citation
 
-If you use JuMinuit.jl in a publication, please cite **both** JuMinuit.jl and the
-upstream Minuit algorithms it ports. JuMinuit.jl ships a
+If you use NativeMinuit.jl in a publication, please cite **both** NativeMinuit.jl and the
+upstream Minuit algorithms it ports. NativeMinuit.jl ships a
 [`CITATION.cff`](CITATION.cff) — use GitHub's **"Cite this repository"** button
 for APA / BibTeX, or:
 
-> F.-K. Guo, *JuMinuit.jl: a native-Julia port of Minuit2*,
-> https://github.com/fkguo/JuMinuit.jl (2026).
+> F.-K. Guo, *NativeMinuit.jl: a native-Julia port of Minuit2*,
+> https://github.com/fkguo/NativeMinuit.jl (2026).
 >
 > F. James and M. Roos, "MINUIT: A system for function minimization and analysis
 > of the parameter errors and correlations", Comput. Phys. Commun. **10** (1975)
@@ -463,7 +463,7 @@ for APA / BibTeX, or:
 - **[IMinuit.jl](https://github.com/fkguo/IMinuit.jl)** (Feng-Kun Guo, Yu Zhang)
   — the Julia wrapper this package complements and can replace.
 - **[iminuit](https://github.com/scikit-hep/iminuit)** (Hans Dembinski,
-  scikit-hep) — the Python wrapper whose API JuMinuit mirrors.
+  scikit-hep) — the Python wrapper whose API NativeMinuit mirrors.
 - **AI coding agents** — portions of the port, its tests, and the documentation
   were drafted and adversarially cross-reviewed with the help of multiple AI
   coding agents. The algorithmic and C++-fidelity decisions, and final

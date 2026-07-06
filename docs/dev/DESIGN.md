@@ -1,4 +1,4 @@
-# Design notes — JuMinuit.jl
+# Design notes — NativeMinuit.jl
 
 Architectural decisions, written down as they're made so the *why* is
 preserved. Each entry is small (1–10 lines).
@@ -22,7 +22,7 @@ sub-packages.
 `.claude/skills/julia-perf/` (vendored from autoresearch-lab).
 
 **Consequences**: simple to maintain; one registry entry when Phase 0
-ships. If we later want a separate `JuMinuitCompat.jl` for IMinuit-
+ships. If we later want a separate `NativeMinuitCompat.jl` for IMinuit-
 compatibility shim, it ships as a submodule, not a separate package
 (at least until Phase 3 if user demand surfaces).
 
@@ -44,7 +44,7 @@ bumps happen at major Julia version boundaries with a checklist in
 existing at 6.24.0; cross-platform IEEE drift addressed via the
 tolerance hierarchy in `tools/regen_reference.md`.
 
-**Revisit when**: JuMinuit v2.0 (planned upstream bump), or if a
+**Revisit when**: NativeMinuit v2.0 (planned upstream bump), or if a
 critical-correctness bug surfaces upstream that we want to inherit.
 
 ---
@@ -169,13 +169,13 @@ Minuit2_cpp/inc/Minuit2/*.h` headers carry `version 2.1 of the License,
 or (at your option) any later version`). A line-by-line port creates
 derivative work under copyright translation doctrine.
 
-**Decision**: **LGPL 2.1 or later** for JuMinuit.jl. Mirrors upstream.
+**Decision**: **LGPL 2.1 or later** for NativeMinuit.jl. Mirrors upstream.
 
 **Why not MIT**: would require clean-room rewrite from FORTRAN-Minuit
 paper (James 1975) + iminuit Python sources without reading the C++ —
 weeks of work, and the C++ remains the only complete numerical oracle
 for the test suite anyway. LGPL's only real Julia-ecosystem cost is
-"cannot be vendored into MIT package source" — JuMinuit.jl is a
+"cannot be vendored into MIT package source" — NativeMinuit.jl is a
 standalone package, so this is moot. iminuit/IMinuit.jl user code
 remains unaffected (LGPL does not infect dependents).
 
@@ -214,7 +214,7 @@ Criteria status at the v0.0.1-DEV PoC tag:
 | 1. Numerical equivalence ≤ 1e-10           | PARTIAL  | Quad-4D ✓; Rosenbrock-2D/10D within Strategy(0) cross-impl variance. Tight bit-trace parity gated on Phase 1 MnTraceObject port. |
 | 2. Performance ≤ 1.5× C++ wall             | **PASS** | max ratio 0.887×; Julia uniformly faster than C++ Minuit2 on every §3.3 corpus benchmark. |
 | 3. Zero-alloc inner loop                   | DEFERRED | ~7 allocs/iter. Criterion 2 passes with margin so GC overhead is sub-noise; alloc gap is code-quality not perf. Workspace-based refactor when convenient. |
-| 4. Aqua + 类型稳定性 clean                  | **PASS** | `test_aqua_jet.jl`: Aqua project-quality 检查 + 11 个 `@inferred` 断言覆盖所有公共入口 (`migrad`, `hesse`, `minos`, `contour`, `contour_exact`, `function_cross`, `function_cross_multi`, `estimate_edm`, `Minuit`, `migrad!`, `minos!`). 类型稳定靠两层:`@inferred`(stdlib 内置、零跨版本差异)覆盖上述 11 个公共入口的返回类型;**外加** v0.3.0 把 JET 以**窄目标** `JET.@report_opt target_modules=(JuMinuit,)` 守卫加回,守 `migrad` 低层入口的 FCN-call-site 去虚化(`@inferred` 看不到调用图内部的 runtime dispatch,`@report_opt` 能)。JET 曾在 Phase 1.x 因旧 Julia(1.10 `BLAS.hemv!`)的误报噪音被移除;窄 `target_modules` 作用域 + 砍掉 1.10 后该噪音消除,在 1.11/1.12 上均干净。 |
+| 4. Aqua + 类型稳定性 clean                  | **PASS** | `test_aqua_jet.jl`: Aqua project-quality 检查 + 11 个 `@inferred` 断言覆盖所有公共入口 (`migrad`, `hesse`, `minos`, `contour`, `contour_exact`, `function_cross`, `function_cross_multi`, `estimate_edm`, `Minuit`, `migrad!`, `minos!`). 类型稳定靠两层:`@inferred`(stdlib 内置、零跨版本差异)覆盖上述 11 个公共入口的返回类型;**外加** v0.3.0 把 JET 以**窄目标** `JET.@report_opt target_modules=(NativeMinuit,)` 守卫加回,守 `migrad` 低层入口的 FCN-call-site 去虚化(`@inferred` 看不到调用图内部的 runtime dispatch,`@report_opt` 能)。JET 曾在 Phase 1.x 因旧 Julia(1.10 `BLAS.hemv!`)的误报噪音被移除;窄 `target_modules` 作用域 + 砍掉 1.10 后该噪音消除,在 1.11/1.12 上均干净。 |
 | §3.4.1 julia-perf Level-2 artifacts        | **PASS** | `manifest.json`, `benchmarks.json`, `summary.json`, `diagnostics.md` emitted under `benchmark/.julia-perf/runs/<ts>/`. |
 
 ## Future decisions — RESOLVED (were Phase-1 placeholders)
@@ -225,7 +225,7 @@ Criteria status at the v0.0.1-DEV PoC tag:
 - DR-013: Minimum Julia version + `[compat]` policy — **DECIDED**: `julia =
   "1.11"` (1.10 LTS dropped); optional deps ship as weak-dep package extensions.
 - DR-014: AD backend primary (ForwardDiff vs Enzyme) — **DECIDED**: ForwardDiff,
-  shipped as the `JuMinuitForwardDiffExt` extension; Enzyme was not pursued.
+  shipped as the `NativeMinuitForwardDiffExt` extension; Enzyme was not pursued.
 - DR-015: SVector/MVector small-n specialization — **DECIDED**: deferred (no
   StaticArrays dependency; see `DEFERRED.md`).
 - DR-016: Bounded-Hessian integration shape — **DECIDED**: a standalone

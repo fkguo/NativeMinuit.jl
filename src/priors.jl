@@ -79,7 +79,7 @@ end
 """
     flat_prior(m::Minuit) -> Prior
 
-Flat prior in JuMinuit's full external parameter coordinates. This is not
+Flat prior in NativeMinuit's full external parameter coordinates. This is not
 "no prior"; it is a parameterization-dependent coordinate choice. On unbounded
 coordinates posterior propriety relies on the likelihood.
 """

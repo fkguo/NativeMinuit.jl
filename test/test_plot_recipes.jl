@@ -50,7 +50,7 @@ using RecipesBase
         cf = CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
         e = minos(fmin, cf, 1)
-        @test JuMinuit.is_valid(e)
+        @test NativeMinuit.is_valid(e)
 
         kwargs = Dict{Symbol,Any}()
         recipes = RecipesBase.apply_recipe(kwargs, e)
@@ -202,7 +202,7 @@ end
         @test hi !== nothing
         hist = recipes[hi]
         # default parameter = first varying column (slope); finite rows only.
-        @test hist.args[1] == JuMinuit._finite_col(bs.samples, 1)
+        @test hist.args[1] == NativeMinuit._finite_col(bs.samples, 1)
         @test hist.plotattributes[:xguide] == "slope"
 
         # the two reference lines mark the estimate and the percentile CI.
@@ -218,7 +218,7 @@ end
         bd = RecipesBase.apply_recipe(Dict{Symbol,Any}(:par => "intercept"), bs)
         hj = findfirst(rd -> get(rd.plotattributes, :seriestype, nothing) === :histogram, bd)
         @test bd[hj].plotattributes[:xguide] == "intercept"
-        @test bd[hj].args[1] == JuMinuit._finite_col(bs.samples, 2)
+        @test bd[hj].args[1] == NativeMinuit._finite_col(bs.samples, 2)
     end
 
     @testset "JackknifeResult → histogram + estimate/mean lines" begin
@@ -230,7 +230,7 @@ end
         hi = findfirst(rd -> get(rd.plotattributes, :seriestype, nothing) === :histogram,
                        recipes)
         @test hi !== nothing
-        @test recipes[hi].args[1] == JuMinuit._finite_col(jk.samples, 1)
+        @test recipes[hi].args[1] == NativeMinuit._finite_col(jk.samples, 1)
 
         vlines = filter(rd -> get(rd.plotattributes, :seriestype, nothing) === :vline,
                         recipes)

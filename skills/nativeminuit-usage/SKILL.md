@@ -1,7 +1,7 @@
 ---
-name: juminuit-usage
+name: nativeminuit-usage
 description: >-
-  Quick-reference for USING the JuMinuit.jl Julia package (a native-Julia
+  Quick-reference for USING the NativeMinuit.jl Julia package (a native-Julia
   Minuit2 port with an iminuit / IMinuit.jl-style API) to minimize a
   χ²/likelihood and analyze fit errors. Use when writing or editing Julia code
   that fits data with `Minuit`, `migrad!`, `minos!`, `hesse!`, the cost-function
@@ -11,16 +11,16 @@ description: >-
   intervals/limits), `bootstrap`/`jackknife`, `get_contours_samples`,
   `find_solution_modes`, or
   `find_deeper_minimum`; or when porting Python-iminuit or IMinuit.jl fitting
-  code to JuMinuit. Covers the bang-method idiom (`migrad!(m)` not `m.migrad()`),
+  code to NativeMinuit. Covers the bang-method idiom (`migrad!(m)` not `m.migrad()`),
   the FCN/result conventions, AD & threaded gradients, bounds/fixed parameters,
   and the error-analysis decision guide — so the API is recalled, not guessed.
 ---
 
-# JuMinuit.jl — usage quick-reference
+# NativeMinuit.jl — usage quick-reference
 
-JuMinuit.jl is a **pure-Julia port of C++ Minuit2** with an API that mirrors
-Python **iminuit** / **IMinuit.jl**. This skill is for *using* JuMinuit as a
-dependency in a fitting project. (If you are editing the JuMinuit repo itself,
+NativeMinuit.jl is a **pure-Julia port of C++ Minuit2** with an API that mirrors
+Python **iminuit** / **IMinuit.jl**. This skill is for *using* NativeMinuit as a
+dependency in a fitting project. (If you are editing the NativeMinuit repo itself,
 its own `src/` docstrings and `docs/src/` are the source of truth.)
 
 > **Golden rule — you are writing Julia, not Python.** The minimizers are
@@ -28,9 +28,9 @@ its own `src/` docstrings and `docs/src/` are the source of truth.)
 > `m.migrad()`. Result *accessors* stay as properties (`m.values`, `m.errors`).
 > This single difference is the most common porting bug.
 
-## iminuit / IMinuit.jl → JuMinuit map
+## iminuit / IMinuit.jl → NativeMinuit map
 
-| iminuit (Python) / IMinuit.jl | JuMinuit |
+| iminuit (Python) / IMinuit.jl | NativeMinuit |
 |---|---|
 | `m.migrad()` | `migrad!(m)`  (or `migrad(m)`) |
 | `m.hesse()` | `hesse!(m)` |
@@ -50,7 +50,7 @@ chains: `m |> migrad! |> hesse! |> minos!`.
 ## Core workflow (copy-paste skeleton)
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 # FCN: any callable f(x::AbstractVector) -> Real. With bounds it ALWAYS sees
 # external (physical) coordinates — you never touch the internal transform.
@@ -84,7 +84,7 @@ If invalid: loosen `tol`, raise `maxfcn`, bump `strategy`, or re-seed.
 ## The constructor
 
 `Minuit(fcn, x0; kwargs...)` — keywords (singular iminuit names and plural
-JuMinuit names both accepted):
+NativeMinuit names both accepted):
 
 | kwarg | default | meaning |
 |---|---|---|
@@ -184,7 +184,7 @@ to_latex(m)                                      # LaTeX table of the result (Ju
 - **MINOS needs a covariance** — after `simplex`/`scan` (which leave none), run
   `hesse!(m)` first. A normal `migrad!` already leaves one.
 - **0.5.0 renames**: bare `contour` is NO LONGER EXPORTED (it collided with
-  `Plots.contour`). The old JuMinuit ellipse is `contour_ellipse`; iminuit's /
+  `Plots.contour`). The old NativeMinuit ellipse is `contour_ellipse`; iminuit's /
   IMinuit.jl's grid-scan `contour` is `contour_grid` (returns `ContourGrid`;
   destructures to `(xs, ys, F)`; `plot(g)` gives a filled contour). A grid
   slice's Δχ² level curves are CONDITIONAL (others pinned) — smaller than the
@@ -261,7 +261,7 @@ Default is serial central-difference numerical — right for cheap FCNs. Two ext
 **AD (ForwardDiff)** — one exact gradient call instead of `2n` finite diffs.
 Best for expensive FCNs generic on element type.
 ```julia
-using JuMinuit, ForwardDiff                       # extension auto-activates
+using NativeMinuit, ForwardDiff                       # extension auto-activates
 m = Minuit(chi2, x0; error = errs, grad = x -> ForwardDiff.gradient(chi2, x))
 migrad!(m)                                         # AD flows through MINOS/contours too
 # or a cost object carrying its own AD gradient:
@@ -287,7 +287,7 @@ m = Minuit(my_chi2, x0; error = errs, threaded_gradient = true)   # auto-verifie
   HEP bug is a `const BUF = zeros(ComplexF64,…)` mutated inside the FCN — parallel
   calls race and MIGRAD **silently converges to the wrong minimum**. Fix: allocate
   scratch per call, or one buffer per thread indexed by `Threads.threadid()` and
-  sized with `Threads.maxthreadid()` (JuMinuit threads with `@threads :static`).
+  sized with `Threads.maxthreadid()` (NativeMinuit threads with `@threads :static`).
   Probe standalone with `is_thread_safe(cf, x0)`.
 
 ## Hard surfaces: multi-basin / deeper minima
@@ -437,8 +437,8 @@ posterior_mean/median/std(post, :mass); posterior_summary(post) # point summarie
 
 ## Authoritative docs (read these for depth beyond this skill)
 
-- **GitHub:** https://github.com/fkguo/JuMinuit.jl  · **Manual:** https://fkguo.github.io/JuMinuit.jl/dev
-- **On this machine** (if present): `/Users/fkg/Coding/Agents/ResearchWork/JuMinuit` —
+- **GitHub:** https://github.com/fkguo/NativeMinuit.jl  · **Manual:** https://fkguo.github.io/NativeMinuit.jl/dev
+- **On this machine** (if present): `/Users/fkg/Coding/Agents/ResearchWork/NativeMinuit` —
   `docs/src/` (quickstart, bounded, minos_contours, cost_functions, **error_analysis**,
   guides/gradients) and the docstrings in `src/`. Worked HEP examples in
   `BenchmarkExamples/` (e.g. `IAM_2Pformfactor/`, `X3872_dip/`).

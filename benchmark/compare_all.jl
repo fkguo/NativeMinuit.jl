@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
-# Master comparison driver: Julia JuMinuit vs C++ Minuit2 vs Python iminuit.
+# Master comparison driver: Julia NativeMinuit vs C++ Minuit2 vs Python iminuit.
 # Times MIGRAD + MINOS + MNCONTOUR across the 5 §3.3 benchmark FCNs.
 #
 # Usage:
@@ -27,9 +27,9 @@ const REPO_ROOT = abspath(joinpath(@__DIR__, ".."))
 const CPP_BENCH = joinpath(REPO_ROOT, "benchmark", "cpp", "build", "cpp_bench")
 const PYTHON_BENCH = joinpath(REPO_ROOT, "benchmark", "python_iminuit_bench.py")
 
-# Load JuMinuit (development version under REPO_ROOT)
+# Load NativeMinuit (development version under REPO_ROOT)
 Pkg.develop(path=REPO_ROOT)
-using JuMinuit
+using NativeMinuit
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FCN definitions — match bench_migrad_suite.jl + cpp_bench.cxx + python bench
@@ -101,28 +101,28 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function bench_migrad(name, f, x0, errs, up)
-    setup = () -> JuMinuit.CostFunction(f, up)
-    b = @benchmark JuMinuit.migrad(cf, $x0, $errs) setup=(cf = $setup()) samples=50 evals=1
+    setup = () -> NativeMinuit.CostFunction(f, up)
+    b = @benchmark NativeMinuit.migrad(cf, $x0, $errs) setup=(cf = $setup()) samples=50 evals=1
     return median(b).time   # ns
 end
 
 function bench_minos(name, f, x0, errs, up)
     # Time MINOS only (not MIGRAD); rebuild fmin once per sample for fair
     # comparison with cpp_bench's `minos_bench` template.
-    cf_for_setup = JuMinuit.CostFunction(f, up)
-    b = @benchmark JuMinuit.minos(fmin, cf, 1) setup=(
-        cf  = JuMinuit.CostFunction($f, $up);
-        fmin = JuMinuit.migrad(cf, $x0, $errs)
+    cf_for_setup = NativeMinuit.CostFunction(f, up)
+    b = @benchmark NativeMinuit.minos(fmin, cf, 1) setup=(
+        cf  = NativeMinuit.CostFunction($f, $up);
+        fmin = NativeMinuit.migrad(cf, $x0, $errs)
     ) samples=20 evals=1
     return median(b).time
 end
 
 function bench_mncontour(name, f, x0, errs, up)
-    # MNCONTOUR = full MnContours algorithm (contour_exact in JuMinuit).
+    # MNCONTOUR = full MnContours algorithm (contour_exact in NativeMinuit).
     # n_per_par = 30 points — matches python_iminuit_bench + cpp_bench.
-    b = @benchmark JuMinuit.contour_exact(fmin, cf, 1, 2; npoints=30) setup=(
-        cf  = JuMinuit.CostFunction($f, $up);
-        fmin = JuMinuit.migrad(cf, $x0, $errs)
+    b = @benchmark NativeMinuit.contour_exact(fmin, cf, 1, 2; npoints=30) setup=(
+        cf  = NativeMinuit.CostFunction($f, $up);
+        fmin = NativeMinuit.migrad(cf, $x0, $errs)
     ) samples=10 evals=1
     return median(b).time
 end
@@ -132,7 +132,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function run_julia()
-    println(stderr, "→ Running Julia (JuMinuit) benchmarks ...")
+    println(stderr, "→ Running Julia (NativeMinuit) benchmarks ...")
     out = Dict{String,Dict{String,Float64}}()
     for (name, f, x0, errs, up) in build_cases()
         print(stderr, "    $name ... ")
@@ -202,7 +202,7 @@ function print_table(julia_t, cpp_t, py_t)
     ops   = ["migrad", "minos", "mncontour"]
 
     println()
-    println("JuMinuit vs C++ Minuit2 vs Python iminuit — median wall time per call")
+    println("NativeMinuit vs C++ Minuit2 vs Python iminuit — median wall time per call")
     println("Strategy(0); BLAS.set_num_threads(1); Apple M3.")
     println()
 

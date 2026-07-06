@@ -25,7 +25,7 @@
 #   "How does the X(3872) show up in e+e- collisions: Dip versus peak",
 #   Phys. Rev. D 109 (2024) L111501, arXiv:2404.12003.
 
-using JuMinuit
+using NativeMinuit
 using DataFrames, CSV, QuadGK
 using LinearAlgebra, Random, Statistics
 

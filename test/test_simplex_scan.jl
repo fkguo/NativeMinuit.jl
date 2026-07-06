@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-using JuMinuit
+using NativeMinuit
 using Test
 
 @testset "simplex.jl + scan.jl (C++ MnSimplex / MnScan ports)" begin
@@ -18,9 +18,9 @@ using Test
         @test fm.is_valid
         @test !fm.above_max_edm
         @test 1e-4 < fm.state.edm ≤ 0.1          # stopped at the C++ 0.1·up goal
-        @test JuMinuit.fval(fm) < 0.1            # fval at the EDM-goal scale
+        @test NativeMinuit.fval(fm) < 0.1            # fval at the EDM-goal scale
         @test fm.state.parameters.x ≈ [1.0, 2.0, 3.0] atol = 0.2
-        @test JuMinuit.nfcn(fm) > 0
+        @test NativeMinuit.nfcn(fm) > 0
     end
 
     @testset "simplex with up=0.5 (NLL)" begin
@@ -30,7 +30,7 @@ using Test
         fm = simplex(f, [0.0, 0.0], [0.1, 0.1]; up = 0.5)
         @test !fm.above_max_edm
         @test 1e-4 < fm.state.edm ≤ 0.05         # 0.1·up with up=0.5
-        @test JuMinuit.fval(fm) < 0.05
+        @test NativeMinuit.fval(fm) < 0.05
         @test fm.state.parameters.x ≈ [1.0, 2.0] atol = 0.15
         @test fm.up ≈ 0.5
     end
@@ -45,18 +45,18 @@ using Test
         f = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
         fm = simplex(f, [0.0, 0.0], [0.1, 0.1])
         @test !fm.hesse_failed
-        @test !JuMinuit.is_available(fm.state.error)
-        @test !JuMinuit.has_covariance(fm)
+        @test !NativeMinuit.is_available(fm.state.error)
+        @test !NativeMinuit.has_covariance(fm)
     end
 
     @testset "bounded simplex" begin
         # Optimum at (-3, 7) but `a ∈ [0, ∞)` and `b ∈ [0, 5]` force
         # the constrained minimum to (0, 5).
         f = x -> (x[1] + 3)^2 + (x[2] - 7)^2
-        params = JuMinuit.Parameters(["a", "b"], [1.0, 1.0], [0.1, 0.1];
+        params = NativeMinuit.Parameters(["a", "b"], [1.0, 1.0], [0.1, 0.1];
                                        limits = [(0.0, NaN), (0.0, 5.0)],
                                        fixed  = [false, false])
-        bfm = simplex(f |> JuMinuit.CostFunction, params)
+        bfm = simplex(f |> NativeMinuit.CostFunction, params)
         @test bfm.ext_values[1] ≈ 0.0 atol = 0.1
         @test bfm.ext_values[2] ≈ 5.0 atol = 0.1
     end
@@ -122,11 +122,11 @@ using Test
 
     @testset "scan: bounded clips against limits" begin
         # par.upper=3 should clip the high end of a scan reaching for ±2σ
-        params = JuMinuit.Parameters(["a"], [0.0], [0.5];
+        params = NativeMinuit.Parameters(["a"], [0.0], [0.5];
                                        limits = [(NaN, 3.0)],
                                        fixed  = [false])
         f = x -> x[1]^2
-        cf = JuMinuit.CostFunction(f, 1.0)
+        cf = NativeMinuit.CostFunction(f, 1.0)
         result = scan(cf, params, 1; maxsteps = 5)
         grid = result[2:end]
         @test maximum(p[1] for p in grid) <= 3.0 + 1e-9
@@ -316,7 +316,7 @@ using Test
         #   1st simplex(ncall=6): 6 calls, valid;
         #   2nd simplex(ncall=6): resumes with fit-scale errors, burns 8
         #     calls, call-limit invalid (iminuit displays the CUMULATIVE
-        #     nfcn 14 = 6+8; JuMinuit reports the per-run 8 — display
+        #     nfcn 14 = 6+8; NativeMinuit reports the per-run 8 — display
         #     convention only, the per-run call count is identical), and
         #     errors land 12-digit-identical to iminuit;
         #   repeat at default budget: 16 calls, valid.

@@ -135,7 +135,7 @@ RecipesBase.@recipe function f(m::BoundedFunctionMinimum)
 end
 
 # Vector of (x, y) tuples returned by contour: helper for direct plotting.
-RecipesBase.@recipe function f(::Type{Val{:juminuit_contour_points}},
+RecipesBase.@recipe function f(::Type{Val{:nativeminuit_contour_points}},
                                 pts::Vector{Tuple{Float64,Float64}})
     seriestype := :path
     xs = [p[1] for p in pts]

@@ -112,7 +112,7 @@ parameter_names(c::AbstractCost) = c.pnames
 
 Least-squares cost ``\\sum_i ((y_i - \\mathrm{model}(x_i, par)) /
 \\sigma_i)^2`` (errordef `1.0`). `model(x_scalar, par)` follows the
-JuMinuit / IMinuit.jl convention (the same `model` you pass to
+NativeMinuit / IMinuit.jl convention (the same `model` you pass to
 [`chisq`](@ref) / [`model_fit`](@ref)).
 
 This is a thin object-style surface over the shared χ² kernel: an
@@ -169,7 +169,7 @@ end
 # plain negative-log-likelihood −logL, so a 1σ excursion raises it by
 # 0.5. (iminuit instead returns 2·(−logL) with errordef 1; both give
 # IDENTICAL parameter values and uncertainties — the reported fval just
-# differs by the factor 2. JuMinuit follows IMinuit.jl's 0.5 choice.)
+# differs by the factor 2. NativeMinuit follows IMinuit.jl's 0.5 choice.)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Smallest normal Float64 — the floor inside every `log` so a degenerate

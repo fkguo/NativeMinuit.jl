@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # IAM 2π form-factor FULL benchmark — migrad + minos + mncontour,
-# comparing JuMinuit (numerical sequential) vs IMinuit.jl (PyCall →
+# comparing NativeMinuit (numerical sequential) vs IMinuit.jl (PyCall →
 # Python iminuit). Includes correctness cross-check at each stage.
 #
 # NOTE on schemes:
@@ -25,7 +25,7 @@ using CSV, DataFrames
 using StaticArrays
 using QuadGK
 using Interpolations
-using JuMinuit
+using NativeMinuit
 using IMinuit
 using ForwardDiff
 using BenchmarkTools
@@ -71,13 +71,13 @@ data_GKPRY_ππ11_df = DataFrame(CSV.File("./datajl/pipi/pipi11_Roy-GKPY_PRD83_0
 data_GKPRY_ππ20_df = DataFrame(CSV.File("./datajl/pipi/pipi20_Roy-GKPY_PRD83_074004.dat",
     header = [:w, :δ, :err], delim=' ', ignorerepeated=true))
 
-data_ππ00 = JuMinuit.Data(data_GKPRY_ππ00_df)
-data_ππ11 = JuMinuit.Data(data_GKPRY_ππ11_df)
-data_ππ20 = JuMinuit.Data(data_GKPRY_ππ20_df)
+data_ππ00 = NativeMinuit.Data(data_GKPRY_ππ00_df)
+data_ππ11 = NativeMinuit.Data(data_GKPRY_ππ11_df)
+data_ππ20 = NativeMinuit.Data(data_GKPRY_ππ20_df)
 
 println("Loaded data: ππ00=$(length(data_ππ00.x)) pts, ππ11=$(length(data_ππ11.x)) pts, ππ20=$(length(data_ππ20.x)) pts")
 
-function chisq_ps(dist::Function, data::JuMinuit.Data, par; fitrange = ())
+function chisq_ps(dist::Function, data::NativeMinuit.Data, par; fitrange = ())
     fitrange = (isempty(fitrange) ? (1:data.ndata) : fitrange)
     res = 0.0
     @inbounds for i = fitrange[1]:fitrange[end]
@@ -124,7 +124,7 @@ fmt_ms(t) = isnan(t) ? "n/a" : (t < 1.0 ? "$(round(t*1000; digits=1)) ms" : "$(r
 println("\n┌─ Phase H demo: verify_threading on IAM ─────────────────────")
 print("│  is_thread_safe(chi2_iam, paras0)  = ")
 flush(stdout)
-safe_flag = JuMinuit.is_thread_safe(JuMinuit.CostFunction(chi2_iam, 1.0), paras0)
+safe_flag = NativeMinuit.is_thread_safe(NativeMinuit.CostFunction(chi2_iam, 1.0), paras0)
 println(safe_flag, " ", safe_flag ? "(safe ✓)" : "(racey ✗ — as expected)")
 println("└─")
 
@@ -135,12 +135,12 @@ println("\n┌─ Stage 1: MIGRAD ───────────────�
 results = Dict{String, NamedTuple}()
 fits = Dict{String, Any}()
 
-# (a) JuMinuit numerical sequential
+# (a) NativeMinuit numerical sequential
 function build_jm_num()
-    m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0)
-    JuMinuit.fix!(m, 6)            # L6 fixed (2L6+L8 degeneracy; paper)
-    JuMinuit.migrad!(m)
-    JuMinuit.hesse(m)
+    m = NativeMinuit.Minuit(chi2_iam, paras0; error=errs0)
+    NativeMinuit.fix!(m, 6)            # L6 fixed (2L6+L8 degeneracy; paper)
+    NativeMinuit.migrad!(m)
+    NativeMinuit.hesse(m)
     return m
 end
 r = time_runs(build_jm_num; n_rounds=3)
@@ -153,7 +153,7 @@ println("│  jm_num     migrad+hesse: med=", fmt_ms(r.med),
 # (b) IMinuit
 function build_iminuit()
     m = IMinuit.Minuit(chi2_iam, paras0; error=errs0)
-    m.fixed["x5"] = true          # L6 fixed (0-based index 5; matches JuMinuit fix!(m,6))
+    m.fixed["x5"] = true          # L6 fixed (0-based index 5; matches NativeMinuit fix!(m,6))
     IMinuit.migrad(m)
     IMinuit.hesse(m)
     return m
@@ -165,14 +165,14 @@ println("│  iminuit    migrad+hesse: med=", fmt_ms(r.med),
         "  fval=", round(fits["iminuit"].fval; sigdigits=6),
         "  is_valid=", fits["iminuit"].valid)
 
-# (c) JuMinuit AD — likely fails (non-generic in src/)
+# (c) NativeMinuit AD — likely fails (non-generic in src/)
 ad_ok = false
 try
     function build_jm_ad()
-        m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0,
+        m = NativeMinuit.Minuit(chi2_iam, paras0; error=errs0,
                             grad = par -> ForwardDiff.gradient(chi2_iam, par))
-        JuMinuit.migrad!(m)
-        JuMinuit.hesse(m)
+        NativeMinuit.migrad!(m)
+        NativeMinuit.hesse(m)
         return m
     end
     local r_ad = time_runs(build_jm_ad; n_rounds=2)
@@ -227,14 +227,14 @@ println("\n┌─ Stage 2: MINOS (par 1 only — IAM is expensive) ────�
 minos_times = Dict{String, NamedTuple}()
 minos_errs = Dict{String, Tuple{Float64,Float64}}()
 
-# JuMinuit
+# NativeMinuit
 r = time_runs(function()
     m = build_jm_num()
-    JuMinuit.minos!(m, 1)
+    NativeMinuit.minos!(m, 1)
     return m
 end; n_rounds=2)
 minos_times["jm_num   "] = r
-m = build_jm_num(); JuMinuit.minos!(m, 1)
+m = build_jm_num(); NativeMinuit.minos!(m, 1)
 minos_errs["jm_num   "] = (m.minos_errors[1].lower, m.minos_errors[1].upper)
 println("│  jm_num    minos(par1): med=", fmt_ms(r.med),
         "  err=", round.(minos_errs["jm_num   "]; sigdigits=4))
@@ -264,16 +264,16 @@ end
 
 if ad_ok
     r = time_runs(function()
-        m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0,
+        m = NativeMinuit.Minuit(chi2_iam, paras0; error=errs0,
                             grad = par -> ForwardDiff.gradient(chi2_iam, par))
-        JuMinuit.migrad!(m); JuMinuit.hesse(m)
-        JuMinuit.minos!(m, 1)
+        NativeMinuit.migrad!(m); NativeMinuit.hesse(m)
+        NativeMinuit.minos!(m, 1)
         return m
     end; n_rounds=2)
     minos_times["jm_ad    "] = r
-    m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0,
+    m = NativeMinuit.Minuit(chi2_iam, paras0; error=errs0,
                         grad = par -> ForwardDiff.gradient(chi2_iam, par))
-    JuMinuit.migrad!(m); JuMinuit.hesse(m); JuMinuit.minos!(m, 1)
+    NativeMinuit.migrad!(m); NativeMinuit.hesse(m); NativeMinuit.minos!(m, 1)
     minos_errs["jm_ad    "] = (m.minos_errors[1].lower, m.minos_errors[1].upper)
     println("│  jm_ad     minos(par1): med=", fmt_ms(r.med),
             "  err=", round.(minos_errs["jm_ad    "]; sigdigits=4))
@@ -303,14 +303,14 @@ println("\n┌─ Stage 3: MNCONTOUR (par 1 vs par 2, npts=", MNC_NPTS, ") ─�
 mnc_times = Dict{String, NamedTuple}()
 mnc_pts = Dict{String, Vector{Tuple{Float64,Float64}}}()
 
-# JuMinuit
+# NativeMinuit
 r = time_runs(function()
     m = build_jm_num()
-    JuMinuit.mncontour(m, 1, 2; numpoints=MNC_NPTS)
+    NativeMinuit.mncontour(m, 1, 2; numpoints=MNC_NPTS)
 end; n_rounds=2)
 mnc_times["jm_num   "] = r
 m = build_jm_num()
-pts = JuMinuit.mncontour(m, 1, 2; numpoints=MNC_NPTS)
+pts = NativeMinuit.mncontour(m, 1, 2; numpoints=MNC_NPTS)
 mnc_pts["jm_num   "] = pts
 println("│  jm_num    mncontour: med=", fmt_ms(r.med))
 
@@ -337,16 +337,16 @@ end
 
 if ad_ok
     r = time_runs(function()
-        m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0,
+        m = NativeMinuit.Minuit(chi2_iam, paras0; error=errs0,
                             grad = par -> ForwardDiff.gradient(chi2_iam, par))
-        JuMinuit.migrad!(m); JuMinuit.hesse(m)
-        JuMinuit.mncontour(m, 1, 2; numpoints=MNC_NPTS)
+        NativeMinuit.migrad!(m); NativeMinuit.hesse(m)
+        NativeMinuit.mncontour(m, 1, 2; numpoints=MNC_NPTS)
     end; n_rounds=2)
     mnc_times["jm_ad    "] = r
-    m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0,
+    m = NativeMinuit.Minuit(chi2_iam, paras0; error=errs0,
                         grad = par -> ForwardDiff.gradient(chi2_iam, par))
-    JuMinuit.migrad!(m); JuMinuit.hesse(m)
-    mnc_pts["jm_ad    "] = JuMinuit.mncontour(m, 1, 2; numpoints=MNC_NPTS)
+    NativeMinuit.migrad!(m); NativeMinuit.hesse(m)
+    mnc_pts["jm_ad    "] = NativeMinuit.mncontour(m, 1, 2; numpoints=MNC_NPTS)
     println("│  jm_ad     mncontour: med=", fmt_ms(r.med))
 else
     mnc_times["jm_ad    "] = (med=NaN, min=NaN, max=NaN)
@@ -390,7 +390,7 @@ end
 # Summary
 # ─────────────────────────────────────────────────────────────────────
 println("\n╔════════════════════════════════════════════════════════════════════════╗")
-println("║  IAM 9-LEC fit — JuMinuit vs IMinuit (median wall-time, expensive FCN)║")
+println("║  IAM 9-LEC fit — NativeMinuit vs IMinuit (median wall-time, expensive FCN)║")
 println("╠══════════════╦══════════════╦══════════════╦══════════════════════════╣")
 println("║  scheme      ║  migrad+hesse║  +minos(p1)  ║  mncontour(8 pts)        ║")
 println("╠══════════════╬══════════════╬══════════════╬══════════════════════════╣")

@@ -1,4 +1,4 @@
-# JuMinuit.jl
+# NativeMinuit.jl
 
 A native-Julia port of [CERN ROOT Minuit2](https://root.cern.ch/doc/master/Minuit2Page.html),
 the workhorse function-minimization library used throughout high-energy
@@ -9,17 +9,17 @@ physics for χ² and likelihood fits.
 [iminuit](https://github.com/scikit-hep/iminuit) (Python) wraps the upstream C++
 Minuit2 library, and [IMinuit.jl](https://github.com/fkguo/IMinuit.jl) (Julia, by
 the same lead author) in turn wraps `iminuit` through PyCall — so it carries both
-a Python and a C++ dependency. **JuMinuit.jl is a clean-room Julia port** of the
+a Python and a C++ dependency. **NativeMinuit.jl is a clean-room Julia port** of the
 same algorithms, with **no C++ or Python dependency and no PyCall / FFI** — plus
 full access to Julia tooling (ForwardDiff, threads, broadcasted FCN evaluation).
 On the benchmark corpus it runs in the **0.15–0.89× C++ wall-time** range, i.e.
 comparable to or faster than C++ Minuit2 — see
-[`benchmark/`](https://github.com/fkguo/JuMinuit.jl/tree/main/benchmark).
+[`benchmark/`](https://github.com/fkguo/NativeMinuit.jl/tree/main/benchmark).
 
 ## Quick example
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 # χ² with a 4-parameter quadratic
 cf = CostFunction(x -> sum(abs2, x .- [1.0, 2.0, 3.0, 4.0]))
@@ -104,12 +104,12 @@ Full [API reference](api.md) and [internals](internals.md).
 
 ## Citation & references
 
-If you use JuMinuit.jl in a publication, please cite **both** JuMinuit.jl and
+If you use NativeMinuit.jl in a publication, please cite **both** NativeMinuit.jl and
 the upstream Minuit algorithms it ports:
 
-> F.-K. Guo, *JuMinuit.jl: a native-Julia port of Minuit2*,
-> <https://github.com/fkguo/JuMinuit.jl> (2026). A
-> [`CITATION.cff`](https://github.com/fkguo/JuMinuit.jl/blob/main/CITATION.cff)
+> F.-K. Guo, *NativeMinuit.jl: a native-Julia port of Minuit2*,
+> <https://github.com/fkguo/NativeMinuit.jl> (2026). A
+> [`CITATION.cff`](https://github.com/fkguo/NativeMinuit.jl/blob/main/CITATION.cff)
 > is provided (GitHub's "Cite this repository" → APA / BibTeX).
 
 > F. James and M. Roos, "MINUIT: A system for function minimization and
@@ -125,5 +125,5 @@ Further Minuit documentation:
 ## License
 
 LGPL-2.1-or-later — matches upstream Minuit2 (the same algorithms,
-ported to Julia). See [`docs/UPSTREAM.md`](https://github.com/fkguo/JuMinuit.jl/blob/main/docs/UPSTREAM.md)
+ported to Julia). See [`docs/UPSTREAM.md`](https://github.com/fkguo/NativeMinuit.jl/blob/main/docs/UPSTREAM.md)
 for provenance and attribution.

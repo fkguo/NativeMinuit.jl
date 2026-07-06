@@ -180,7 +180,7 @@ Compute a 1σ contour in the (par_x, par_y) plane as a fast **ellipse
 approximation** from MINOS errors + off-diagonal covariance. (Named
 `contour` before 0.5.0 — renamed both because the ellipse is not iminuit's
 `contour`, which is a grid slice ([`contour_grid`](@ref)), and because the
-bare name collided with `Plots.contour` under `using JuMinuit, Plots`.)
+bare name collided with `Plots.contour` under `using NativeMinuit, Plots`.)
 
 # Algorithm (Phase 1 first cut)
 
@@ -527,7 +527,7 @@ end
 # `export_old = false` — re-exporting `contour` would re-introduce the name
 # clash with `Plots.contour` / `GR.contour` that motivated the rename
 # (`UndefVarError: contour not defined ... ambiguity` under
-# `using JuMinuit, Plots`). Qualified `JuMinuit.contour(...)` keeps working
+# `using NativeMinuit, Plots`). Qualified `NativeMinuit.contour(...)` keeps working
 # with a deprecation warning. iminuit's `m.contour` (a 2D grid slice) is
 # [`contour_grid`](@ref).
 Base.@deprecate contour(fmin::FunctionMinimum, cf::AbstractCostFunction,

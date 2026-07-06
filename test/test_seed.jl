@@ -98,7 +98,7 @@
         @test seed_warm.parameters.x == prev.parameters.x
         @test seed_warm.error.inv_hessian === prev.error.inv_hessian  # NOT copied
         # Re-eval cost paid: at least 1 FCN call for fval + grad refine.
-        @test JuMinuit.ncalls(cf_new) ≥ 1
+        @test NativeMinuit.ncalls(cf_new) ≥ 1
         # New EDM should be near zero (we're at the minimum)
         @test abs(seed_warm.edm) < 1.0
     end
@@ -143,7 +143,7 @@
         @test fmin1.is_valid
         @test fmin1.state.parameters.fval ≈ fmin0.state.parameters.fval atol = 1e-14
         # At a converged seed, _migrad_loop returns before any line search.
-        @test JuMinuit.ncalls(cf_resume) == 0
+        @test NativeMinuit.ncalls(cf_resume) == 0
     end
 
     @testset "migrad(cf, seed) — warm vs cold yields same minimum" begin
@@ -177,7 +177,7 @@
         fmin = migrad(cf, bad_seed)
         @test !fmin.is_valid
         # Should NOT have entered the DFP loop
-        @test JuMinuit.ncalls(cf) == 0
+        @test NativeMinuit.ncalls(cf) == 0
     end
 
     @testset "warm-restart aliasing guard — prev.error.inv_hessian unchanged" begin
@@ -210,7 +210,7 @@
         for k in 1:10
             ε = 0.001 * k
             cf_k = CostFunction(x -> rosen4(x .+ ε), 1.0)
-            seed_w = JuMinuit.warm_restart_state(fmin.state, cf_k)
+            seed_w = NativeMinuit.warm_restart_state(fmin.state, cf_k)
             @test seed_w !== nothing
             # Aliasing check at the seed level
             @test parent(seed_w.error.inv_hessian) === parent(fmin.state.error.inv_hessian)

@@ -201,7 +201,7 @@ end
 # Helper: per-internal(free)-parameter bound flags for the MnHesse step
 # clamp (MnHesse.cxx:160-167, 194-195). Entry `i` is `true` iff the i-th
 # FREE parameter (internal index) maps to an externally-bounded parameter
-# — the JuMinuit analogue of C++ `trafo.Parameter(i).HasLimits()`. The
+# — the NativeMinuit analogue of C++ `trafo.Parameter(i).HasLimits()`. The
 # bounded `migrad(cf, params)` / `hesse(m::Minuit)` paths pass the result
 # as `has_limits=` so the diagonal probe step `d` is clamped at 0.5 in
 # INTERNAL (transformed) coordinates — the frame the C++ clamp targets.
@@ -477,7 +477,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function Base.show(io::IO, ::MIME"text/plain", m::BoundedFunctionMinimum)
-    println(io, "JuMinuit BoundedFunctionMinimum")
+    println(io, "NativeMinuit BoundedFunctionMinimum")
     println(io, "  valid:   ", is_valid(m))
     println(io, "  fval:    ", fval(m))
     println(io, "  edm:     ", edm(m))

@@ -54,10 +54,10 @@ const HESSE_CASES = Dict{String,Any}(
             cf = CostFunction(c.fcn)
             # Strategy(0) MIGRAD: V is DFP approximation, not numerical.
             fmin = migrad(cf, c.x0, c.errs0; strategy = Strategy(0))
-            @test JuMinuit.is_valid(fmin)
+            @test NativeMinuit.is_valid(fmin)
 
             # Standalone HESSE refinement on the converged state.
-            refined = JuMinuit.hesse(cf, fmin.state, Strategy(1))
+            refined = NativeMinuit.hesse(cf, fmin.state, Strategy(1))
 
             # Verify converged params unchanged by HESSE (HESSE doesn't
             # move x; any diff vs C++ here is the Strategy(0) MIGRAD

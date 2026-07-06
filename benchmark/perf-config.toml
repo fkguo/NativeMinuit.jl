@@ -1,11 +1,11 @@
-# JuMinuit.jl Phase 0 §3.4 evidence-gate config
+# NativeMinuit.jl Phase 0 §3.4 evidence-gate config
 # Drives scripts/run_perf.jl per the julia-perf skill contract.
 
 [mode]
 mode = "standalone"
 
 [target]
-module = "JuMinuit"
+module = "NativeMinuit"
 functions = ["migrad", "_migrad_loop", "numerical_gradient!", "davidon_update!"]
 
 [benchmark]

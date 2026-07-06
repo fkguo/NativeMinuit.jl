@@ -19,7 +19,7 @@ _has_checkgrad_warning(logs) =
         @test cf.f === f
         @test cf.g === g
         @test cf.up == 1.0
-        @test JuMinuit.ngrad_calls(cf) == 0
+        @test NativeMinuit.ngrad_calls(cf) == 0
         @test ncalls(cf) == 0
 
         # Calling cf evaluates f and counts
@@ -41,7 +41,7 @@ _has_checkgrad_warning(logs) =
 
         # Gradient call count should be 1 per MIGRAD iteration, much less than
         # the numerical-gradient case (2·n·NCycle per iter = 4-8 per iter for n=2).
-        ngrad = JuMinuit.ngrad_calls(cf)
+        ngrad = NativeMinuit.ngrad_calls(cf)
         @test ngrad > 0
         # FCN call count should also be small (line search + maybe HESSE)
         nfcn_total = ncalls(cf)
@@ -88,7 +88,7 @@ _has_checkgrad_warning(logs) =
         par = MinimumParameters([1.0, 2.0], [0.1, 0.1], f([1.0, 2.0]))
         prev = FunctionGradient(zeros(2), [1.0, 1.0], [1e-3, 1e-3])
         out = FunctionGradient(zeros(2), zeros(2), zeros(2))
-        JuMinuit.analytical_gradient!(out, par, cf, prev)
+        NativeMinuit.analytical_gradient!(out, par, cf, prev)
         @test out.grad ≈ [2.0, 4.0] atol = 1e-12
         # g2 and gstep forwarded from prev
         @test out.g2 == prev.g2
@@ -97,11 +97,11 @@ _has_checkgrad_warning(logs) =
 
     @testset "Phase F.2 — CostFunctionAD factory (ForwardDiff extension)" begin
         # ForwardDiff is in [extras] / test target, so loading it here
-        # triggers the JuMinuitForwardDiffExt package extension. The
+        # triggers the NativeMinuitForwardDiffExt package extension. The
         # extension defines a concrete `CostFunctionAD(f, up; ...)`
         # method; without ForwardDiff loaded the call would
         # MethodError-pointing-at-stub.
-        ext = Base.get_extension(JuMinuit, :JuMinuitForwardDiffExt)
+        ext = Base.get_extension(NativeMinuit, :NativeMinuitForwardDiffExt)
         @test ext !== nothing
 
         # Basic factory usage
@@ -157,20 +157,20 @@ _has_checkgrad_warning(logs) =
 
         @testset "seed_state warns on a wrong gradient" begin
             cf = CostFunctionWithGradient(f, gwrong)
-            logs = _logs_of(() -> JuMinuit.seed_state(cf, x0, errs))
+            logs = _logs_of(() -> NativeMinuit.seed_state(cf, x0, errs))
             @test _has_checkgrad_warning(logs)
         end
 
         @testset "seed_state is silent on a correct gradient" begin
             cf = CostFunctionWithGradient(f, gcorrect)
-            logs = _logs_of(() -> JuMinuit.seed_state(cf, x0, errs))
+            logs = _logs_of(() -> NativeMinuit.seed_state(cf, x0, errs))
             @test !_has_checkgrad_warning(logs)
         end
 
         @testset "check_gradient=false skips the check (silent + no extra FCN calls)" begin
             cf = CostFunctionWithGradient(f, gwrong; check_gradient = false)
             @test cf.check_gradient == false
-            logs = _logs_of(() -> JuMinuit.seed_state(cf, x0, errs))
+            logs = _logs_of(() -> NativeMinuit.seed_state(cf, x0, errs))
             @test !_has_checkgrad_warning(logs)
             # The check is the only seed-time consumer of FCN calls beyond the
             # initial fval; skipping it leaves just that one evaluation.
@@ -181,11 +181,11 @@ _has_checkgrad_warning(logs) =
             par = MinimumParameters(x0, errs, f(x0))
             cf_ok = CostFunctionWithGradient(f, gcorrect)
             cf_bad = CostFunctionWithGradient(f, gwrong)
-            grad_ok = JuMinuit.analytical_gradient(par, cf_ok)
-            grad_bad = JuMinuit.analytical_gradient(par, cf_bad)
-            @test JuMinuit._check_user_gradient(par, grad_ok, cf_ok) == true
+            grad_ok = NativeMinuit.analytical_gradient(par, cf_ok)
+            grad_bad = NativeMinuit.analytical_gradient(par, cf_bad)
+            @test NativeMinuit._check_user_gradient(par, grad_ok, cf_ok) == true
             local ret
-            logs = _logs_of(() -> (ret = JuMinuit._check_user_gradient(par, grad_bad, cf_bad)))
+            logs = _logs_of(() -> (ret = NativeMinuit._check_user_gradient(par, grad_bad, cf_bad)))
             @test ret == false
             @test _has_checkgrad_warning(logs)
 
@@ -196,8 +196,8 @@ _has_checkgrad_warning(logs) =
         @testset "seed state is identical with the check on vs off (diagnostic-only)" begin
             cf_on = CostFunctionWithGradient(f, gcorrect; check_gradient = true)
             cf_off = CostFunctionWithGradient(f, gcorrect; check_gradient = false)
-            s_on = JuMinuit.seed_state(cf_on, x0, errs)
-            s_off = JuMinuit.seed_state(cf_off, x0, errs)
+            s_on = NativeMinuit.seed_state(cf_on, x0, errs)
+            s_off = NativeMinuit.seed_state(cf_off, x0, errs)
             @test s_on.parameters.x == s_off.parameters.x
             @test s_on.gradient.grad == s_off.gradient.grad
             @test s_on.edm == s_off.edm

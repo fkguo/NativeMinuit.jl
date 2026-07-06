@@ -12,7 +12,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 using Test
-using JuMinuit
+using NativeMinuit
 using Logging
 
 # Helper: capture log records emitted while running `f`. Returns the
@@ -198,11 +198,11 @@ end
 @testset "print_level — direct low-level function_cross_multi" begin
     # Codex review: function_cross_multi accepts print_level too. Direct
     # invocation should produce the cross-search start banner.
-    cf = JuMinuit.CostFunction(quad2, 1.0)
+    cf = NativeMinuit.CostFunction(quad2, 1.0)
     fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
     @test fmin.is_valid
     logs = capture_logs() do
-        JuMinuit.function_cross_multi(fmin, cf, [1, 2],
+        NativeMinuit.function_cross_multi(fmin, cf, [1, 2],
                                         [fmin.state.parameters.x[1],
                                          fmin.state.parameters.x[2]],
                                         [1.0, 0.0];
@@ -219,10 +219,10 @@ end
     # Codex review: confirm the `migrad(cf, seed; ...)` warm-restart
     # entry-point forwards print_level. Build a seed via seed_state
     # at a non-trivial point.
-    cf = JuMinuit.CostFunction(quad2, 1.0)
-    seed = JuMinuit.seed_state(cf, [0.0, 0.0], [0.1, 0.1],
-                                JuMinuit.Strategy(0),
-                                JuMinuit.MachinePrecision())
+    cf = NativeMinuit.CostFunction(quad2, 1.0)
+    seed = NativeMinuit.seed_state(cf, [0.0, 0.0], [0.1, 0.1],
+                                NativeMinuit.Strategy(0),
+                                NativeMinuit.MachinePrecision())
     logs = capture_logs() do
         migrad(cf, seed; print_level = 1)
     end

@@ -11,7 +11,7 @@ uses the [`Minuit`](@ref) object throughout.
 We work with a deliberately non-parabolic example:
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 fcn(x) = (x[1] - 1.0)^2 + 0.5 * (x[1] - 1.0)^4 + (x[2] - 2.0)^2
 m = Minuit(fcn, [0.0, 0.0]; names = ["a", "b"])
@@ -164,7 +164,7 @@ statement about `NPAR` parameters, James prescribes scaling `up` by the
 `up = 0.5` already encodes. The general entry is
 [`delta_chisq`](@ref)`(β, NPAR)`.)
 
-**How JuMinuit maps the two conventions:**
+**How NativeMinuit maps the two conventions:**
 
 - [`mncontour`](@ref)`(m, a, b; cl = …)` — **Question 2**, following
   iminuit ≥ 2.0: the default `cl` traces the joint 2-D 68 % region
@@ -255,11 +255,11 @@ inner MIGRAD per point.
 
 ## Plotting
 
-JuMinuit ships [RecipesBase](https://github.com/JuliaPlots/RecipesBase.jl)
+NativeMinuit ships [RecipesBase](https://github.com/JuliaPlots/RecipesBase.jl)
 recipes, so plotting works from Plots.jl with no glue:
 
 ```julia
-using JuMinuit, Plots
+using NativeMinuit, Plots
 plot(c)                                    # closed contour polygon
 ```
 

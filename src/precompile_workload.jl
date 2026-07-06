@@ -20,7 +20,7 @@
 # cleanly, without warnings, so a catch never silently drops a path.)
 #
 # AD- and Optim-backed paths live in the package extensions, which carry their
-# own @compile_workload blocks (ext/JuMinuit*Ext.jl) — they precompile when the
+# own @compile_workload blocks (ext/NativeMinuit*Ext.jl) — they precompile when the
 # trigger package is loaded.
 # ─────────────────────────────────────────────────────────────────────────────
 

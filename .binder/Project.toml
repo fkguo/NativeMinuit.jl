@@ -1,6 +1,6 @@
 # Binder environment for the BenchmarkExamples notebooks.
 #
-# NOTE: JuMinuit itself is intentionally NOT listed here. It is unregistered,
+# NOTE: NativeMinuit itself is intentionally NOT listed here. It is unregistered,
 # so repo2docker's build-time `Pkg.resolve()` on this file would fail to find
 # it and abort the whole image build. Instead `.binder/postBuild` adds it with
 # `Pkg.develop(path = <repo root>)` after this environment is resolved.

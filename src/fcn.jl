@@ -3,7 +3,7 @@
 """
     AbstractCostFunction
 
-Supertype for every JuMinuit FCN wrapper. Two concrete subtypes ship:
+Supertype for every NativeMinuit FCN wrapper. Two concrete subtypes ship:
 
 - [`CostFunction`](@ref) — numerical-gradient path (central-difference
   via `numerical_gradient!`). The default.
@@ -53,7 +53,7 @@ applied on the same call boundary (see `transform.jl`).
   was non-finite (`NaN`/`±Inf`). Mirrors iminuit's `FCN::check_value`
   NaN detection (iminuit `src/fcn.cpp`), except iminuit warns per
   occurrence (via MnPrint, suppressed at default print level) while
-  JuMinuit aggregates here and the MIGRAD drivers warn ONCE at the end
+  NativeMinuit aggregates here and the MIGRAD drivers warn ONCE at the end
   of a run that did not end valid (handoff F7/P6; valid fits stay
   silent). Read via [`nonfinite_calls`](@ref).
 
@@ -70,7 +70,7 @@ applied on the same call boundary (see `transform.jl`).
 # Aliasing contract
 
 The argument vector `x` passed to your FCN is a **borrowed reference**
-to JuMinuit's internal workspace. The same `Vector{Float64}` instance
+to NativeMinuit's internal workspace. The same `Vector{Float64}` instance
 is reused across line-search and gradient-calculation calls within a
 single MIGRAD iteration. Your FCN MUST NOT:
 

@@ -1,7 +1,16 @@
 # Changelog
 
-All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
-+ [Semantic Versioning](https://semver.org/).
+All notable changes to NativeMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
+and [Semantic Versioning](https://semver.org/).
+
+## [0.6.2] — 2026-07-06
+
+### Changed
+
+- Renamed the package and Julia module from `JuMinuit` to `NativeMinuit`;
+  the package UUID is unchanged. This release supersedes the earlier
+  unregistered `JuMinuit` name so the package can enter General under a name
+  accepted by the registry maintainers.
 
 ## [0.6.1] — 2026-07-05
 
@@ -29,7 +38,7 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
 ### Added
 
 - **NUTS / HMC posterior sampler (`posterior_sample(...; sampler = :nuts)`), via a
-  new `JuMinuitAdvancedHMCExt` extension.** Gradient-based No-U-Turn sampling
+  new `NativeMinuitAdvancedHMCExt` extension.** Gradient-based No-U-Turn sampling
   (AdvancedHMC): bounded parameters are mapped to unconstrained ℝ by
   TransformVariables with the proper **log-Jacobian** (verified against the
   rejection-based samplers), sampled with a ForwardDiff gradient, and transformed
@@ -89,7 +98,7 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
     showing why a divergent derived quantity must be reported via `1/a` (the
     paper's disjoint `|a| ≳ 0.48 fm`) rather than an equal-tailed interval.
   - **Runnable data-backed example** `BenchmarkExamples/X6200_double_jpsi/`: a
-    native JuMinuit fit to the digitized LHCb double-`J/ψ` spectrum (recovering the
+    NativeMinuit fit to the digitized LHCb double-`J/ψ` spectrum (recovering the
     published χ²/dof = 0.99 best fit), a four-Riemann-sheet pole search for the
     X(6200), and the posterior propagating its pole / scattering length / effective
     range / compositeness — reproducing the published Table (frequentist ensemble)
@@ -222,7 +231,7 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
   `ext_errors`, which would have caught this. MINOS/contour errors were
   unaffected (they already used the `2·up·inv_hessian` scaling).
 
-- **`m.params` now reflects the fit** ([#38](https://github.com/fkguo/JuMinuit.jl/issues/38)).
+- **`m.params` now reflects the fit** ([#38](https://github.com/fkguo/NativeMinuit.jl/issues/38)).
   After `migrad!` (and `minos!`/`hesse!`), `m.params.pars[i]` exposed the
   *initial* value/step instead of the fitted ones, silently disagreeing with
   the already-correct `m.values[i]` / `m.errors[i]` views. The public
@@ -321,7 +330,7 @@ All notable changes to JuMinuit.jl. Follows [Keep a Changelog](https://keepachan
   `delta = delta_chisq(0.68, 2)` for support-function tracing), `up`-scaled
   acceptance for −lnL fits (NLL/χ² parity is tested), and per-fit `maxfcn`
   budgets. New docs section in `docs/src/error_analysis.md`; API reference
-  entries; `juminuit-usage` skill updated. Together with `mcmc_sample`/
+  entries; `nativeminuit-usage` skill updated. Together with `mcmc_sample`/
   `quantile_band` above this completes the in-package error-analysis
   triangulation: profile extremization ↔ ensemble quantiles ↔ MINOS (a
   `LikelihoodEnsemble` is also a ready-made `seeds` pool for `extremize` —
@@ -439,8 +448,8 @@ semantics), and `find_solution_modes`'s `whiten` default changes to `:auto`.
   `contour` (that is a grid slice, now `contour_grid`), and exporting it made
   the bare name ambiguous against `Plots.contour` / `GR.contour`
   (`UndefVarError: contour not defined … ambiguity` under
-  `using JuMinuit, Plots`). The bare `contour` is **no longer exported**;
-  qualified `JuMinuit.contour(...)` keeps working as a deprecated alias of
+  `using NativeMinuit, Plots`). The bare `contour` is **no longer exported**;
+  qualified `NativeMinuit.contour(...)` keeps working as a deprecated alias of
   `contour_ellipse`.
 
 ### Fixed
@@ -496,7 +505,7 @@ silently hidden behind the symmetric HESSE error.
 
 ### Docs
 
-- BenchmarkExamples notebooks migrated to JuMinuit's native API (e.g.
+- BenchmarkExamples notebooks migrated to NativeMinuit's native API (e.g.
   `contour_df_samples`); the IAM benchmark clarifies that its error band is the
   JOINT (simultaneous) 1σ region. Binder links updated (mybinder.org, after GESIS
   was decommissioned).
@@ -570,7 +579,7 @@ tests, real-physics error-analysis demonstrations, and a docs pass.
   `find_global_minimum` alias — the name in the first 0.3.1 build, which
   overclaimed globality — forwards here with a warning.)
 - **JET optimisation-analysis regression guard** — `test/test_aqua_jet.jl`
-  asserts (via `JET.@report_opt target_modules=(JuMinuit,)`) that the MIGRAD hot
+  asserts (via `JET.@report_opt target_modules=(NativeMinuit,)`) that the MIGRAD hot
   path stays free of runtime dispatch — locking in the `CostFunction{F}`
   devirtualisation the performance claim rests on. Verified on Julia 1.11 + 1.12.
 - **Bootstrap-vs-MINOS cross-validation test** — the resampling suite now checks
@@ -868,6 +877,6 @@ tests passing. Aqua + JET clean.
 - `m.errors[name] = ...` setter API.
 - Documentation site (Documenter.jl).
 
-[0.3.0]: https://github.com/fkguo/JuMinuit.jl/releases/tag/v0.3.0
-[0.2.0-alpha]: https://github.com/fkguo/JuMinuit.jl/releases/tag/v0.2.0-alpha
-[0.1.0-alpha]: https://github.com/fkguo/JuMinuit.jl/releases/tag/v0.1.0-alpha
+[0.3.0]: https://github.com/fkguo/NativeMinuit.jl/releases/tag/v0.3.0
+[0.2.0-alpha]: https://github.com/fkguo/NativeMinuit.jl/releases/tag/v0.2.0-alpha
+[0.1.0-alpha]: https://github.com/fkguo/NativeMinuit.jl/releases/tag/v0.1.0-alpha

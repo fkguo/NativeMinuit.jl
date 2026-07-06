@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-using JuMinuit
+using NativeMinuit
 using Test
 using Logging
 
@@ -113,7 +113,7 @@ end
     end
     refit_sb = (subdata, start) -> begin
         fm = migrad(CostFunction(p -> chi2_sb(p, subdata), 1.0), start, [0.1]; strategy = Strategy(1))
-        JuMinuit.is_valid(fm) ? collect(Float64, values(fm)) : fill(NaN, length(start))
+        NativeMinuit.is_valid(fm) ? collect(Float64, values(fm)) : fill(NaN, length(start))
     end
     m_sb = Minuit(chi2_sb, [1.9]; errors = [0.1]); migrad!(m_sb); hesse(m_sb)
 
@@ -217,8 +217,8 @@ end
 
     # fresh-start resampling keeps cf.g for a CostFunctionWithGradient
     refit_ad = (subdata, start) -> begin
-        fm2 = migrad(CostFunction(fq, 1.0), start, [0.3, 0.3]; strategy = JuMinuit.Strategy(1))
-        JuMinuit.is_valid(fm2) ? collect(Float64, values(fm2)) : fill(NaN, length(start))
+        fm2 = migrad(CostFunction(fq, 1.0), start, [0.3, 0.3]; strategy = NativeMinuit.Strategy(1))
+        NativeMinuit.is_valid(fm2) ? collect(Float64, values(fm2)) : fill(NaN, length(start))
     end
     data_ad = fill(1.0, 16)
     m_out = with_logger(NullLogger()) do

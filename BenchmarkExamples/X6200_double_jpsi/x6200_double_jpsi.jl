@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # X(6200) — the near-J/ψJ/ψ-threshold state from the two-channel coupled-channel
-# fit to the LHCb double-J/ψ spectrum, reproduced natively with JuMinuit, then its
+# fit to the LHCb double-J/ψ spectrum, reproduced natively with NativeMinuit, then its
 # pole / scattering length / effective range / compositeness propagated with the
 # Bayesian bridge (posterior_sample + derived_interval).
 #
@@ -23,7 +23,7 @@
 # Run from the repo root:
 #   julia --project=. BenchmarkExamples/X6200_double_jpsi/x6200_double_jpsi.jl
 
-using JuMinuit
+using NativeMinuit
 using DelimitedFiles, Statistics, LinearAlgebra
 
 const DIR = @__DIR__
@@ -138,7 +138,7 @@ function classify_pole(p)
 end
 
 # ============================================================================
-# Part 1 — fit the real LHCb double-J/ψ spectrum with JuMinuit
+# Part 1 — fit the real LHCb double-J/ψ spectrum with NativeMinuit
 # ============================================================================
 dat = readdlm(joinpath(DIR, "data_lhcb.csv"), ',')      # columns: mass(GeV), events, error
 ws, ys, es = dat[1:36, 1], dat[1:36, 2], dat[1:36, 3]   # ndata = 36 bins, as in the paper
@@ -154,7 +154,7 @@ lecs(v) = v[1:5]
 best = lecs(m.values[:])
 
 println("="^72)
-println("Part 1 — JuMinuit fit to the real LHCb double-J/ψ spectrum")
+println("Part 1 — NativeMinuit fit to the real LHCb double-J/ψ spectrum")
 println("  valid = ", m.valid, "   χ²/dof = ", round(m.fval / (36 - 7), digits = 3),
         "   (published: 28.708/29 = 0.99)")
 println("  best fit: a1=", round(best[1], digits = 3), " a2=", round(best[2], digits = 3),
@@ -194,7 +194,7 @@ println("  a   : neg branch ≤ ", round(maximum(av[av .< 0]), digits = 2),
         " fm   (paper ≤ -0.49 or ≥ 0.48 — a is near-unitary and diverges)")
 
 # ============================================================================
-# Part 4 — JuMinuit Bayesian bridge: pole sheet and the bound-vs-virtual question.
+# Part 4 — NativeMinuit Bayesian bridge: pole sheet and the bound-vs-virtual question.
 #          1/a changes sign across the posterior, so the near-threshold pole
 #          crosses between sheet I (bound state) and sheet II (virtual / resonance).
 # ============================================================================
@@ -206,7 +206,7 @@ av  = [a_fm(S[i, 1:5]) for i in 1:N]
 frac(s) = round(100 * count(c -> c[2] == s, cls) / N, digits = 1)
 EB  = [2mJ - c[1] for c in cls if c[2] == :bound]
 ebq = round.(Int, quantile(EB, (0.16, 0.5, 0.84)) .* 1000)
-println("\nPart 4 — JuMinuit Bayesian bridge: pole sheet and the bound-vs-virtual question")
+println("\nPart 4 — NativeMinuit Bayesian bridge: pole sheet and the bound-vs-virtual question")
 println("  P(bound,     sheet I)  = ", frac(:bound), " %   (a<0;  binding E_B = ",
         ebq[1], "/", ebq[2], "/", ebq[3], " MeV at 16/50/84%)")
 println("  P(virtual,   sheet II) = ", frac(:virtual), " %   (a>0, below threshold)")

@@ -15,8 +15,8 @@
 #       the kwarg also threads through `minos(m::Minuit, ...; sigma=k)`.
 # ─────────────────────────────────────────────────────────────────────────────
 
-using JuMinuit
-using JuMinuit: MinosError, FunctionMinimum, MinimumState
+using NativeMinuit
+using NativeMinuit: MinosError, FunctionMinimum, MinimumState
 using LinearAlgebra
 using Test
 
@@ -35,8 +35,8 @@ using Test
 
         e1 = minos(fmin, cf, 1)
         e2 = minos(fmin, cf, 1; sigma = 2.0)
-        @test JuMinuit.is_valid(e1)
-        @test JuMinuit.is_valid(e2)
+        @test NativeMinuit.is_valid(e1)
+        @test NativeMinuit.is_valid(e2)
         # 2σ on a quadratic = 2 × 1σ (up_eff = up · sigma² → aopt ≈ k).
         @test isapprox(e2.upper, 2 * e1.upper; atol = 1e-3)
         @test isapprox(e2.lower, 2 * e1.lower; atol = 1e-3)
@@ -67,7 +67,7 @@ using Test
         @test fmin.is_valid
 
         e = minos(fmin, cf, 1)
-        @test JuMinuit.is_valid(e)
+        @test NativeMinuit.is_valid(e)
         @test e.upper_state !== nothing
         @test e.lower_state !== nothing
         @test length(e.upper_state) == 2
@@ -101,11 +101,11 @@ using Test
                     errors = [0.1, 0.1, 0.1],
                     limits = [(-5, 5), nothing, nothing])
         migrad!(m)
-        JuMinuit.hesse(m)        # MINOS needs covariance
+        NativeMinuit.hesse(m)        # MINOS needs covariance
         @test m.is_valid
         minos!(m, 1)
         e = m.minos_errors[1]
-        @test JuMinuit.is_valid(e)
+        @test NativeMinuit.is_valid(e)
         @test e.upper_state !== nothing
         @test e.lower_state !== nothing
         @test length(e.upper_state) == 3
@@ -170,17 +170,17 @@ using Test
         # Valid Symmetric input succeeds.
         ok_M = Symmetric([0.5  0.4
                            0.4  0.5], :U)
-        ws_ok = JuMinuit.warm_restart_state(prev, CostFunction(rosen);
+        ws_ok = NativeMinuit.warm_restart_state(prev, CostFunction(rosen);
                                              prior_cov = ok_M)
-        @test ws_ok isa JuMinuit.MinimumState
+        @test ws_ok isa NativeMinuit.MinimumState
 
         # Asymmetric input throws (was silently mirroring pre-fix).
-        @test_throws ArgumentError JuMinuit.warm_restart_state(
+        @test_throws ArgumentError NativeMinuit.warm_restart_state(
             prev, CostFunction(rosen);
             prior_cov = [1.0 9.0; 0.0 1.0])
 
         # Wrong-size throws DimensionMismatch.
-        @test_throws DimensionMismatch JuMinuit.warm_restart_state(
+        @test_throws DimensionMismatch NativeMinuit.warm_restart_state(
             prev, CostFunction(rosen);
             prior_cov = zeros(3, 3))
     end

@@ -5,7 +5,7 @@ users typically don't need any of this.
 
 ## Algorithm map
 
-JuMinuit mirrors C++ Minuit2's module structure:
+NativeMinuit mirrors C++ Minuit2's module structure:
 
 | C++ source                            | Julia source            | Phase |
 |:--------------------------------------|:------------------------|:------|

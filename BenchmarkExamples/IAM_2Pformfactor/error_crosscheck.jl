@@ -34,7 +34,7 @@
 #   and drop invalid re-fits). We fit the 8 active LECs (bench.jl's vestigial 9th
 #   parameter dropped; this is NOT the paper's L6-fixed 7-parameter fit).
 #
-# Run (needs CSV/DataFrames/StaticArrays/QuadGK + JuMinuit; the resampling is
+# Run (needs CSV/DataFrames/StaticArrays/QuadGK + NativeMinuit; the resampling is
 # slow — each re-fit is a full MIGRAD on an ~11 ms FCN):
 #     julia --project=. BenchmarkExamples/IAM_2Pformfactor/error_crosscheck.jl
 #   Tunable env (defaults): IAM_NSTART=12 IAM_NDISC=20 IAM_NBOOT=40 IAM_MC=4000 IAM_SKIP_MINOS=
@@ -53,7 +53,7 @@ const SKIP_MINOS = haskey(ENV, "IAM_SKIP_MINOS")
 
 const IAM_DIR = @__DIR__
 cd(IAM_DIR)
-using CSV, DataFrames, StaticArrays, QuadGK, JuMinuit
+using CSV, DataFrames, StaticArrays, QuadGK, NativeMinuit
 
 # ── constants + model (mirror bench.jl setup) ────────────────────────────────
 const unit = 1.0
@@ -72,7 +72,7 @@ include(joinpath(IAM_DIR, "src", "unitarity_modification.jl"))
 include(joinpath(IAM_DIR, "src", "phaseshifts.jl"))
 const lecr0 = [0.56e-3, 1.21e-3, -2.79e-3, -0.36e-3, 1.4e-3, 0.07e-3, -0.44e-3, 0.78e-3]
 
-_load(f) = JuMinuit.Data(DataFrame(CSV.File(f, header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
+_load(f) = NativeMinuit.Data(DataFrame(CSV.File(f, header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
 d00 = _load("./datajl/pipi/pipi00_Roy-GKPY_PRD83_074004.dat")
 d11 = _load("./datajl/pipi/pipi11_Roy-GKPY_PRD83_074004.dat")
 d20 = _load("./datajl/pipi/pipi20_Roy-GKPY_PRD83_074004.dat")
@@ -108,9 +108,9 @@ function iam_refit(subpts, start, strat)
         end
         return s
     end
-    fm = migrad(JuMinuit.CostFunction(chi2r, 1.0), start, fill(1e-6, 8);
-                strategy = JuMinuit.Strategy(strat))
-    return JuMinuit.is_valid(fm) ? collect(fm.state.parameters.x) : fill(NaN, 8)
+    fm = migrad(NativeMinuit.CostFunction(chi2r, 1.0), start, fill(1e-6, 8);
+                strategy = NativeMinuit.Strategy(strat))
+    return NativeMinuit.is_valid(fm) ? collect(fm.state.parameters.x) : fill(NaN, 8)
 end
 
 println("\n", "="^92)
@@ -166,7 +166,7 @@ n_minos_valid = -1
 minosA = fill((NaN, NaN), 8)
 if !SKIP_MINOS
     minos!(m)
-    global n_minos_valid = count(i -> JuMinuit.is_valid(m.merrors[nm[i]]), 1:8)
+    global n_minos_valid = count(i -> NativeMinuit.is_valid(m.merrors[nm[i]]), 1:8)
     global minosA = [(m.merrors[nm[i]].upper, m.merrors[nm[i]].lower) for i in 1:8]
 end
 mc = get_contours_samples(m; nsamples = MC_NS, cl = 1, seed = 2024)

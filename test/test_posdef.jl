@@ -40,11 +40,11 @@
         # through to the eigenvalue gate, which forces valid+pos-def while
         # preserving the incoming dcovar. v1's `else return err` returned the
         # matrix with the incoming (stale) status, diverging at this boundary.
-        eps = JuMinuit.MachinePrecision().eps
+        eps = NativeMinuit.MachinePrecision().eps
         err = MinimumError(Symmetric(fill(eps, 1, 1), :U), 0.5, MnMadePosDef, true)
         out = make_posdef(err)
         @test out.status == MnHesseValid    # forced valid (old `else` kept MnMadePosDef)
-        @test JuMinuit.is_pos_def(out)
+        @test NativeMinuit.is_pos_def(out)
         @test out.dcovar == 0.5             # incoming dcovar preserved
     end
 
@@ -65,7 +65,7 @@
             @test new_err.inv_hessian[i, i] > 0
         end
         # Eigenvalues now positive
-        evs = JuMinuit.sym_eigvals(new_err.inv_hessian)
+        evs = NativeMinuit.sym_eigvals(new_err.inv_hessian)
         @test all(λ -> λ > 0, evs)
     end
 
@@ -79,7 +79,7 @@
         new_err = make_posdef(err)
         @test new_err.status == MnMadePosDef
         @test new_err.dcovar == 1.0   # padd path forces dcovar = 1.0 (audit §11a)
-        evs = JuMinuit.sym_eigvals(new_err.inv_hessian)
+        evs = NativeMinuit.sym_eigvals(new_err.inv_hessian)
         @test all(λ -> λ > 0, evs)
     end
 
@@ -94,7 +94,7 @@
         @test is_posdef_enough(err)
         new_err = make_posdef(err)
         @test new_err.status == MnHesseValid     # stale MnMadePosDef dropped
-        @test JuMinuit.is_pos_def(new_err)
+        @test NativeMinuit.is_pos_def(new_err)
         @test new_err.dcovar == 0.3              # incoming dcovar preserved
     end
 
@@ -134,11 +134,11 @@
             ref = make_posdef(MinimumError(Symmetric(copy(M), :U), dcov))
             ref_made = is_made_pos_def(ref)
             # default (self-allocated scratch)
-            M1 = copy(M); made1 = JuMinuit.make_posdef!(Symmetric(M1, :U))
+            M1 = copy(M); made1 = NativeMinuit.make_posdef!(Symmetric(M1, :U))
             # pooled scratch path
             n = size(M, 1)
             M2 = copy(M)
-            made2 = JuMinuit.make_posdef!(Symmetric(M2, :U);
+            made2 = NativeMinuit.make_posdef!(Symmetric(M2, :U);
                                  p_buf = Matrix{Float64}(undef, n, n),
                                  s_buf = Vector{Float64}(undef, n))
             (ref = upper(parent(ref.inv_hessian)), ref_made = ref_made,
@@ -161,17 +161,17 @@
         # return value semantics + in-place mutation actually happened
         Mneg = Float64[1.0 5.0; 5.0 1.0]
         S = Symmetric(copy(Mneg), :U)
-        @test JuMinuit.make_posdef!(S) === true            # padd applied → MnMadePosDef
+        @test NativeMinuit.make_posdef!(S) === true            # padd applied → MnMadePosDef
         @test parent(S) != Mneg                   # mutated in place
         Sok = Symmetric(Float64[4.0 1.0; 1.0 5.0], :U)
-        @test JuMinuit.make_posdef!(Sok) === false         # gate passed → not made-posdef
-        @test (@inferred JuMinuit.make_posdef!(Symmetric(Float64[2.0 0.0; 0.0 3.0], :U))) isa Bool
+        @test NativeMinuit.make_posdef!(Sok) === false         # gate passed → not made-posdef
+        @test (@inferred NativeMinuit.make_posdef!(Symmetric(Float64[2.0 0.0; 0.0 3.0], :U))) isa Bool
 
         # caller-supplied scratch is size-validated before the @inbounds loop:
         # an undersized buffer must raise, not silently corrupt the heap.
         S3 = Symmetric(Float64[1.0 5.0; 5.0 1.0], :U)
-        @test_throws DimensionMismatch JuMinuit.make_posdef!(S3; p_buf = Matrix{Float64}(undef, 1, 1))
-        @test_throws DimensionMismatch JuMinuit.make_posdef!(S3; s_buf = Vector{Float64}(undef, 1))
+        @test_throws DimensionMismatch NativeMinuit.make_posdef!(S3; p_buf = Matrix{Float64}(undef, 1, 1))
+        @test_throws DimensionMismatch NativeMinuit.make_posdef!(S3; s_buf = Vector{Float64}(undef, 1))
         @test parent(S3) == Float64[1.0 5.0; 5.0 1.0]   # untouched (threw pre-mutation)
     end
 end

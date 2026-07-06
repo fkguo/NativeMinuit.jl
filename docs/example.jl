@@ -1,13 +1,13 @@
-# # JuMinuit.jl — interactive examples
+# # NativeMinuit.jl — interactive examples
 #
 # This notebook walks through the canonical usage patterns of
-# [JuMinuit.jl](https://github.com/fkguo/JuMinuit.jl), the native-Julia
+# [NativeMinuit.jl](https://github.com/fkguo/NativeMinuit.jl), the native-Julia
 # port of C++ Minuit2. The API is intentionally close to
 # [IMinuit.jl](https://github.com/fkguo/IMinuit.jl) /
 # [iminuit](https://github.com/scikit-hep/iminuit) so existing fit code
 # transfers with minimal change.
 
-using JuMinuit
+using NativeMinuit
 
 # ## 1. Quick start — unbounded fit
 #
@@ -87,7 +87,7 @@ m_s2.values, m_s2.errors
 
 # ## 7. Switching from IMinuit.jl
 #
-# JuMinuit aims to be a drop-in replacement. Most IMinuit.jl code runs
+# NativeMinuit aims to be a drop-in replacement. Most IMinuit.jl code runs
 # unchanged — `migrad(m)` mutates `m`, `m.values`, `m.errors`,
 # `m.fval`, `m.is_valid` all work, `args(m)` returns the value vector,
 # `matrix(m)` returns the covariance.

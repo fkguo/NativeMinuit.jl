@@ -1,13 +1,13 @@
 # BenchmarkExamples
 
-Real-world fit examples for stress-testing JuMinuit.jl. **These are NOT part
+Real-world fit examples for stress-testing NativeMinuit.jl. **These are NOT part
 of the package.** They live outside `src/`, `test/`, `ext/`, so `Pkg.test()`
 never picks them up. They exist to:
 
 1. Profile MIGRAD / HESSE / MINOS / MNCONTOUR on fits actually used in
    physics publications (where the FCN is non-trivial and the parameter
    covariance is non-diagonal).
-2. Provide a public-data baseline so anyone can reproduce JuMinuit-vs-
+2. Provide a public-data baseline so anyone can reproduce NativeMinuit-vs-
    C++Minuit2-vs-iminuit comparisons on the same problems.
 3. Serve as templates: copy-paste a fit, adapt the model, drop in your
    own data.
@@ -22,7 +22,7 @@ or `julia --project=. main.jl`).
 
 ### `X3872_dip/` — X(3872) line-shape with a dip near threshold
 
-▶ **Run online (no install):** [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
+▶ **Run online (no install):** [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
 
 Fit of an effective coupled-channel amplitude to the e⁺e⁻ → J/ψπ⁺π⁻
 data in the X(3872) mass region, demonstrating a dip structure near
@@ -46,7 +46,7 @@ matrix is highly correlated → ideal stress test for MNCONTOUR.
 
 ### `X6200_double_jpsi/` — two-channel di-J/ψ fit + Bayesian pole / scattering length
 
-Native-JuMinuit reproduction of the coupled-channel analysis of the
+Native-NativeMinuit reproduction of the coupled-channel analysis of the
 **X(6200)**, the near-threshold state in the J/ψJ/ψ system, fit to the
 real LHCb double-J/ψ spectrum:
 
@@ -70,7 +70,7 @@ reported through `1/a`. Files: `x6200_double_jpsi.jl`, `data_lhcb.csv`
 
 ### `IAM_2Pformfactor/` — Inverse Amplitude Method on ππ / Kπ / πη / πK form factors
 
-▶ **Run online (no install):** [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
+▶ **Run online (no install):** [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
 
 Multi-channel χPT-IAM fit of meson-meson scattering phase shifts +
 form factors, used in
@@ -95,8 +95,8 @@ medium-dimensional non-trivial χ²-fit.
 ## Running an example
 
 These examples were originally written against IMinuit.jl (PyCall
-wrapper) and have been **migrated to JuMinuit** — the notebooks now use
-`using JuMinuit` and run online via the Binder badges above. The migration
+wrapper) and have been **migrated to NativeMinuit** — the notebooks now use
+`using NativeMinuit` and run online via the Binder badges above. The migration
 is a one-line swap because the API is drop-in compatible:
 
 ```julia
@@ -106,13 +106,13 @@ fit = Minuit(my_chisq, [1.0, 2.0]; name = ["a", "b"], error = [0.1, 0.1])
 migrad(fit)
 
 # New (drop-in compatible)
-using JuMinuit
+using NativeMinuit
 fit = Minuit(my_chisq, [1.0, 2.0]; name = ["a", "b"], error = [0.1, 0.1])
 migrad(fit)
 ```
 
 The names / API match — see [`docs/src/guides/migration.md`](../docs/src/guides/migration.md) for
-the full mapping. Functions / macros from IMinuit.jl that JuMinuit
+the full mapping. Functions / macros from IMinuit.jl that NativeMinuit
 implements natively:
 
 - `Data`, `chisq`, `model_fit`, `@model_fit`, `func_argnames`
@@ -145,6 +145,6 @@ Error analysis — a from-scratch design, **implemented** (see the
 - `benchmark/compare_all.jl` benchmarks the toy §3.3 FCNs (rosenbrock,
   quad_4d, gauss_ll, …). Those are stylized stress tests.
 - **These examples drive the REAL-FCN benchmarks** — slower, dirtier,
-  but representative. Use them to validate that a JuMinuit optimization
+  but representative. Use them to validate that a NativeMinuit optimization
   (e.g., MnContours warm-start improvement) actually helps on a fit
   someone publishes.

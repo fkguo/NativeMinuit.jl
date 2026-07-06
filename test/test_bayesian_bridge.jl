@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-using JuMinuit
+using NativeMinuit
 using Test
 using Random
 using Statistics
@@ -12,7 +12,7 @@ function _bayes_var(v::AbstractVector)
 end
 
 @testset "Bayesian bridge — posterior_sample / bayesian" begin
-    @test !isdefined(JuMinuit, Symbol("bayesian!"))
+    @test !isdefined(NativeMinuit, Symbol("bayesian!"))
 
     @testset "flat prior reproduces likelihood ensemble path" begin
         f(x) = ((x[1] - 1.0) / 0.25)^2 + ((x[2] + 0.5) / 0.4)^2
@@ -289,7 +289,7 @@ end
             rng = Random.MersenneTwister(20)
             s = 0.0
             for _ in 1:4000
-                q = JuMinuit._dispersed_start(best, rng, steps, nothing, lo, hi, disp)
+                q = NativeMinuit._dispersed_start(best, rng, steps, nothing, lo, hi, disp)
                 s += abs(q[1])              # coord 1 has σ = 1
             end
             s / 4000
@@ -408,21 +408,21 @@ end
         # exactly on the limit MUST flag; a mode many σ inside must not.
         Random.seed!(0)
         half = reshape(abs.(randn(40_000)) .* 0.5, :, 1)            # mode at lower limit 0
-        @test JuMinuit._boundary_flags(half, [1], [0.0], [NaN])[1]
+        @test NativeMinuit._boundary_flags(half, [1], [0.0], [NaN])[1]
         interior = reshape(3.0 .+ 0.5 .* randn(40_000), :, 1)       # mode 6σ inside
-        @test !JuMinuit._boundary_flags(interior, [1], [0.0], [NaN])[1]
+        @test !NativeMinuit._boundary_flags(interior, [1], [0.0], [NaN])[1]
         upperpile = reshape(5.0 .- abs.(randn(40_000)) .* 0.5, :, 1)  # mode at upper limit 5
-        @test JuMinuit._boundary_flags(upperpile, [1], [NaN], [5.0])[1]
+        @test NativeMinuit._boundary_flags(upperpile, [1], [NaN], [5.0])[1]
     end
 
     @testset "degenerate diagnostics fail visibly" begin
         samples = [0.0; 0.0; 1.0; 1.0;;]
         chains = [1, 1, 2, 2]
-        rh = JuMinuit._posterior_rhat(samples, chains, [1], 2)
+        rh = NativeMinuit._posterior_rhat(samples, chains, [1], 2)
         @test isinf(rh[1])
-        same = JuMinuit._posterior_rhat(fill(1.0, 4, 1), chains, [1], 2)
+        same = NativeMinuit._posterior_rhat(fill(1.0, 4, 1), chains, [1], 2)
         @test isnan(same[1])
-        @test JuMinuit._ess_one([1.0, 1.0, 1.0, 1.0]) == 0.0
+        @test NativeMinuit._ess_one([1.0, 1.0, 1.0, 1.0]) == 0.0
     end
 
     @testset "PosteriorSample constructor validates diagnostic shapes" begin

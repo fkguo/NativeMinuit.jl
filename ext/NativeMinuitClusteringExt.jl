@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# JuMinuitClusteringExt — DBSCAN backend for multi-modal solution detection.
+# NativeMinuitClusteringExt — DBSCAN backend for multi-modal solution detection.
 #
 # Activated automatically when the user has `using Clustering` loaded
-# alongside `using JuMinuit`. Provides the concrete method for the
+# alongside `using NativeMinuit`. Provides the concrete method for the
 # `_dbscan_labels` stub declared in `src/solution_modes.jl`, enabling
 # `find_solution_modes(samples, m; method=:dbscan)`.
 #
@@ -14,7 +14,7 @@
 # the common case with ZERO dependencies; DBSCAN is the optional, density-based
 # upgrade for arbitrary cluster shapes + explicit outlier handling. Julia 1.9+
 # `[weakdeps]` + `[extensions]` is the standard idiom for this "optional
-# algorithm backend" pattern — mirrors `JuMinuitForwardDiffExt`.
+# algorithm backend" pattern — mirrors `NativeMinuitForwardDiffExt`.
 #
 # Whitening note: the points handed to DBSCAN here are ALREADY whitened
 # (Mahalanobis or per-σ) by `find_solution_modes`, so the radius is in σ units
@@ -22,15 +22,15 @@
 # the `src/solution_modes.jl` header for why the whitening is mandatory.
 # ─────────────────────────────────────────────────────────────────────────────
 
-module JuMinuitClusteringExt
+module NativeMinuitClusteringExt
 
-using JuMinuit
+using NativeMinuit
 using Clustering
 
 """
-    JuMinuit._dbscan_labels(Z, radius, min_neighbors, min_cluster_size) -> Vector{Int}
+    NativeMinuit._dbscan_labels(Z, radius, min_neighbors, min_cluster_size) -> Vector{Int}
 
-DBSCAN backend (Clustering.jl) for [`JuMinuit.find_solution_modes`](@ref) with
+DBSCAN backend (Clustering.jl) for [`NativeMinuit.find_solution_modes`](@ref) with
 `method=:dbscan`.
 
 `Z` is the WHITENED sample matrix (`d × N`, columns = points) produced by
@@ -43,7 +43,7 @@ smaller than this as noise.
 Returns a length-`N` label vector, `0 = noise`, surviving clusters labelled
 `1, 2, …` (re-packed dense). `find_solution_modes` then orders them by χ².
 """
-function JuMinuit._dbscan_labels(Z::Matrix{Float64}, radius::Float64,
+function NativeMinuit._dbscan_labels(Z::Matrix{Float64}, radius::Float64,
                                   min_neighbors::Int, min_cluster_size::Int)
     # Clustering.dbscan expects points as columns (d × N) — Z already is.
     res = Clustering.dbscan(Z, radius;
@@ -87,11 +87,11 @@ PrecompileTools.@setup_workload begin
           0.0 0.1 0.0 5.0 4.9 5.1]
     PrecompileTools.@compile_workload begin
         try
-            JuMinuit._dbscan_labels(_Z, 1.0, 1, 1)
+            NativeMinuit._dbscan_labels(_Z, 1.0, 1, 1)
         catch
             # Don't fail precompile on transient issues
         end
     end
 end
 
-end # module JuMinuitClusteringExt
+end # module NativeMinuitClusteringExt

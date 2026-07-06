@@ -10,22 +10,22 @@
         @test isnan(p.lower) && isnan(p.upper)
         @test !p.fixed
         @test !has_limits(p)
-        @test JuMinuit.bound_kind(p) == JuMinuit.NoBounds
+        @test NativeMinuit.bound_kind(p) == NativeMinuit.NoBounds
 
         # With double bounds
         p2 = MinuitParameter("y", 0.5, 0.1; lower = -1.0, upper = 1.0)
         @test has_lower_limit(p2) && has_upper_limit(p2)
-        @test JuMinuit.bound_kind(p2) == JuMinuit.BothBounds
+        @test NativeMinuit.bound_kind(p2) == NativeMinuit.BothBounds
 
         # With upper only
         p3 = MinuitParameter("z", 0.0, 0.1; upper = 5.0)
         @test !has_lower_limit(p3) && has_upper_limit(p3)
-        @test JuMinuit.bound_kind(p3) == JuMinuit.UpperOnly
+        @test NativeMinuit.bound_kind(p3) == NativeMinuit.UpperOnly
 
         # With lower only
         p4 = MinuitParameter("w", 0.0, 0.1; lower = -5.0)
         @test has_lower_limit(p4) && !has_upper_limit(p4)
-        @test JuMinuit.bound_kind(p4) == JuMinuit.LowerOnly
+        @test NativeMinuit.bound_kind(p4) == NativeMinuit.LowerOnly
 
         # Fixed flag
         p5 = MinuitParameter("k", 1.0, 0.1; fixed = true)
@@ -71,7 +71,7 @@
         )
         @test n_pars(P) == 3
         @test n_free(P) == 2
-        @test JuMinuit.bound_kind(P.pars[2]) == JuMinuit.BothBounds
+        @test NativeMinuit.bound_kind(P.pars[2]) == NativeMinuit.BothBounds
         @test is_fixed(P, 3)
 
         # Dimension-mismatch guards
@@ -146,19 +146,19 @@
         for int_vec in ([0.3, 0.1, 1.7, -0.6], [-1.2, 2.0, 0.0, 3.3], zeros(4))
             ref = int_to_ext_vector(P, int_vec)            # allocating reference
             buf = fill(NaN, n_pars(P))
-            out = JuMinuit.int_to_ext_vector!(buf, P, int_vec)
+            out = NativeMinuit.int_to_ext_vector!(buf, P, int_vec)
             @test out === buf                              # writes in place, returns buffer
             @test out == ref                               # bit-identical to allocating form
             @test out[2] == 9.0                            # fixed entry preserved
         end
 
         # ext-length guard (new in the in-place method) + int-length guard
-        @test_throws DimensionMismatch JuMinuit.int_to_ext_vector!(zeros(4), P, zeros(n_free(P)))
-        @test_throws DimensionMismatch JuMinuit.int_to_ext_vector!(zeros(n_pars(P)), P, [1.0])
+        @test_throws DimensionMismatch NativeMinuit.int_to_ext_vector!(zeros(4), P, zeros(n_free(P)))
+        @test_throws DimensionMismatch NativeMinuit.int_to_ext_vector!(zeros(n_pars(P)), P, [1.0])
 
         # The in-place transform itself must allocate nothing after warm-up,
         # otherwise the hot-path buffer reuse buys nothing.
-        _alloc_inplace(b, p, v) = @allocated JuMinuit.int_to_ext_vector!(b, p, v)
+        _alloc_inplace(b, p, v) = @allocated NativeMinuit.int_to_ext_vector!(b, p, v)
         buf = Vector{Float64}(undef, n_pars(P))
         iv = [0.3, 0.1, 1.7, -0.6]
         _alloc_inplace(buf, P, iv)                         # compile

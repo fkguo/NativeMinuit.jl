@@ -25,7 +25,7 @@
 """
     AbstractFit
 
-Supertype of every JuMinuit fit-frontend object. Currently the only
+Supertype of every NativeMinuit fit-frontend object. Currently the only
 concrete subtype is [`Minuit`](@ref); the abstraction exists so that
 generic user/ecosystem code can dispatch on `f::AbstractFit` (the same
 way IMinuit.jl / iminuit code does — `migrad(f::AbstractFit)`,
@@ -37,7 +37,7 @@ frontend can slot in without breaking such code.
 IMinuit.jl exposes two concrete subtypes — `Fit` (keyword/scalar-arg
 `fcn(a, b)` construction) and `ArrayFit` (vector `fcn(par)`
 construction). That split is a PyCall wrapping artifact: the two need
-different `PyObject` construction. JuMinuit is native Julia and always
+different `PyObject` construction. NativeMinuit is native Julia and always
 calls the FCN as `f(::AbstractVector)` internally (the keyword
 constructor wraps `fcn(a,b)` into `x -> fcn(x...)`), so the two forms
 have **no behavioural difference** after construction. We therefore
@@ -139,7 +139,7 @@ mutable struct Minuit <: AbstractFit
     # behavior identical to pre-Phase G). `:auto` adds a memoized one-shot
     # thread-safety probe (warn + serial on failure); resolved by `_use_threads`.
     threaded_gradient::Union{Bool,Symbol}
-    # Phase H: when `true` AND `threaded_gradient=true`, JuMinuit runs
+    # Phase H: when `true` AND `threaded_gradient=true`, NativeMinuit runs
     # one extra sequential+threaded gradient comparison at the seed
     # point on the first migrad call. Throws `ThreadSafetyError` if the
     # FCN's threaded gradient disagrees with the sequential one (race
@@ -180,14 +180,14 @@ end
 
 # IMinuit.jl drop-in aliases. In IMinuit.jl `Fit` (keyword/scalar-arg
 # construction) and `ArrayFit` (vector construction) are distinct PyCall
-# wrapper subtypes; in native JuMinuit both reduce to the same `Minuit`
+# wrapper subtypes; in native NativeMinuit both reduce to the same `Minuit`
 # (the keyword constructor wraps `fcn(a,b)` into `x -> fcn(x...)`), so
 # they are aliases here, not separate types. See `AbstractFit` docs.
 """
     Fit
 
 IMinuit.jl-compatible alias of [`Minuit`](@ref) (scalar / keyword-argument
-construction in IMinuit.jl). In native JuMinuit it is the same type as
+construction in IMinuit.jl). In native NativeMinuit it is the same type as
 [`Minuit`](@ref), so existing IMinuit.jl scripts that build `Fit(...)` work
 unchanged. See [`AbstractFit`](@ref).
 """
@@ -197,7 +197,7 @@ const Fit = Minuit
     ArrayFit
 
 IMinuit.jl-compatible alias of [`Minuit`](@ref) (vector construction in
-IMinuit.jl). In native JuMinuit it is the same type as [`Minuit`](@ref), so
+IMinuit.jl). In native NativeMinuit it is the same type as [`Minuit`](@ref), so
 existing IMinuit.jl scripts that build `ArrayFit(...)` work unchanged. See
 [`AbstractFit`](@ref).
 """
@@ -262,7 +262,7 @@ function Minuit(
     # IMinuit.jl / iminuit-compatible kwarg names (singular)
     name::Union{Vector{<:AbstractString},Vector{Symbol},Nothing} = nothing,
     error::Union{Vector{<:Real},Real,Nothing} = nothing,
-    # JuMinuit-native plural forms (kept for backward compat with
+    # NativeMinuit-native plural forms (kept for backward compat with
     # existing tests; aliased to the singular ones above)
     names::Union{Vector{<:AbstractString},Nothing} = nothing,
     errors::Union{Vector{<:Real},Nothing} = nothing,
@@ -316,7 +316,7 @@ function Minuit(
     # Phase H: for `threaded_gradient=true`, auto-verify FCN thread-safety on
     # the first gradient call (default `true` when forcing threading; ~2 extra
     # gradient evaluations). Pass `false` to bypass once you've confirmed
-    # safety via `JuMinuit.is_thread_safe(cf, x0)`. No-op for `:auto` (its own
+    # safety via `NativeMinuit.is_thread_safe(cf, x0)`. No-op for `:auto` (its own
     # one-shot memoized probe) and for `false`.
     verify_threading::Bool = (threaded_gradient === true),
     # Catch-all for per-parameter `error_<name>`, `fix_<name>`, `limit_<name>`
@@ -468,7 +468,7 @@ function Minuit(fcn;
     names = [String(k) for (k, _) in par_kws]
     x0 = [v for (_, v) in par_kws]
     # Wrap the user's `fcn(par::AbstractVector)` so it's called per
-    # the JuMinuit convention. If the user's `fcn` takes positional
+    # the NativeMinuit convention. If the user's `fcn` takes positional
     # scalar args (e.g. `f(a, b, c)`), wrap with a splat.
     f_wrapped = if applicable(fcn, x0)
         fcn
@@ -538,7 +538,7 @@ addition, reproduced faithfully here. The re-seed lets a stalled fit escape
 ill-conditioned problem, see docs/dev/IAM_CONVERGENCE_GAP.md § Fidelity).
 
 **`use_simplex=true` (opt-in, NOT the default) enables a structured Simplex
-multistart that is NOT part of C++ Minuit2 or iminuit** — a JuMinuit extension
+multistart that is NOT part of C++ Minuit2 or iminuit** — a NativeMinuit extension
 for genuinely multi-minimum landscapes (e.g. the X(3872) `J/ψρ + DD̄*`
 multi-dip fit). Each retry pass takes a Nelder-Mead Simplex hop with a
 geometrically-growing seed step (×1, ×2, ×4, … from the parameter error scale,
@@ -637,7 +637,7 @@ function migrad!(m::Minuit;
     # ill-conditioned IAM, see docs/dev/IAM_CONVERGENCE_GAP.md § Fidelity).
     #
     # Opt-in (`use_simplex=true`): a structured Simplex multistart that is NOT
-    # part of C++ Minuit2 or iminuit — a JuMinuit EXTENSION for genuinely
+    # part of C++ Minuit2 or iminuit — a NativeMinuit EXTENSION for genuinely
     # multi-minimum landscapes (e.g. the X(3872) `J/ψρ + DD̄*` multi-dip fit).
     # Each pass takes a Nelder-Mead Simplex hop with a geometrically-growing
     # seed step (`_retry_perturb_factor`, ×2 per pass, capped at the physical
@@ -683,7 +683,7 @@ function migrad!(m::Minuit;
         factor = 1.0
         pass_strategy = strategy          # faithful default: same strategy, no bump
         if use_simplex
-            # Opt-in JuMinuit multistart EXTENSION (NOT in C++ Minuit2 or
+            # Opt-in NativeMinuit multistart EXTENSION (NOT in C++ Minuit2 or
             # iminuit): a Nelder-Mead Simplex hop with a geometrically-growing
             # seed step, then re-MIGRAD at `retry_strategy`. The post-Simplex
             # state has no usable inverse Hessian (MinimumError is the I
@@ -723,7 +723,7 @@ function migrad!(m::Minuit;
     m.n_passes = npass
     # P6: warn ONCE at the end of the whole migrad! run (handoff F7) —
     # iminuit warns per NaN return via MnPrint (suppressed at default
-    # print level); JuMinuit reports the aggregate with the verdict.
+    # print level); NativeMinuit reports the aggregate with the verdict.
     _warn_nonfinite_fcn(best_bfm.internal, nf_total)
     return m
 end
@@ -1004,7 +1004,7 @@ end
 # :111-114): when the user passes maxcalls == 0,
 #     maxcalls = 2·(nvar+1)·(200 + 100·nvar + 5·nvar²)
 # where `nvar` is the number of variable (free) parameters
-# (`MnUserParameterState::VariableParameters()`, the JuMinuit `n_free`).
+# (`MnUserParameterState::VariableParameters()`, the NativeMinuit `n_free`).
 # Replaces the legacy hardcoded 1000, which could trip `fcn_limit` on
 # larger fits where C++/iminuit would keep iterating. Each ± cross-search
 # gets the full budget (C++ recomputes it per `FindCrossValue` call).
@@ -1031,7 +1031,7 @@ function _minos_error(m::Minuit, par::Int;
     # it requires an actual covariance — not the identity placeholder that
     # simplex / scan leave behind. Force the user to call hesse(m) first
     # (review IMPORTANT #2 round-2).
-    JuMinuit.is_available(m.fmin.internal.state.error) ||
+    NativeMinuit.is_available(m.fmin.internal.state.error) ||
         throw(ArgumentError(
             "MINOS requires a covariance matrix. The last fit produced " *
             "no inverse Hessian (likely simplex/scan, or HESSE didn't " *
@@ -1404,7 +1404,7 @@ end
 # 0.5.0 rename (rationale at the low-level deprecation in src/contours.jl).
 # `false` = export_old off: re-exporting `contour` would re-introduce the
 # `Plots.contour` ambiguity the rename exists to fix. Qualified
-# `JuMinuit.contour(...)` keeps working, with a deprecation warning.
+# `NativeMinuit.contour(...)` keeps working, with a deprecation warning.
 Base.@deprecate contour(m::Minuit, par_x::Integer, par_y::Integer; kwargs...) contour_ellipse(m, par_x, par_y; kwargs...) false
 Base.@deprecate contour(m::Minuit, px::AbstractString, py::AbstractString; kwargs...) contour_ellipse(m, px, py; kwargs...) false
 
@@ -1527,7 +1527,7 @@ Base.setindex!(v::ParameterView, val, name::AbstractString) =
 # external vectors on top of that config. Before the fix for issue #38,
 # `m.params.pars` exposed the RAW config, so `m.params.pars[i].value` still
 # showed the *initial* value after `migrad!`, silently disagreeing with
-# `m.values[i]`. iminuit's `m.params` reflects the fit, so JuMinuit now does
+# `m.values[i]`. iminuit's `m.params` reflects the fit, so NativeMinuit now does
 # too: the PUBLIC `m.params` property returns a fit-overlaid copy when a fit is
 # cached (see `getproperty`).
 #
@@ -2022,7 +2022,7 @@ end
 function Base.propertynames(m::Minuit, ::Bool = false)
     return (:fcn, :params, :fmin, :minos_errors, :prec, :cfwg,
             :strategy, :tol, :print_level, :n_passes, :ndata,
-            # JuMinuit-native
+            # NativeMinuit-native
             :values, :errors, :fval, :edm, :nfcn, :valid,
             :covariance, :ndim, :npar,
             # IMinuit.jl-compatible aliases
@@ -2035,7 +2035,7 @@ end
 # IMinuit.jl-compatible no-bang method aliases.
 #
 # In IMinuit.jl (which wraps Python iminuit), the convention is that
-# `migrad(f)` mutates `f` in place and returns it. JuMinuit's native
+# `migrad(f)` mutates `f` in place and returns it. NativeMinuit's native
 # style uses `migrad!(m)` (Julia idiom). The aliases below let
 # existing IMinuit.jl code run unchanged.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2050,7 +2050,7 @@ and returns `m`. The `ncall` / `resume` / `precision` kwargs are
 accepted for IMinuit.jl interface parity:
 
   - `ncall::Union{Integer,Nothing}` ≡ `maxfcn` cap (default uses
-    JuMinuit's `200 + 100·n + 5·n²` formula).
+    NativeMinuit's `200 + 100·n + 5·n²` formula).
   - `resume::Bool=true` — if `false`, reset `m.fmin` and `m.minos_errors`
     before running (matches iminuit's `resume` argument).
   - `precision::Union{Real,Nothing}` — override the `MachinePrecision`
@@ -2067,7 +2067,7 @@ C++ Minuit2's `MnStrategy()` — for both numerical and analytical/AD
 unchanged. By default (`use_simplex=false`) the retry is iminuit's
 `_robust_low_level_fit` — re-run at the user's strategy, no Simplex, no
 strategy bump — so this is drop-in-equivalent to iminuit's `m.migrad()`.
-The opt-in `use_simplex=true` enables JuMinuit's Simplex multistart (which
+The opt-in `use_simplex=true` enables NativeMinuit's Simplex multistart (which
 *does* bump numerical FCNs to `Strategy(2)`); that is a documented extension
 beyond C++ Minuit2 / iminuit — see the [`migrad!`](@ref) docstring.
 """
@@ -2111,7 +2111,7 @@ budget logic).
 
 Internally:
   1. Take `m.fmin.internal.state` (the converged internal-coord state).
-  2. Call `JuMinuit.hesse(cf_internal, state, strategy)` to refresh
+  2. Call `NativeMinuit.hesse(cf_internal, state, strategy)` to refresh
      `state.error.inv_hessian` via numerical 2nd derivatives.
   3. Re-run the same int→ext Jacobian + `Int2extError` machinery used
      in `migrad(cf, params)` to rebuild `ext_covariance` + `ext_errors`.
@@ -2132,9 +2132,9 @@ function hesse(m::Minuit; strategy::Union{Strategy,Integer} = Strategy(1),
     # flags so the diagonal step clamp (C++ MnHesse.cxx:160-167, 194-195)
     # fires for bounded parameters — `bfm.internal.state` is in INTERNAL
     # (transformed) coordinates, exactly the frame the C++ clamp targets.
-    new_state = JuMinuit.hesse(bfm.internal_cf, bfm.internal.state, strategy;
+    new_state = NativeMinuit.hesse(bfm.internal_cf, bfm.internal.state, strategy;
                                  prec = m.prec,
-                                 has_limits = JuMinuit._has_limits_internal(bfm.params),
+                                 has_limits = NativeMinuit._has_limits_internal(bfm.params),
                                  print_level = print_level)
 
     # Wrap into a fresh FunctionMinimum reflecting the CURRENT covariance
@@ -2147,9 +2147,9 @@ function hesse(m::Minuit; strategy::Union{Strategy,Integer} = Strategy(1),
     # `reached_call_limit` and `above_max_edm` ARE genuinely sticky
     # (they describe the MIGRAD convergence run that led to this state)
     # — keep them.
-    hesse_now_failed = JuMinuit.hesse_failed(new_state.error) ||
-                        JuMinuit.invert_failed(new_state.error)
-    made_pos_def_now = JuMinuit.is_made_pos_def(new_state.error)
+    hesse_now_failed = NativeMinuit.hesse_failed(new_state.error) ||
+                        NativeMinuit.invert_failed(new_state.error)
+    made_pos_def_now = NativeMinuit.is_made_pos_def(new_state.error)
     # `is_valid` is recomputed from the new HESSE outcome (covariance
     # validity per `is_valid(error)`) AND the genuinely sticky MIGRAD
     # convergence flags (`reached_call_limit`, `above_max_edm` describe
@@ -2159,7 +2159,7 @@ function hesse(m::Minuit; strategy::Union{Strategy,Integer} = Strategy(1),
     # never moves the point, so a non-finite incumbent fval stays
     # non-finite (and the fit stays invalid). `n_nonfinite_calls`
     # likewise describes the MIGRAD run that produced this state.
-    new_err_valid = JuMinuit.is_valid(new_state.error)
+    new_err_valid = NativeMinuit.is_valid(new_state.error)
     new_is_valid  = new_err_valid &&
                     !bfm.internal.reached_call_limit &&
                     !bfm.internal.above_max_edm &&
@@ -2180,7 +2180,7 @@ function hesse(m::Minuit; strategy::Union{Strategy,Integer} = Strategy(1),
     # mutable in principle; bfm.internal.up is the value the internal
     # state actually corresponds to.
     ext_values, ext_errors_vec, ext_cov_mat =
-        JuMinuit._internal_to_external_results(new_fmin_int, bfm.params,
+        NativeMinuit._internal_to_external_results(new_fmin_int, bfm.params,
                                                 bfm.internal.up)
 
     m.fmin = BoundedFunctionMinimum(
@@ -2383,7 +2383,7 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", m::Minuit)
     if m.fmin === nothing
-        println(io, "JuMinuit.Minuit  ── not yet minimized; call `migrad(m)` ──")
+        println(io, "NativeMinuit.Minuit  ── not yet minimized; call `migrad(m)` ──")
         println(io, "  parameters (initial):")
         for (i, p) in enumerate(m.params.pars)
             fixed_tag = is_fixed(p) ? "  [FIXED]" : ""
@@ -2403,7 +2403,7 @@ function Base.show(io::IO, ::MIME"text/plain", m::Minuit)
     end
 
     # Header line
-    @printf(io, "JuMinuit.Minuit  fval=%.6g  edm=%.3g  nfcn=%d\n",
+    @printf(io, "NativeMinuit.Minuit  fval=%.6g  edm=%.3g  nfcn=%d\n",
             m.fval, m.edm, m.nfcn)
     chi = _chi2_summary(m)
     if chi !== nothing
@@ -2515,14 +2515,14 @@ end
 
 function Base.show(io::IO, ::MIME"text/html", m::Minuit)
     if m.fmin === nothing
-        print(io, "<div><strong>JuMinuit.Minuit</strong> ",
+        print(io, "<div><strong>NativeMinuit.Minuit</strong> ",
               "(not yet minimized; call <code>migrad(m)</code>)</div>")
         return
     end
 
     @printf(io, """<div style="font-family:monospace;font-size:0.95em">""")
     @printf(io,
-        """<strong>JuMinuit.Minuit</strong>  fval=%.6g  edm=%.3g  nfcn=%d<br>""",
+        """<strong>NativeMinuit.Minuit</strong>  fval=%.6g  edm=%.3g  nfcn=%d<br>""",
         m.fval, m.edm, m.nfcn)
     chi = _chi2_summary(m)
     if chi !== nothing

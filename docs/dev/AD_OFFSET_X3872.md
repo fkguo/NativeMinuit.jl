@@ -50,7 +50,7 @@ the same point → it is an AD-path property, not a threading artifact.
 ## Reproduce
 
 ```
-rm -rf ~/.julia/compiled/v1.12/JuMinuit*/      # avoid stale-cache traps
+rm -rf ~/.julia/compiled/v1.12/NativeMinuit*/      # avoid stale-cache traps
 julia -t 8 --project=scripts scratch/ad_offset_probe.jl   # seeds + per-iter trace
 julia -t 8 --project=scripts scratch/ad_offset_sigma.jl   # offset vs 1σ + MINOS
 ```
@@ -77,7 +77,7 @@ exercises, so the `gstep` difference is inert here.)
 | `edm`    | `80.02` | `4801.5` | `60×` |
 
 The two seed gradients agree to ≲1e-5 relative (the `r` component differs by
-8e-6, just the FD truncation in JuMinuit's adaptive numerical seed). That the
+8e-6, just the FD truncation in NativeMinuit's adaptive numerical seed). That the
 *gradient value itself* is correct — no sign or scaling bug in the AD path — is
 established separately by the gradient-value check (hypothesis 3 below), where
 the AD gradient agrees with an independent central-difference reference to ~1e-8
@@ -214,7 +214,7 @@ FunctionGradient dgrad(grd.Grad(), tmp.G2(), tmp.Gstep());  // exact grad + ROUG
 `AnalyticalGradientCalculator::operator()` returns `FunctionGradient(v)` with
 only the gradient filled (`AnalyticalGradientCalculator.cxx:21-48`) — so C++
 *must* borrow `g2`/`gstep` from the rough `InitialGradientCalculator`, exactly
-as JuMinuit's `analytical_gradient!` propagates the rough seed's `g2`/`gstep`.
+as NativeMinuit's `analytical_gradient!` propagates the rough seed's `g2`/`gstep`.
 
 So both libraries seed:
 - numerical path → **FD-refined** `g2`,

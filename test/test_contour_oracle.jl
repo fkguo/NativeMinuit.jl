@@ -2,7 +2,7 @@
 #
 # Contour numerical agreement with C++ Minuit2 — Phase 1.x.
 #
-# JuMinuit's `contour_exact` mirrors C++ `MnContours`. This test loads
+# NativeMinuit's `contour_exact` mirrors C++ `MnContours`. This test loads
 # (par1, par2) point lists dumped by the C++ harness and verifies
 # every C++ point has a Julia point within `atol` (and vice versa) —
 # i.e., a symmetric Hausdorff distance check.
@@ -66,7 +66,7 @@ const CONTOUR_CASES = Dict{String,Any}(
 
             cf = CostFunction(c.fcn)
             fmin = migrad(cf, c.x0, c.errs0; strategy = Strategy(1))
-            @test JuMinuit.is_valid(fmin)
+            @test NativeMinuit.is_valid(fmin)
 
             # Same npoints as C++ asked for, but C++ may have returned
             # fewer (e.g., banana contour failure). Julia's npoints

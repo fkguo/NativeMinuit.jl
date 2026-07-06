@@ -3,7 +3,7 @@
 # IMinuit.jl drop-in compatibility tests.
 #
 # IMinuit.jl is the existing Julia binding to Python iminuit; this
-# package (JuMinuit) is the clean-room Julia port that aims to be a
+# package (NativeMinuit) is the clean-room Julia port that aims to be a
 # drop-in replacement. These tests assert that the canonical IMinuit.jl
 # usage patterns (from its README + tests) work unchanged.
 #
@@ -59,7 +59,7 @@
         cf_inner = CostFunction(x -> sum(abs2, x))
         m = Minuit(x -> sum(abs2, x), [1.0, 2.0]; error = [0.1, 0.1])
         migrad(m)
-        # JuMinuit-native. `m.values`/`m.errors` now return write-back
+        # NativeMinuit-native. `m.values`/`m.errors` now return write-back
         # `ParameterView`s (iminuit ValueView parity) — an AbstractVector
         # of Float64 rather than a concrete Vector.
         @test m.values isa AbstractVector{Float64}
@@ -149,7 +149,7 @@
 
     @testset "errordef alias for up (NLL fits)" begin
         # iminuit's `errordef = 0.5` for NLL is the standard convention
-        # JuMinuit's native is `up = 0.5`; both should work
+        # NativeMinuit's native is `up = 0.5`; both should work
         nll(x) = 0.5 * sum(abs2, x .- [1.0, 2.0])
         m1 = Minuit(nll, [0.0, 0.0]; up = 0.5)
         m2 = Minuit(nll, [0.0, 0.0]; errordef = 0.5)

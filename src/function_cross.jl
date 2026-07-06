@@ -995,20 +995,20 @@ function _migrad_with_fixed(
 
     # COLD PATH: seed the inner MIGRAD from a length-(n-1) starting
     # vector. Three-way priority (codex round-1 MEDIUM — "or cold-
-    # fallback from the last warm position"; this is the JuMinuit-local
+    # fallback from the last warm position"; this is the NativeMinuit-local
     # interpretation, NOT a literal C++ reproduction):
     #
     #   1. If `warm_state` is supplied (probe 2..N path where
     #      `warm_restart_state` failed — negative g2, edm refinement
     #      diverged, etc.): use the LAST VALID converged x. This is
-    #      JuMinuit's analog to C++'s single-MnMigrad-instance
-    #      pattern: when JuMinuit's pre-MIGRAD g2 hygiene check
+    #      NativeMinuit's analog to C++'s single-MnMigrad-instance
+    #      pattern: when NativeMinuit's pre-MIGRAD g2 hygiene check
     #      bails, we salvage the previous probe's converged position
     #      (rebuild g2/hessian from scratch, keep x) rather than
     #      re-applying the α=1 pre-shift OR snapping back to x_min.
     #      Note: this is NOT literal C++ behavior — C++ MnFunctionCross
     #      aborts the cross-search on `!min1.IsValid()` (line 225-226)
-    #      and does not retry. JuMinuit's `warm_restart_state` is a
+    #      and does not retry. NativeMinuit's `warm_restart_state` is a
     #      finer-grained hygiene check (g2 sign + edm) than C++'s
     #      MnMigrad-level IsValid; cold-restarting from the prior x
     #      with fresh g2 is a reasonable middle ground that empirically
@@ -1422,7 +1422,7 @@ function function_cross_external(
     # touch the scanned param, so the OTHER params start at whatever
     # MnMigrad left them on the previous probe.
     #
-    # JuMinuit closes this in two stages:
+    # NativeMinuit closes this in two stages:
     #
     # (a) Probe 1: consume the caller-supplied `other_param_seed_ext`
     #     (the MnMinos pre-shift). Held in `pre_seed_ext_ref`, cleared

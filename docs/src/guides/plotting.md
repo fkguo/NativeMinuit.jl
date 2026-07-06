@@ -1,6 +1,6 @@
 # Plotting & rich output
 
-A fit result is only as useful as the picture you can draw from it. JuMinuit
+A fit result is only as useful as the picture you can draw from it. NativeMinuit
 gives you three layers, from "just call `plot`" to "drop a table into a paper":
 
 1. **Plot recipes** — `plot(result)` on any result type, as backend-agnostic
@@ -22,11 +22,11 @@ you; use the **rich output** for reports, papers, and terminals.
 Every visible result type ships a
 [RecipesBase](https://github.com/JuliaPlots/RecipesBase.jl) recipe. RecipesBase
 is backend-agnostic in principle, but the path that ships and is exercised is
-**Plots.jl** — load it and pick a backend as usual (JuMinuit itself depends on
+**Plots.jl** — load it and pick a backend as usual (NativeMinuit itself depends on
 no plotting package):
 
 ```julia
-using JuMinuit, Plots
+using NativeMinuit, Plots
 gr()                           # or plotlyjs(), etc.
 ```
 
@@ -49,12 +49,12 @@ plot(contour_grid(m, 1, 2))               # ContourGrid → filled FCN-landscape
 ```
 
 !!! note "Why not `contour(m, 1, 2)`?"
-    JuMinuit ≤ 0.4 exported the ellipse approximation as `contour`, which
+    NativeMinuit ≤ 0.4 exported the ellipse approximation as `contour`, which
     made the bare name ambiguous next to `Plots.contour` / `GR.contour`
     (`UndefVarError: contour not defined … ambiguity`). Since 0.5.0 the
     ellipse is [`contour_ellipse`](@ref) and iminuit's grid slice is
     [`contour_grid`](@ref); the bare `contour` is no longer exported
-    (`JuMinuit.contour` still works, with a deprecation warning).
+    (`NativeMinuit.contour` still works, with a deprecation warning).
 
 | Recipe target | Picture |
 |---|---|
@@ -71,7 +71,7 @@ A worked example — a two-parameter linear fit, its Hesse error bars, and the e
 joint 68 % confidence contour (both blocks share the fitted `m`):
 
 ```@example plotfig
-using JuMinuit, Plots, Random
+using NativeMinuit, Plots, Random
 gr()                                            # headless-friendly backend
 Random.seed!(1)
 xs = range(0, 1; length = 30); σ = 0.1
@@ -143,7 +143,7 @@ contrast, `optim` / `minimize_with` dispatch through `Base.get_extension`, so
 calling those without Optim raises a friendly "load Optim.jl" message instead.)
 
 ```julia
-using JuMinuit, Plots
+using NativeMinuit, Plots
 m = Minuit(cost, x0); migrad!(m)
 
 draw_contour(m, 1, 2)             # FCN grid-slice landscape (filled contour)
@@ -258,11 +258,11 @@ or empty input renders an explanatory message rather than throwing.
 - [Error analysis](../error_analysis.md) — the sampling / resampling / multimodal
   results whose recipes are shown above.
 - Recipes implementation:
-  [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/plot_recipes.jl);
+  [`src/plot_recipes.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/plot_recipes.jl);
   `draw_*` extension
-  [`ext/JuMinuitPlotsExt.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/ext/JuMinuitPlotsExt.jl).
+  [`ext/NativeMinuitPlotsExt.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/ext/NativeMinuitPlotsExt.jl).
 - Rich output:
-  [`src/display.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/display.jl)
+  [`src/display.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/display.jl)
   ([`to_latex`](@ref)),
-  [`src/plot_text.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/plot_text.jl)
+  [`src/plot_text.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/plot_text.jl)
   ([`mn_plot_text`](@ref)).

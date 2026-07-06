@@ -158,7 +158,7 @@ const ORACLE_TOL = Dict(
             # ── Covariance matrix elements vs C++ Minuit2 ──
             # The C++ JSON stores the upper triangle in row-major
             # order (n·(n+1)/2 entries). We rebuild the full matrix
-            # and compare element-by-element to JuMinuit's covariance.
+            # and compare element-by-element to NativeMinuit's covariance.
             # Tolerances are per-case because near-zero Hessian
             # eigenvalues (banana valleys) amplify any iteration-stop
             # drift through V = inv(H).
@@ -170,7 +170,7 @@ const ORACLE_TOL = Dict(
                 ref_cov[i, j] = ref_cov[j, i] = ref_cov_flat[k]
                 k += 1
             end
-            jl_cov = JuMinuit.covariance(m)
+            jl_cov = NativeMinuit.covariance(m)
             @test jl_cov !== nothing
             @test size(jl_cov) == (n, n)
             for i in 1:n, j in 1:n

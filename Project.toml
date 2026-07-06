@@ -1,7 +1,7 @@
-name = "JuMinuit"
+name = "NativeMinuit"
 uuid = "5523a57a-07f4-4aae-a9fd-d526bcb5d194"
 license = "LGPL-2.1-or-later"
-version = "0.6.1"
+version = "0.6.2"
 authors = ["Feng-Kun Guo"]
 
 [deps]
@@ -25,12 +25,12 @@ Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 TransformVariables = "84d833dd-6860-57f9-a1a7-6da5db126cff"
 
 [extensions]
-JuMinuitAdvancedHMCExt = ["AdvancedHMC", "LogDensityProblems", "LogDensityProblemsAD", "TransformVariables", "ForwardDiff"]
-JuMinuitClusteringExt = "Clustering"
-JuMinuitDataFramesExt = "DataFrames"
-JuMinuitForwardDiffExt = "ForwardDiff"
-JuMinuitOptimExt = "Optim"
-JuMinuitPlotsExt = "Plots"
+NativeMinuitAdvancedHMCExt = ["AdvancedHMC", "LogDensityProblems", "LogDensityProblemsAD", "TransformVariables", "ForwardDiff"]
+NativeMinuitClusteringExt = "Clustering"
+NativeMinuitDataFramesExt = "DataFrames"
+NativeMinuitForwardDiffExt = "ForwardDiff"
+NativeMinuitOptimExt = "Optim"
+NativeMinuitPlotsExt = "Plots"
 
 [compat]
 AdvancedHMC = "0.8"

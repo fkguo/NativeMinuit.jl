@@ -1,6 +1,6 @@
 # Migrating from iminuit / IMinuit.jl
 
-JuMinuit is a native-Julia port of Minuit2 and a **drop-in replacement for
+NativeMinuit is a native-Julia port of Minuit2 and a **drop-in replacement for
 [IMinuit.jl](https://github.com/fkguo/IMinuit.jl)**, with an API that stays
 close to the Python [iminuit](https://github.com/scikit-hep/iminuit) where that
 makes sense and leans on Julia strengths (generic FCNs, multiple dispatch,
@@ -15,7 +15,7 @@ like `migrad(m)` / `chisq` / `Data` / `Fit` largely run unchanged.
 
 ## Mapping table
 
-| iminuit / IMinuit.jl | JuMinuit |
+| iminuit / IMinuit.jl | NativeMinuit |
 |:---|:---|
 | `Minuit(fcn, x0; ...)` | same — `Minuit(fcn, x0; names, errors, limits, ...)` |
 | `m.migrad()` / `migrad(m)` | [`migrad!`](@ref)`(m)` (or `migrad(m)`) |
@@ -39,7 +39,7 @@ iminuit-style singular keywords (`name`, `error`) and the plural forms
 (`names`, `errors`) are both accepted, and `up` / `errordef` are aliases:
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 m = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2,
            [0.0, 0.0];
@@ -54,14 +54,14 @@ as in IMinuit.jl.
 ## Running the fit: `m.migrad()` → `migrad!(m)`
 
 This is the one line you almost always have to change. In iminuit the
-minimizers are methods on the object; in JuMinuit they are mutating functions
+minimizers are methods on the object; in NativeMinuit they are mutating functions
 (trailing `!`) that update `m` in place and return it, so they chain with `|>`:
 
 ```julia
 # iminuit (Python) / IMinuit.jl method style
 # m.migrad(); m.hesse(); m.minos()
 
-# JuMinuit
+# NativeMinuit
 migrad!(m)
 hesse!(m)
 minos!(m)
@@ -120,11 +120,11 @@ Parameters may be passed by 1-based integer index or by name (`String`).
 
 !!! note "`contour` renames (0.5.0)"
     iminuit's / IMinuit.jl's grid-scan `contour` is [`contour_grid`](@ref)
-    in JuMinuit — the bare name `contour` would clash with `Plots.contour`
-    under `using JuMinuit, Plots`. JuMinuit ≤ 0.4's own `contour` (a fast
+    in NativeMinuit — the bare name `contour` would clash with `Plots.contour`
+    under `using NativeMinuit, Plots`. NativeMinuit ≤ 0.4's own `contour` (a fast
     error-ellipse approximation, *not* iminuit's grid) is now
     [`contour_ellipse`](@ref); the unexported deprecated alias
-    `JuMinuit.contour` still forwards to it.
+    `NativeMinuit.contour` still forwards to it.
 
 ## `chisq` / `Data`: drop-in, same signatures
 
@@ -132,7 +132,7 @@ IMinuit.jl's least-squares helpers are exported with identical signatures and
 no PyCall / matplotlib dependency:
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 model(x, p) = p[1] * x + p[2]
 data = Data(xs, ys, σs)               # holds x, y, err
@@ -151,7 +151,7 @@ also provided as pure-Julia functions with matching signatures, as is
 
 !!! note "`Data` vs. the cost-function objects"
     `chisq` / `Data` remain the quickest way to port IMinuit.jl code. For new
-    work you can also use JuMinuit's Julia-native cost objects
+    work you can also use NativeMinuit's Julia-native cost objects
     ([`LeastSquares`](@ref), [`UnbinnedNLL`](@ref), …), which carry their own
     `errordef` and compose with `+` ([`CostSum`](@ref)). A `LeastSquares` fit
     and the matching `chisq` `model_fit` share one χ² kernel, so they give
@@ -161,7 +161,7 @@ also provided as pure-Julia functions with matching signatures, as is
 
 IMinuit.jl exposes two concrete fit types, `Fit` (scalar-argument `fcn(a, b)`
 construction) and `ArrayFit` (vector `fcn(par)` construction). That split was a
-PyCall wrapping artifact. JuMinuit always calls the FCN as `f(::AbstractVector)`
+PyCall wrapping artifact. NativeMinuit always calls the FCN as `f(::AbstractVector)`
 internally, so the two forms have no behavioural difference after construction;
 [`Fit`](@ref) and [`ArrayFit`](@ref) are therefore exported as **aliases of
 [`Minuit`](@ref)**. Code annotating `f::Fit` / `f::ArrayFit` / `f::AbstractFit`
@@ -175,7 +175,7 @@ MIGRAD struggles. The Julia-native analogue bridges to
 to Python. It is a package extension, so load `using Optim` to enable it:
 
 ```julia
-using JuMinuit, Optim
+using NativeMinuit, Optim
 
 m = Minuit(fcn, x0)
 optim(m; method = :lbfgs)   # writes the optimum back into m

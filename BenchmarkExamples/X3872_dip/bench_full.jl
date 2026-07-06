@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # X(3872) dip-fit FULL benchmark — migrad + minos + mncontour, comparing
-# JuMinuit (numerical / AD / threaded numerical / threaded AD) vs
+# NativeMinuit (numerical / AD / threaded numerical / threaded AD) vs
 # IMinuit.jl (PyCall → Python iminuit). Includes correctness cross-check
 # at each stage.
 #
@@ -13,7 +13,7 @@
 #
 # Run with:  julia -t 8 --project=../../scripts BenchmarkExamples/X3872_dip/bench_full.jl
 
-using JuMinuit
+using NativeMinuit
 using IMinuit
 using DataFrames, CSV, QuadGK
 using LinearAlgebra, Random, Statistics, BenchmarkTools
@@ -126,11 +126,11 @@ println("\n┌─ Stage 1: MIGRAD ───────────────�
 results = Dict{String, NamedTuple}()
 fits = Dict{String, Any}()
 
-# (a) JuMinuit numerical sequential — high-level Minuit API
+# (a) NativeMinuit numerical sequential — high-level Minuit API
 function build_jm_num()
-    m = JuMinuit.Minuit(chi2_x3872, PAR0; error=ERRS)
-    JuMinuit.migrad!(m)
-    JuMinuit.hesse(m)
+    m = NativeMinuit.Minuit(chi2_x3872, PAR0; error=ERRS)
+    NativeMinuit.migrad!(m)
+    NativeMinuit.hesse(m)
     return m
 end
 r = time_runs(build_jm_num; n_rounds=5)
@@ -140,12 +140,12 @@ println("│  jm_num     migrad+hesse: med=", fmt_ms(r.med),
         "  fval=", round(fits["jm_num"].fmin.internal.state.parameters.fval; sigdigits=6),
         "  is_valid=", fits["jm_num"].fmin.internal.is_valid)
 
-# (b) JuMinuit AD
+# (b) NativeMinuit AD
 function build_jm_ad()
-    m = JuMinuit.Minuit(chi2_x3872, PAR0; error=ERRS,
+    m = NativeMinuit.Minuit(chi2_x3872, PAR0; error=ERRS,
                         grad = par -> ForwardDiff.gradient(chi2_x3872, par))
-    JuMinuit.migrad!(m)
-    JuMinuit.hesse(m)
+    NativeMinuit.migrad!(m)
+    NativeMinuit.hesse(m)
     return m
 end
 r = time_runs(build_jm_ad; n_rounds=5)
@@ -155,12 +155,12 @@ println("│  jm_ad      migrad+hesse: med=", fmt_ms(r.med),
         "  fval=", round(fits["jm_ad"].fmin.internal.state.parameters.fval; sigdigits=6),
         "  is_valid=", fits["jm_ad"].fmin.internal.is_valid)
 
-# (c) JuMinuit threaded numerical
+# (c) NativeMinuit threaded numerical
 if Threads.nthreads() > 1
     function build_jm_th_num()
-        m = JuMinuit.Minuit(chi2_x3872, PAR0; error=ERRS, threaded_gradient=true)
-        JuMinuit.migrad!(m)
-        JuMinuit.hesse(m)
+        m = NativeMinuit.Minuit(chi2_x3872, PAR0; error=ERRS, threaded_gradient=true)
+        NativeMinuit.migrad!(m)
+        NativeMinuit.hesse(m)
         return m
     end
     r = time_runs(build_jm_th_num; n_rounds=5)
@@ -170,13 +170,13 @@ if Threads.nthreads() > 1
             "  fval=", round(fits["jm_th_num"].fmin.internal.state.parameters.fval; sigdigits=6),
             "  is_valid=", fits["jm_th_num"].fmin.internal.is_valid)
 
-    # (d) JuMinuit threaded AD
+    # (d) NativeMinuit threaded AD
     function build_jm_th_ad()
-        m = JuMinuit.Minuit(chi2_x3872, PAR0; error=ERRS,
+        m = NativeMinuit.Minuit(chi2_x3872, PAR0; error=ERRS,
                             grad = par -> ForwardDiff.gradient(chi2_x3872, par),
                             threaded_gradient=true)
-        JuMinuit.migrad!(m)
-        JuMinuit.hesse(m)
+        NativeMinuit.migrad!(m)
+        NativeMinuit.hesse(m)
         return m
     end
     r = time_runs(build_jm_th_ad; n_rounds=5)
@@ -264,11 +264,11 @@ minos_errs = Dict{String, Vector{Tuple{Float64,Float64}}}()  # (lower, upper) pe
 function run_minos_jm(label, build_fit)
     r = time_runs(function ()
         m = build_fit()
-        JuMinuit.minos!(m)
+        NativeMinuit.minos!(m)
         return m
     end; n_rounds=3)
     minos_times[label] = r
-    m = build_fit(); JuMinuit.minos!(m)
+    m = build_fit(); NativeMinuit.minos!(m)
     errs = [(m.minos_errors[i].lower, m.minos_errors[i].upper) for i in 1:length(PAR0)]
     minos_errs[label] = errs
     println("│  $label  minos: med=", fmt_ms(r.med),
@@ -331,11 +331,11 @@ mnc_pts = Dict{String, Vector{Tuple{Float64,Float64}}}()
 function run_mnc_jm(label, build_fit)
     r = time_runs(function ()
         m = build_fit()
-        JuMinuit.mncontour(m, MNC_P1, MNC_P2; numpoints=MNC_NPTS)
+        NativeMinuit.mncontour(m, MNC_P1, MNC_P2; numpoints=MNC_NPTS)
     end; n_rounds=3)
     mnc_times[label] = r
     m = build_fit()
-    pts = JuMinuit.mncontour(m, MNC_P1, MNC_P2; numpoints=MNC_NPTS)
+    pts = NativeMinuit.mncontour(m, MNC_P1, MNC_P2; numpoints=MNC_NPTS)
     mnc_pts[label] = pts
     println("│  $label  mncontour: med=", fmt_ms(r.med))
 end
@@ -404,7 +404,7 @@ end
 # Final summary table
 # ─────────────────────────────────────────────────────────────────────
 println("\n╔════════════════════════════════════════════════════════════════════════╗")
-println("║  X(3872) dip fit — JuMinuit vs IMinuit (median wall-time, n=3 params) ║")
+println("║  X(3872) dip fit — NativeMinuit vs IMinuit (median wall-time, n=3 params) ║")
 println("╠══════════════╦══════════════╦══════════════╦══════════════════════════╣")
 println("║  scheme      ║  migrad+hesse║  +minos(all) ║  mncontour(20 pts)       ║")
 println("╠══════════════╬══════════════╬══════════════╬══════════════════════════╣")

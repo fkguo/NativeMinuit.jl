@@ -73,7 +73,7 @@
 #     distance is ≤ `threshold`, then take connected components. `min_size`
 #     separates real sparse modes from stray noise points.
 #   • method=:dbscan (optional): density-based, handles arbitrary shapes +
-#     outliers. Provided by `ext/JuMinuitClusteringExt.jl` (weakdep
+#     outliers. Provided by `ext/NativeMinuitClusteringExt.jl` (weakdep
 #     `Clustering.jl`); errors with a helpful message if Clustering isn't
 #     loaded.
 #
@@ -436,7 +436,7 @@ function _warn_unclustered(Z::AbstractMatrix{Float64}, threshold::Float64,
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DBSCAN backend stub — concrete method added by ext/JuMinuitClusteringExt.jl
+# DBSCAN backend stub — concrete method added by ext/NativeMinuitClusteringExt.jl
 # when `using Clustering` is loaded. Calling :dbscan without it raises a
 # helpful error (see find_solution_modes). Signature:
 #   _dbscan_labels(Z::Matrix{Float64}, radius, min_neighbors, min_cluster_size)
@@ -885,7 +885,7 @@ function find_solution_modes(samples::AbstractMatrix, m::Minuit;
         if isempty(methods(_dbscan_labels))
             throw(ArgumentError(
                 "find_solution_modes: method=:dbscan requires the Clustering.jl " *
-                "extension — run `using Clustering` (alongside `using JuMinuit`) " *
+                "extension — run `using Clustering` (alongside `using NativeMinuit`) " *
                 "first, or use method=:components (the built-in, no-dependency " *
                 "clusterer)."))
         end

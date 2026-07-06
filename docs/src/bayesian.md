@@ -1,6 +1,6 @@
 # Bayesian posterior analysis
 
-JuMinuit turns a converged Minuit fit into a **posterior** —
+NativeMinuit turns a converged Minuit fit into a **posterior** —
 `prior × likelihood` sampled in the parameter space — without leaving the fit
 object and without re-specifying the model. It is the native-Julia analogue of
 the common *"MINUIT for the best fit, then an MCMC for the posterior"* approach
@@ -32,7 +32,7 @@ the faithful Minuit relation `-2 log L = fcn/up`. Keep `errordef` at its
 to widen a MINOS interval) tempers the posterior by the same `√up`; put extra
 information in the **prior**, not in `errordef`.
 
-A flat prior is flat in JuMinuit's **external** coordinates — a parameterization
+A flat prior is flat in NativeMinuit's **external** coordinates — a parameterization
 choice, not an "uninformative" / Jeffreys prior. Minuit `limits` are taken as
 physical posterior support (intersected with the prior support); if a limit was
 only there to stabilize the minimization, remove it and supply a proper prior.
@@ -40,7 +40,7 @@ only there to stabilize the minimization, remove it and supply a proper prior.
 ## One-line summary, and the posterior sample
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 report = bayesian(m; level = 0.6827)          # flat prior; m is left untouched
 report.summary                                 # per-parameter credible table
@@ -57,7 +57,7 @@ In the Gaussian, near-linear interior a flat-prior credible interval matches the
 HESSE error — confirming the method is calibrated.
 
 ```julia
-using JuMinuit, Statistics
+using NativeMinuit, Statistics
 xs   = range(0, 1; length = 25)
 data = 0.5 .+ 2.0 .* xs .+ 0.1 .* randn(length(xs))
 σ    = 0.1
@@ -74,7 +74,7 @@ The posterior is just a sample, so any picture follows directly — here the mar
 for `b` with its 68 % credible interval:
 
 ```@example bayesfig
-using JuMinuit, Plots, Random
+using NativeMinuit, Plots, Random
 gr()
 Random.seed!(1)
 xs = range(0, 1; length = 25)
@@ -96,7 +96,7 @@ the honest summary is a **credible upper limit** rather than a symmetric error
 (when the posterior mass sits *on* the limit, `boundary_active` flags it).
 
 ```julia
-using JuMinuit
+using NativeMinuit
 χ²(p) = ((p[1] + 0.3) / 0.5)^2                  # data prefer μ ≈ -0.3, but μ ≥ 0
 m = Minuit(χ², [0.1]; names = ["mu"], limits = [(0.0, nothing)])
 migrad!(m); hesse!(m)
@@ -108,7 +108,7 @@ ul.limit                                              # ≈ 0.65 (prior-dependen
 ul.boundary_active                                    # true ⇒ posterior mass piles at μ = 0
 ```
 
-`upper_limit` returns a [`CredibleLimit`](@ref JuMinuit.CredibleLimit) that
+`upper_limit` returns a [`CredibleLimit`](@ref NativeMinuit.CredibleLimit) that
 prints as `mu < … (90.0% Bayesian credible, prior=:flat)` — it carries the prior
 provenance and is explicitly *not* a CLs / Feldman–Cousins limit.
 
@@ -120,7 +120,7 @@ The frequentist treatment **profiles** `b` (MINOS); the Bayesian treatment
 **marginalizes** `b` (integrates it out).
 
 ```julia
-using JuMinuit
+using NativeMinuit
 obs, σ, b0, σb = 5.0, 0.3, 1.0, 0.1
 χ²(p) = ((obs - (p[1] + p[2])) / σ)^2 + ((p[2] - b0) / σb)^2   # s = p[1], b = p[2]
 m = Minuit(χ², [4.0, 1.0]; names = ["s", "b"]); migrad!(m); hesse!(m)
@@ -144,7 +144,7 @@ branching fractions near zero, and threshold-sensitive quantities. The posterior
 propagates them by **sample evaluation** — no delta method, no linearization.
 
 ```julia
-using JuMinuit, Statistics
+using NativeMinuit, Statistics
 # two yields y1, y2; we want the ratio R = y2 / y1
 χ²(p) = ((p[1] - 10.0) / 2.0)^2 + ((p[2] - 3.0) / 2.0)^2
 m = Minuit(χ², [10.0, 3.0]; names = ["y1", "y2"]); migrad!(m); hesse!(m)
@@ -155,7 +155,7 @@ Rlo, Rhi = derived_interval(post, p -> p[2] / p[1]; level = 0.6827)
 
 `derived_interval(post, f)` evaluates `f(θ_full)` on every kept sample and takes
 quantiles; the same ensemble also feeds [`quantile_band`](@ref
-JuMinuit.quantile_band) for a pointwise band of a whole model curve.
+NativeMinuit.quantile_band) for a pointwise band of a whole model curve.
 
 ## Example 5 — nuclear EFT: naturalness priors and a truncation band
 
@@ -166,7 +166,7 @@ coefficients with their priors, then read the **truncation error** as the poster
 of the first omitted term.
 
 ```julia
-using JuMinuit, Statistics
+using NativeMinuit, Statistics
 Λ = 0.6
 Qgrid = [0.10, 0.15, 0.20, 0.25, 0.30]
 Odata = [1.19, 1.31, 1.44, 1.59, 1.75]          # ≈ 1 + (Q/Λ) + (Q/Λ)^2
@@ -185,7 +185,7 @@ dob68 = quantile(abs.(randn(20_000)) .* (Q/Λ)^3, 0.68)   # |c₃|·(Q/Λ)³, 68
 ```
 
 This is the starting point; a full EFT analysis adds a theory-covariance / discrepancy
-term and a breakdown-scale hyperparameter — JuMinuit provides the `logprior` and the
+term and a breakdown-scale hyperparameter — NativeMinuit provides the `logprior` and the
 sampling to build that, it does not assume it for you.
 
 ## Example 6 — a published coupled-channel fit: the X(6200), and a near-unitary scattering length
@@ -206,7 +206,7 @@ start from the published best fit and its covariance, and propagate by
 sample evaluation:
 
 ```julia
-using JuMinuit, LinearAlgebra, Statistics
+using NativeMinuit, LinearAlgebra, Statistics
 
 # === two-channel amplitude (J/ψJ/ψ and ψ(2S)J/ψ), faithful to the PRL ===
 const mJ, mψ2, ħc = 3.0969, 3.686097, 0.197327          # masses (GeV), ħc (GeV·fm)
@@ -292,7 +292,7 @@ changes sign the X(6200) crosses between a *bound state* on sheet I and a
 resonance branch), and shows that the honest data-fit posterior is much broader (adding
 a causality prior leaves it essentially unchanged — physical curation is *not* what
 makes the published bars tight):
-[`BenchmarkExamples/X6200_double_jpsi`](https://github.com/fkguo/JuMinuit.jl/tree/main/BenchmarkExamples/X6200_double_jpsi).
+[`BenchmarkExamples/X6200_double_jpsi`](https://github.com/fkguo/NativeMinuit.jl/tree/main/BenchmarkExamples/X6200_double_jpsi).
 The sampler is **`:stretch`** because this χ² runs through complex logarithms and
 Riemann-sheet square roots and is *not* auto-differentiable — the gradient-free ensemble
 is the appropriate choice (see the table below).
@@ -334,7 +334,7 @@ FCN or a best fit sitting on a parameter limit.
 packages are present:
 
 ```julia
-using JuMinuit
+using NativeMinuit
 using AdvancedHMC, LogDensityProblems, LogDensityProblemsAD, TransformVariables, ForwardDiff
 post = posterior_sample(m; sampler = :nuts, prior = pr, seed = 1)
 ```
@@ -365,7 +365,7 @@ post.warnings                        # boundary pile-up, etc.
   report an upper/lower limit there, not a symmetric error.
 - If `minimum(post.ensemble.fvals) < post.ensemble.fbest`, the chain found a
   deeper minimum: re-minimize (see [`find_deeper_minimum`](@ref
-  JuMinuit.find_deeper_minimum)) before quoting anything.
+  NativeMinuit.find_deeper_minimum)) before quoting anything.
 
 See the [API reference](api.md) (the "Bayesian posterior analysis" section) for the
 full symbol list, and the [error-analysis guide](error_analysis.md) for how this

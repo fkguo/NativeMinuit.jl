@@ -86,7 +86,7 @@ function initial_gradient!(
         # NOTE — known limitation: C++ InitialGradientCalculator.cxx:66-69
         # clamps `gstep > 0.5` for parameters with limits, to keep the
         # finite-difference step inside the sin/sqrt transform's locally
-        # linear region. JuMinuit doesn't thread `has_limits[]` through
+        # linear region. NativeMinuit doesn't thread `has_limits[]` through
         # `seed_state`, so the clamp isn't applied. Dormant for typical
         # use because `gstep = 0.1·dirin` with `dirin ≤ 5` keeps gstep
         # under the threshold; would matter if a user supplied huge
@@ -164,7 +164,7 @@ per-coordinate iterative step refinement. Mirrors
 
 The C++ `HasLimits()` clamp at lines 136-139 (`step > 0.5 → step = 0.5`
 when the parameter has limits) is intentionally not implemented in
-JuMinuit. See the inline "NOTE — known limitation" comment in the
+NativeMinuit. See the inline "NOTE — known limitation" comment in the
 body for the rationale. Dormant for typical fits because `step` is
 bounded by `10·gstep` and our `gstep ≈ 0.1·dirin` keeps it under the
 0.5 threshold for reasonable user-supplied step sizes.

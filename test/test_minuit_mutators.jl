@@ -142,7 +142,7 @@
         # where its Sin-transform internal gradient → 0 — leaves x2 ~3.8e-4
         # short of 2.0. iminuit 2.32.0 (Strategy 1) lands at the IDENTICAL
         # value 2.0003789700 (verified). The old atol=1e-4 was tuned to
-        # JuMinuit's pre-fix bare-eps over-tightness (audit §14 fix
+        # NativeMinuit's pre-fix bare-eps over-tightness (audit §14 fix
         # feat/precision-eps-x4 makes eps2 match C++/iminuit).
         @test m.values[2] ≈ 2.0 atol = 1e-3   # ≡ iminuit's 2.00037897
 

@@ -1,6 +1,6 @@
 # Upstream C++ Minuit2 reference
 
-JuMinuit.jl is a port of the C++ Minuit2 library. The canonical reference
+NativeMinuit.jl is a port of the C++ Minuit2 library. The canonical reference
 checkout is mirrored locally at `reference/Minuit2_cpp/` (gitignored, see
 `.gitignore`) and pinned to:
 

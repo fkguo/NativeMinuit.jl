@@ -2,7 +2,7 @@
 """
 Python iminuit wall-time benchmark: MIGRAD + MINOS + MNCONTOUR.
 
-Mirrors the JuMinuit + C++ Minuit2 benchmark FCNs (rosenbrock_2d,
+Mirrors the NativeMinuit + C++ Minuit2 benchmark FCNs (rosenbrock_2d,
 rosenbrock_10d, quad_4d, gauss_ll_2_100, gauss_ll_10_1000) so the
 three implementations can be compared head-to-head.
 

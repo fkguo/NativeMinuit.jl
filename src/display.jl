@@ -3,7 +3,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # display.jl — Jupyter-first rich output for `Minuit`.
 #
-# JuMinuit is used mainly from Jupyter/Pluto, so the `text/html` repr is a
+# NativeMinuit is used mainly from Jupyter/Pluto, so the `text/html` repr is a
 # primary UX surface. This file holds the building blocks the `show`
 # methods (in minuit.jl) assemble:
 #
@@ -17,7 +17,7 @@
 #
 # These are inspired by Python iminuit's repr but go beyond it (merged
 # value±error column, heatmap, χ²/ndf p-value, LaTeX). The `show` methods
-# call into here; everything is defined in the JuMinuit module namespace.
+# call into here; everything is defined in the NativeMinuit module namespace.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Low-level number formatting ──────────────────────────────────────────────

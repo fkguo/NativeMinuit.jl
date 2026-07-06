@@ -14,7 +14,7 @@
 # - For ForwardDiff users:
 #     using ForwardDiff
 #     migrad(cf, x0, errs; gradient = x -> ForwardDiff.gradient(cf.f, x))
-#   `ForwardDiff` is NOT a hard dependency — JuMinuit just calls
+#   `ForwardDiff` is NOT a hard dependency — NativeMinuit just calls
 #   `gradient_fn(x)` and expects a `Vector{Float64}` (or convertible).
 # - g2 + gstep companions are filled via the cheap `InitialGradientCalculator`
 #   convention (parameters' initial step sizes); C++
@@ -116,11 +116,11 @@ ngrad_calls(cf::CostFunctionWithGradient) = cf.ngrad[]
 # CostFunctionAD — convenience factory backed by Package Extensions.
 #
 # Defined here as a stub `function CostFunctionAD end`. Actual methods
-# are added at load time by `ext/JuMinuitForwardDiffExt.jl` when the
-# user has `using ForwardDiff` loaded alongside `using JuMinuit`.
+# are added at load time by `ext/NativeMinuitForwardDiffExt.jl` when the
+# user has `using ForwardDiff` loaded alongside `using NativeMinuit`.
 #
 # Usage:
-#     using JuMinuit, ForwardDiff   # extension auto-activates
+#     using NativeMinuit, ForwardDiff   # extension auto-activates
 #     cf = CostFunctionAD(my_chi2, 1.0)
 #     # equivalent to:
 #     cf = CostFunctionWithGradient(my_chi2,
@@ -145,7 +145,7 @@ Wrap a user FCN `f(x::AbstractVector{<:Real})::Real` into a
 [`CostFunctionWithGradient`](@ref) whose gradient is computed via
 `ForwardDiff.gradient(f, x)`.
 
-**Requires `using ForwardDiff`** alongside `using JuMinuit` (Julia 1.9+
+**Requires `using ForwardDiff`** alongside `using NativeMinuit` (Julia 1.9+
 package extension). Without ForwardDiff loaded, calling this throws an
 informative error.
 
@@ -174,7 +174,7 @@ informative error.
 # Examples
 
 ```julia
-using JuMinuit, ForwardDiff
+using NativeMinuit, ForwardDiff
 chi2(par) = sum((data .- model.(x_data, Ref(par))).^2 ./ errors.^2)
 cf = CostFunctionAD(chi2, 1.0)
 fmin = migrad(cf, x0, errs)
@@ -193,15 +193,15 @@ This factory is the visible end of that capability.
 function CostFunctionAD end
 
 # Fallback when the ForwardDiff extension is NOT loaded. The real method
-# (`JuMinuit.CostFunctionAD(f, up::Real=1.0; …)`, ext/JuMinuitForwardDiffExt.jl)
+# (`NativeMinuit.CostFunctionAD(f, up::Real=1.0; …)`, ext/NativeMinuitForwardDiffExt.jl)
 # is strictly more specific, so it wins whenever ForwardDiff is loaded; this
 # catch-all only fires without the extension, turning a bare `MethodError` into
 # the actionable guidance the docstring promises.
 function CostFunctionAD(args...; kwargs...)
-    if Base.get_extension(@__MODULE__, :JuMinuitForwardDiffExt) === nothing
+    if Base.get_extension(@__MODULE__, :NativeMinuitForwardDiffExt) === nothing
         throw(ArgumentError(
             "CostFunctionAD requires the ForwardDiff extension — run " *
-            "`using ForwardDiff` alongside `using JuMinuit` to enable it."))
+            "`using ForwardDiff` alongside `using NativeMinuit` to enable it."))
     end
     # Extension loaded but no method matched these argument types.
     throw(MethodError(CostFunctionAD, args))
@@ -300,7 +300,7 @@ the user/AD-supplied gradient component-wise. C++ uses a
 `HessianGradientCalculator` at `MnStrategy(2)`, whose `DeltaGradient`
 returns both the numerically-refined gradient and a per-component
 uncertainty `dgrd[i] = max(dgmin, |grdold − grdnew|)`; a component is
-flagged when `|numerical[i] − user[i]| > dgrd[i]`. JuMinuit already
+flagged when `|numerical[i] − user[i]| > dgrd[i]`. NativeMinuit already
 ports `DeltaGradient` as [`hessian_gradient`](@ref), so this reuses it
 verbatim.
 
@@ -311,7 +311,7 @@ returns, matching C++'s
 
 **Action on disagreement:** C++ warns per component, then `assert(good)`
 (a no-op in release / iminuit builds; an abort only in debug builds).
-JuMinuit **warns and continues** — a wrong user gradient should be
+NativeMinuit **warns and continues** — a wrong user gradient should be
 reported, never crash the fit (matching the release-build behavior).
 Returns `true` when the gradient agrees within tolerance.
 

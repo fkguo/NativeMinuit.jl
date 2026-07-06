@@ -17,14 +17,14 @@
 # Local mean (avoid a Statistics test-dep that isn't in the test target).
 _mean(v) = sum(v) / length(v)
 
-# ForwardDiff (a JuMinuit dependency, in the test target) for the binned-cost
+# ForwardDiff (a NativeMinuit dependency, in the test target) for the binned-cost
 # auto-differentiability regression below.
 import ForwardDiff
 
 @testset "cost_functions.jl — Julia-native cost family" begin
 
     # Shared fixtures ----------------------------------------------------
-    # Linear model in the JuMinuit/IMinuit.jl convention model(x, par).
+    # Linear model in the NativeMinuit/IMinuit.jl convention model(x, par).
     linmodel(x, p) = p[1] * x + p[2]
     # Gaussian pdf, p = [μ, σ]; positive everywhere, analytically normalised.
     _inv_sqrt2pi = 1 / sqrt(2π)
@@ -211,7 +211,7 @@ import ForwardDiff
         @test s isa CostSum
         @test parameter_names(s) == [:a, :b, :mu, :sig]
         @test errordef(s) === 1.0          # χ² common scale
-        @test JuMinuit._cost_ndata(s) == 5 + length(gsamp)
+        @test NativeMinuit._cost_ndata(s) == 5 + length(gsamp)
 
         # FCN = Σ c_k(sub_k)/errordef(c_k): LSQ unchanged, NLL doubled.
         par = [1.9, 1.05, 0.1, 0.7]

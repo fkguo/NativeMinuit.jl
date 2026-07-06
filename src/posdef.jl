@@ -189,7 +189,7 @@ set `true`), or n=1 was already `> eps` so `S` is left untouched. The caller
 owns the `dcovar`/`status` bookkeeping (see `hesse`).
 
 Only the `:U` (upper) triangle of `S` is read or written, matching the
-JuMinuit storage convention; the lower triangle of `p_buf` is never
+NativeMinuit storage convention; the lower triangle of `p_buf` is never
 read, so a reused `p_buf` need not be zeroed.
 """
 function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},

@@ -15,12 +15,12 @@
 # ±90°); δ₁¹/δ₀² use the package's continuity-aware functions.
 #
 # Run: julia --project=. BenchmarkExamples/IAM_2Pformfactor/plot_fits_vs_data.jl
-#      (needs CSV/DataFrames/StaticArrays/QuadGK/Plots/LaTeXStrings + JuMinuit)
+#      (needs CSV/DataFrames/StaticArrays/QuadGK/Plots/LaTeXStrings + NativeMinuit)
 
 using LinearAlgebra, Printf
 const IAM_DIR = @__DIR__
 cd(IAM_DIR)
-using CSV, DataFrames, StaticArrays, QuadGK, JuMinuit
+using CSV, DataFrames, StaticArrays, QuadGK, NativeMinuit
 using Plots, LaTeXStrings
 gr(); default(framestyle = :box, minorticks = 5, fg_color_legend = :lightgray, guidefontsize = 11)
 
@@ -36,7 +36,7 @@ for f in ("init_const.jl","amplitudes.jl","tmatrix.jl","unitarity_modification.j
 end
 const lecr0 = [0.56e-3, 1.21e-3, -2.79e-3, -0.36e-3, 1.4e-3, 0.07e-3, -0.44e-3, 0.78e-3]
 const L6FIX = [false,false,false,false,false,true,false,false]
-_load(f)=JuMinuit.Data(DataFrame(CSV.File(f,header=[:w,:δ,:err],delim=' ',ignorerepeated=true)))
+_load(f)=NativeMinuit.Data(DataFrame(CSV.File(f,header=[:w,:δ,:err],delim=' ',ignorerepeated=true)))
 const d00=_load("./datajl/pipi/pipi00_Roy-GKPY_PRD83_074004.dat")
 const d11=_load("./datajl/pipi/pipi11_Roy-GKPY_PRD83_074004.dat")
 const d20=_load("./datajl/pipi/pipi20_Roy-GKPY_PRD83_074004.dat")

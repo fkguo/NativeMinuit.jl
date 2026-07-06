@@ -826,7 +826,7 @@ end
 [`get_contours_samples`](@ref): one row per kept set, one column per free
 parameter (named after the parameters), plus a `:delta_chisq` column with
 each set's true Δχ². Requires `using DataFrames` (provided by the
-`JuMinuitDataFramesExt` package extension).
+`NativeMinuitDataFramesExt` package extension).
 
 Accepts all [`get_contours_samples`](@ref) keyword arguments.
 """

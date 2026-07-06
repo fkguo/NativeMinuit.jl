@@ -5,15 +5,15 @@
 # here; a load or API error FAILS the suite (it is not silently skipped) so CI
 # catches a broken extension.
 
-using JuMinuit
+using NativeMinuit
 using Test
 using Statistics
 using Random
 using AdvancedHMC, LogDensityProblems, LogDensityProblemsAD, TransformVariables, ForwardDiff
 
 @testset "NUTS posterior sampler (AdvancedHMC extension)" begin
-    @test Base.get_extension(JuMinuit, :JuMinuitAdvancedHMCExt) !== nothing
-    @test isdefined(JuMinuit, :_posterior_sample_nuts)
+    @test Base.get_extension(NativeMinuit, :NativeMinuitAdvancedHMCExt) !== nothing
+    @test isdefined(NativeMinuit, :_posterior_sample_nuts)
 
     @testset "unbounded posterior recovery" begin
         f(x) = ((x[1] - 1.0) / 0.5)^2 + ((x[2] + 0.5) / 0.3)^2

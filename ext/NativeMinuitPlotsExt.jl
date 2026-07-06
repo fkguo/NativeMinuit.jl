@@ -1,21 +1,21 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JuMinuitPlotsExt — Plots.jl-based visualization helpers.
+# NativeMinuitPlotsExt — Plots.jl-based visualization helpers.
 #
 # Activated automatically when the user has `using Plots` loaded
-# alongside `using JuMinuit`. Provides Julia equivalents of IMinuit.jl's
+# alongside `using NativeMinuit`. Provides Julia equivalents of IMinuit.jl's
 # `draw_contour`, `draw_mncontour`, `draw_profile`, `draw_mnprofile`,
 # `draw_mnmatrix` (which depend on Python matplotlib).
 #
-# All these functions return Plots.Plot objects. The JuMinuit core
+# All these functions return Plots.Plot objects. The NativeMinuit core
 # package declares the function names via `function draw_X end` stubs
 # in `iminuit_compat.jl`; this extension adds the methods on Minuit.
 # ─────────────────────────────────────────────────────────────────────────────
 
-module JuMinuitPlotsExt
+module NativeMinuitPlotsExt
 
-using JuMinuit
+using NativeMinuit
 using Plots
 
 """
@@ -27,13 +27,13 @@ Filled-contour plot of the FCN **grid slice** from
 fixes the other parameters; see `contour_grid`). `bins` is accepted as a
 legacy alias for `size`. The `kws...` flow through to `Plots.plot(...)`.
 """
-function JuMinuit.draw_contour(m::JuMinuit.Minuit, par1, par2;
+function NativeMinuit.draw_contour(m::NativeMinuit.Minuit, par1, par2;
                                  size::Integer = 50,
                                  bound = 2,
                                  bins::Union{Integer,Nothing} = nothing,
                                  kws...)
     sz = bins === nothing ? size : Int(bins)
-    g = JuMinuit.contour_grid(m, par1, par2;
+    g = NativeMinuit.contour_grid(m, par1, par2;
                                size = sz, bound = bound, subtract_min = true)
     return Plots.plot(g; kws...)
 end
@@ -51,7 +51,7 @@ may be a vector to overlay several contours (mirrors iminuit's
 (≤ 0.4 this drew the fast `contour_ellipse` approximation at Δχ²=up
 instead — fixed.)
 """
-function JuMinuit.draw_mncontour(m::JuMinuit.Minuit, par1, par2;
+function NativeMinuit.draw_mncontour(m::NativeMinuit.Minuit, par1, par2;
                                   numpoints::Integer = 100,
                                   cl = nothing,
                                   nsigma::Union{Real,Nothing} = nothing,
@@ -59,19 +59,19 @@ function JuMinuit.draw_mncontour(m::JuMinuit.Minuit, par1, par2;
     cls = cl === nothing ?
             (nsigma === nothing ? [0.68] : [Float64(nsigma)]) :
             (cl isa Real ? [Float64(cl)] : collect(Float64, cl))
-    ix = par1 isa Integer ? Int(par1) : JuMinuit.ext_index(m.params, String(par1))
-    iy = par2 isa Integer ? Int(par2) : JuMinuit.ext_index(m.params, String(par2))
+    ix = par1 isa Integer ? Int(par1) : NativeMinuit.ext_index(m.params, String(par1))
+    iy = par2 isa Integer ? Int(par2) : NativeMinuit.ext_index(m.params, String(par2))
     plt = Plots.plot(; xlabel = m.params.pars[ix].name,
                        ylabel = m.params.pars[iy].name, kws...)
     for c in cls
-        pts = JuMinuit.mncontour(m, par1, par2; numpoints = numpoints, cl = c)
+        pts = NativeMinuit.mncontour(m, par1, par2; numpoints = numpoints, cl = c)
         xs = [p[1] for p in pts]
         ys = [p[2] for p in pts]
         if !isempty(xs)         # close the boundary polygon
             push!(xs, xs[1])
             push!(ys, ys[1])
         end
-        prob = c >= 1 ? JuMinuit.chisq_cl(c^2, 1) : c    # nσ → probability
+        prob = c >= 1 ? NativeMinuit.chisq_cl(c^2, 1) : c    # nσ → probability
         Plots.plot!(plt, xs, ys;
                      label = string(round(100 * prob; digits = 1), "% CL"))
     end
@@ -84,11 +84,11 @@ end
 Plot the 1D scan from `profile(m, par)`. No inner minimization (use
 `draw_mnprofile` for the MINOS-style profile).
 """
-function JuMinuit.draw_profile(m::JuMinuit.Minuit, par;
+function NativeMinuit.draw_profile(m::NativeMinuit.Minuit, par;
                                 bins::Integer = 100,
                                 low::Real = 0, high::Real = 0,
                                 kws...)
-    pts = JuMinuit.profile(m, par; bins = bins, low = low, high = high)
+    pts = NativeMinuit.profile(m, par; bins = bins, low = low, high = high)
     # Drop the central probe (first element) — it's redundant with the
     # equally-spaced grid that follows.
     xs = [p[1] for p in pts[2:end]]
@@ -105,11 +105,11 @@ end
 Plot the 1D MINOS profile from `mnprofile(m, par)` (inner minimization
 at each grid point).
 """
-function JuMinuit.draw_mnprofile(m::JuMinuit.Minuit, par;
+function NativeMinuit.draw_mnprofile(m::NativeMinuit.Minuit, par;
                                   bins::Integer = 30,
                                   low::Real = 0, high::Real = 0,
                                   kws...)
-    pts = JuMinuit.mnprofile(m, par; bins = bins, low = low, high = high)
+    pts = NativeMinuit.mnprofile(m, par; bins = bins, low = low, high = high)
     xs = [p[1] for p in pts]
     ys = [p[2] for p in pts]
     return Plots.plot(xs, ys;
@@ -126,12 +126,12 @@ gets one sub-plot; the diagonal shows the 1D MINOS profile. Mirrors
 iminuit's `m.draw_mnmatrix()`. `cl` follows `mncontour`'s iminuit
 semantics (default → joint 2-D 68 % region per pair).
 """
-function JuMinuit.draw_mnmatrix(m::JuMinuit.Minuit;
+function NativeMinuit.draw_mnmatrix(m::NativeMinuit.Minuit;
                                  numpoints::Integer = 100,
                                  cl::Union{Real,Nothing} = nothing,
                                  kws...)
-    n = JuMinuit.n_pars(m.params)
-    free_idx = [i for i in 1:n if !JuMinuit.is_fixed(m.params.pars[i])]
+    n = NativeMinuit.n_pars(m.params)
+    free_idx = [i for i in 1:n if !NativeMinuit.is_fixed(m.params.pars[i])]
     k = length(free_idx)
     k >= 2 ||
         throw(ArgumentError("draw_mnmatrix needs ≥ 2 free parameters (got $k)"))
@@ -140,7 +140,7 @@ function JuMinuit.draw_mnmatrix(m::JuMinuit.Minuit;
     for ii in 1:k, jj in 1:k
         i, j = free_idx[ii], free_idx[jj]
         if i == j
-            pts = JuMinuit.mnprofile(m, i; bins = 30)
+            pts = NativeMinuit.mnprofile(m, i; bins = 30)
             xs = [p[1] for p in pts]
             ys = [p[2] for p in pts]
             push!(plots, Plots.plot(xs, ys;
@@ -151,8 +151,8 @@ function JuMinuit.draw_mnmatrix(m::JuMinuit.Minuit;
             # Exact MINOS boundary per pair (iminuit's draw_mnmatrix uses
             # mncontour; ≤ 0.4 this drew the ellipse approximation — fixed).
             pts = cl === nothing ?
-                JuMinuit.mncontour(m, i, j; numpoints = numpoints) :
-                JuMinuit.mncontour(m, i, j; numpoints = numpoints, cl = cl)
+                NativeMinuit.mncontour(m, i, j; numpoints = numpoints) :
+                NativeMinuit.mncontour(m, i, j; numpoints = numpoints, cl = cl)
             xs = [p[1] for p in pts]
             ys = [p[2] for p in pts]
             if !isempty(xs)
@@ -167,4 +167,4 @@ function JuMinuit.draw_mnmatrix(m::JuMinuit.Minuit;
     return Plots.plot(plots...; layout = (k, k), kws...)
 end
 
-end # module JuMinuitPlotsExt
+end # module NativeMinuitPlotsExt

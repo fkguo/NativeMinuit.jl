@@ -457,7 +457,7 @@ function simplex(
     # so the verdict came out `is_valid = true` with `fval = NaN` (same
     # hole as `_migrad_loop`'s verdict, handoff F7). iminuit 2.31
     # observable for the same FCN under `m.simplex()`: fval=nan,
-    # valid=False (surfaced there via is_above_max_edm; JuMinuit reports
+    # valid=False (surfaced there via is_above_max_edm; NativeMinuit reports
     # the explicit `nonfinite_fval` reason, exactly like MIGRAD).
     nonfinite_final = !isfinite(ybar)
     is_valid = !fcn_limit && !above_max_edm && !nonfinite_final

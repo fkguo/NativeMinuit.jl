@@ -6,10 +6,10 @@
 #   parameter, so it is dropped (was the vestigial flat 9th param).
 #
 # Reports S=0/1/2 fval/valid (single-shot iterate=1 AND default retry iterate=5)
-# for BOTH JuMinuit (native) and iminuit (PyCall), plus a default-config
+# for BOTH NativeMinuit (native) and iminuit (PyCall), plus a default-config
 # (S=1 + retry) migrad+hesse timing. Same cold seed & FCN as bench_full.jl.
 #
-# Run in a throwaway env (the repo `scripts` env can't resolve — JuMinuit/IMinuit
+# Run in a throwaway env (the repo `scripts` env can't resolve — NativeMinuit/IMinuit
 # unregistered + Manifest gitignored). From the repo root:
 #   E=/tmp/iamsweep; mkdir -p $E
 #   julia --project=$E -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.add(["PyCall","CSV","DataFrames","StaticArrays","QuadGK","Interpolations"])'
@@ -22,7 +22,7 @@ const IAM_DIR = @__DIR__
 cd(IAM_DIR)
 
 using CSV, DataFrames, StaticArrays, QuadGK, Interpolations
-using JuMinuit
+using NativeMinuit
 using PyCall
 
 # ---- IAM model setup ----
@@ -51,10 +51,10 @@ include(joinpath(IAM_DIR, "src", "phaseshifts.jl"))
 # (this is a ππ-only fit). L6 is fixed below (2L6+L8 degeneracy — see the paper).
 const lecr0 = [0.56e-3, 1.21e-3, -2.79e-3, -0.36e-3, 1.4e-3, 0.07e-3, -0.44e-3, 0.78e-3]
 const paras0 = collect(lecr0)
-data00 = JuMinuit.Data(DataFrame(CSV.File("./datajl/pipi/pipi00_Roy-GKPY_PRD83_074004.dat", header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
-data11 = JuMinuit.Data(DataFrame(CSV.File("./datajl/pipi/pipi11_Roy-GKPY_PRD83_074004.dat", header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
-data20 = JuMinuit.Data(DataFrame(CSV.File("./datajl/pipi/pipi20_Roy-GKPY_PRD83_074004.dat", header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
-function chisq_ps(dist::Function, data::JuMinuit.Data, par; fitrange=())
+data00 = NativeMinuit.Data(DataFrame(CSV.File("./datajl/pipi/pipi00_Roy-GKPY_PRD83_074004.dat", header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
+data11 = NativeMinuit.Data(DataFrame(CSV.File("./datajl/pipi/pipi11_Roy-GKPY_PRD83_074004.dat", header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
+data20 = NativeMinuit.Data(DataFrame(CSV.File("./datajl/pipi/pipi20_Roy-GKPY_PRD83_074004.dat", header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
+function chisq_ps(dist::Function, data::NativeMinuit.Data, par; fitrange=())
     fitrange = (isempty(fitrange) ? (1:data.ndata) : fitrange)
     res = 0.0
     @inbounds for i = fitrange[1]:fitrange[end]
@@ -103,17 +103,17 @@ function im_default()
     return (Float64(res[1]), Bool(res[2]))
 end
 
-# ---- JuMinuit (native); L6 fixed ----
+# ---- NativeMinuit (native); L6 fixed ----
 function jm_run(S, iter)
-    m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0, strategy=S)
-    JuMinuit.fix!(m, L6IDX)
-    JuMinuit.migrad!(m; iterate=iter)
+    m = NativeMinuit.Minuit(chi2_iam, paras0; error=errs0, strategy=S)
+    NativeMinuit.fix!(m, L6IDX)
+    NativeMinuit.migrad!(m; iterate=iter)
     return (m.fmin.internal.state.parameters.fval, m.fmin.internal.is_valid)
 end
 function jm_default()
-    m = JuMinuit.Minuit(chi2_iam, paras0; error=errs0)   # default S=1
-    JuMinuit.fix!(m, L6IDX)
-    JuMinuit.migrad!(m); JuMinuit.hesse(m)
+    m = NativeMinuit.Minuit(chi2_iam, paras0; error=errs0)   # default S=1
+    NativeMinuit.fix!(m, L6IDX)
+    NativeMinuit.migrad!(m); NativeMinuit.hesse(m)
     return m
 end
 
@@ -133,7 +133,7 @@ say("="^80)
 jm_run(1, 1); im_run(1, 1)
 
 say("")
-say(@sprintf("%-28s | %-26s | %-26s", "config", "JuMinuit (fval, valid)", "iminuit (fval, valid)"))
+say(@sprintf("%-28s | %-26s | %-26s", "config", "NativeMinuit (fval, valid)", "iminuit (fval, valid)"))
 say("-"^84)
 for (label, iter) in (("single-shot (iterate=1)", 1), ("default retry (iterate=5)", 5))
     say("$label:")
@@ -154,7 +154,7 @@ imr = im_default()
 im_t = minimum([(GC.gc(); @elapsed im_default()) for _ in 1:3])
 say("")
 say("default S=1 + retry, migrad+hesse (min of 3 rounds):")
-say(@sprintf("  JuMinuit : %7.2f s   fval=%.4f  valid=%s", jm_t, jm_fv, string(jm_vd)))
+say(@sprintf("  NativeMinuit : %7.2f s   fval=%.4f  valid=%s", jm_t, jm_fv, string(jm_vd)))
 say(@sprintf("  iminuit  : %7.2f s   fval=%.4f  valid=%s", im_t, Float64(imr[1]), string(Bool(imr[2]))))
 say("")
 say("DONE")

@@ -23,7 +23,7 @@
 # Phase 0 first cut benchmarks only MIGRAD wall time (Criterion 2).
 # The C++ comparison driver is `benchmark/compare_cpp.jl` (separate).
 
-using JuMinuit
+using NativeMinuit
 using Random
 
 # Lock RNG so the Gauss-LL benchmarks are reproducible across runs

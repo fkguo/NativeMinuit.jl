@@ -86,16 +86,16 @@
         # the low-level (fmin, cf) and the Minuit-level signatures.
         cf = CostFunction(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2)
         fmin = migrad(cf, [0.0, 0.0], [0.1, 0.1])
-        ce_dep = JuMinuit.contour(fmin, cf, 1, 2; npoints = 8)
+        ce_dep = NativeMinuit.contour(fmin, cf, 1, 2; npoints = 8)
         ce_new = contour_ellipse(fmin, cf, 1, 2; npoints = 8)
         @test ce_dep isa ContoursError
         @test ce_dep.points == ce_new.points
-        @test :contour ∉ names(JuMinuit)   # not exported (collision fix)
+        @test :contour ∉ names(NativeMinuit)   # not exported (collision fix)
 
         m = Minuit(p -> (p[1] - 1.0)^2 + (p[2] - 2.0)^2, [0.0, 0.0];
                    names = ["x", "y"])
         migrad!(m)
-        cm_dep = JuMinuit.contour(m, 1, 2; npoints = 8)
+        cm_dep = NativeMinuit.contour(m, 1, 2; npoints = 8)
         cm_new = contour_ellipse(m, "x", "y"; npoints = 8)
         @test cm_dep.points == cm_new.points
     end
@@ -154,7 +154,7 @@ end
         # …while the PROFILE extent at Δχ²=1 (the C++ MnContours curve,
         # cl = chisq_cl(1,2) ≈ 0.3935 in mncontour's joint-cl language) is
         # the marginal σ_x ≈ 2.294:
-        pts = mncontour(m, "x", "y"; numpoints = 16, cl = JuMinuit.chisq_cl(1.0, 2))
+        pts = mncontour(m, "x", "y"; numpoints = 16, cl = NativeMinuit.chisq_cl(1.0, 2))
         xprof = maximum(abs(p[1] - m.values[1]) for p in pts)
         @test xprof ≈ sqrt(1 / 0.19) rtol = 0.02
         # the slice is ≈ √(1−ρ²) = 0.436 of the profile — far tighter

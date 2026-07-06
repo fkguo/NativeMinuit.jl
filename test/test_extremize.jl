@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-using JuMinuit
+using NativeMinuit
 using Test
 using LinearAlgebra
 using Logging
@@ -230,7 +230,7 @@ end
     #   anchor's corridor.
     anchor = [1.0, 1.0]
     pout = fill(-(_ex_edge_out + 1e-3), 2)        # outer edge, slightly outside
-    proj = JuMinuit._project_to_bound(_ex_chi2c, pout, anchor, 1.0)
+    proj = NativeMinuit._project_to_bound(_ex_chi2c, pout, anchor, 1.0)
     @test proj !== nothing
     @test proj.fcn <= 1.0
     @test 1.0 - proj.fcn < 1e-3                   # ON the boundary, not interior
@@ -238,7 +238,7 @@ end
     @test _ex_chi2c(proj.θ) == proj.fcn
     pin = fill(-(_ex_edge_in - 1e-3), 2)          # inner edge, slightly outside
     @test _ex_chi2c(pin) > 1.0                    # (sanity: genuinely infeasible)
-    @test JuMinuit._project_to_bound(_ex_chi2c, pin, anchor, 1.0) === nothing
+    @test NativeMinuit._project_to_bound(_ex_chi2c, pin, anchor, 1.0) === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

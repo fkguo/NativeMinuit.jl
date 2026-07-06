@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
-# Build the JuMinuit C++ reference-data harness.
+# Build the NativeMinuit C++ reference-data harness.
 #
 # Uses add_subdirectory against the pinned C++ Minuit2 standalone at
 # ../reference/Minuit2_cpp (GooFit/Minuit2 @ 57dc936, v6.24.0).
@@ -12,7 +12,7 @@
 #   ./cpp_trace_harness ../../test/reference_data/
 
 cmake_minimum_required(VERSION 3.15)
-project(juminuit_reference_harness LANGUAGES CXX)
+project(nativeminuit_reference_harness LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

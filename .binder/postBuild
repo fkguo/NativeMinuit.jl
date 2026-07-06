@@ -4,12 +4,12 @@
 #
 # repo2docker sets JULIA_PROJECT=${REPO_DIR}/.binder and runs this from the
 # repo root. We:
-#   1. Pkg.develop the in-repo (unregistered) JuMinuit into the .binder env.
+#   1. Pkg.develop the in-repo (unregistered) NativeMinuit into the .binder env.
 #   2. Build PyCall against a Julia-private Conda Python so notebooks that
 #      still use PyPlot pull in their own matplotlib (no reliance on the base
 #      image's Python). IAM_2Pformfactor intentionally uses GR instead.
 #   3. Force headless-safe plotting settings for Binder.
-#   4. Precompile, and install a FIXED-name kernel `julia-juminuit` that
+#   4. Precompile, and install a FIXED-name kernel `julia-nativeminuit` that
 #      points explicitly at the .binder env — so a notebook sitting next to
 #      its own Project.toml (e.g. IAM_2Pformfactor/Project.toml) cannot
 #      hijack the package environment via `@.` resolution.
@@ -18,8 +18,8 @@ set -e
 julia -e '
 using Pkg
 binder = ENV["JULIA_PROJECT"]      # ${REPO_DIR}/.binder (set by repo2docker)
-repo   = dirname(binder)            # ${REPO_DIR} — the JuMinuit package root
-@info "postBuild: developing JuMinuit" repo binder
+repo   = dirname(binder)            # ${REPO_DIR} — the NativeMinuit package root
+@info "postBuild: developing NativeMinuit" repo binder
 
 ENV["MPLBACKEND"] = "Agg"
 ENV["GKSwstype"] = "100"
@@ -37,11 +37,11 @@ Pkg.precompile()
 # Stable, version-independent kernel name that the notebooks reference.
 using IJulia
 kp = installkernel(
-    "Julia JuMinuit",
+    "Julia NativeMinuit",
     "--project=" * binder;
     env = Dict("MPLBACKEND" => "Agg", "GKSwstype" => "100"),
 )
-fixed = joinpath(dirname(kp), "julia-juminuit")
+fixed = joinpath(dirname(kp), "julia-nativeminuit")
 rm(fixed; force = true, recursive = true)
 cp(kp, fixed)
 @info "postBuild: installed kernel" kp fixed

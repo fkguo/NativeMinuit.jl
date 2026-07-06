@@ -34,7 +34,7 @@
 # reverse passes (keeping the better envelope), and a "band contains the
 # best fit" guarantee that holds by construction (θ̂ is in the region).
 #
-# This file is JuMinuit-native functionality (iminuit has no equivalent —
+# This file is NativeMinuit-native functionality (iminuit has no equivalent —
 # its `util.propagate` is first-order linear propagation only); the
 # `cl`/`delta_chisq` conventions match the rest of the package.
 

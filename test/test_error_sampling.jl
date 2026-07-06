@@ -3,13 +3,13 @@
 # Tests for sampling-based / contour error analysis (src/error_sampling.jl
 # + the contour full_points addition in src/contours.jl).
 
-using JuMinuit
+using NativeMinuit
 using Test
 using LinearAlgebra
 using Logging
 using Random
 
-const _MC = JuMinuit   # internal-symbol access (`JuMinuit._mc_chisq_region`)
+const _MC = NativeMinuit   # internal-symbol access (`NativeMinuit._mc_chisq_region`)
 
 # Local sample covariance (columns = variables) — avoids a Statistics
 # test-dependency just for one assertion.
@@ -109,7 +109,7 @@ end
         @test isempty(contour_parameter_sets(ce_ell))
 
         # Backward-compatible 7-arg constructor still works (full_points empty).
-        ce7 = JuMinuit.ContoursError(1, 2, Tuple{Float64,Float64}[],
+        ce7 = NativeMinuit.ContoursError(1, 2, Tuple{Float64,Float64}[],
                                      ce.minos_x, ce.minos_y, 0, false)
         @test isempty(ce7.full_points)
     end
@@ -121,7 +121,7 @@ end
         f(x) = (x .- mu)' * A * (x .- mu)
         m = Minuit(f, [0.9, -1.8, 0.6]; error = [0.5, 0.5, 0.5])
         migrad!(m)
-        Σ = Matrix(JuMinuit.free_covariance(m.fmin))
+        Σ = Matrix(NativeMinuit.free_covariance(m.fmin))
 
         # cl ≫ 1σ + adaptive off ⇒ negligible truncation ⇒ sample cov ≈ Σ.
         r = get_contours_samples(m; nsamples = 40_000, cl = 5, adaptive = false, seed = 2024)
@@ -138,7 +138,7 @@ end
         f(x) = (x .- mu)' * A * (x .- mu)
         m = Minuit(f, [1.0, -2.0]; error = [0.5, 0.5])
         migrad!(m)
-        Σ = Matrix(JuMinuit.free_covariance(m.fmin))
+        Σ = Matrix(NativeMinuit.free_covariance(m.fmin))
 
         # ndof defaults to n_free = 2 ⇒ δ = 2.30; acceptance → 0.6827.
         r = get_contours_samples(m; nsamples = 40_000, cl = 1, seed = 7)
@@ -306,7 +306,7 @@ end
         m2 = Minuit(f, [50.0, -50.0]; error = [0.3, 0.3])
         migrad!(m2; maxfcn = 2)                      # too few calls → unconverged
         if !m2.valid || m2.fmin.internal.made_pos_def
-            if JuMinuit.free_covariance(m2.fmin) !== nothing
+            if NativeMinuit.free_covariance(m2.fmin) !== nothing
                 @test_logs (:warn,) match_mode = :any get_contours_samples(m2;
                     nsamples = 300, seed = 1, warn = true)
             else

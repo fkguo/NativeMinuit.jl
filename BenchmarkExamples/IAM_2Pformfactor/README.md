@@ -11,7 +11,7 @@ Y.-J. Shi, C.-Y. Seng, F.-K. Guo, B. Kubis, U.-G. Meißner, W. Wang, *Two-Meson 
 The Jupyter notebook `iamfit.ipynb` performing the IAM fit can be run
 interactively online — no install, no login — via [Binder](https://mybinder.org):
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
 
 The first launch builds the image (several minutes); later launches are cached.
 If you land on a **"GitHub API rate limit"** page, that is a transient,

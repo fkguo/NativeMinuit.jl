@@ -449,7 +449,7 @@ complex-buffer χ²) and mixes well on strongly correlated posteriors:
   `overdisperse` are random-walk-only and ignored here.
 - `sampler = :nuts` — gradient-based **NUTS** (No-U-Turn HMC), provided by the
   **AdvancedHMC extension** (load `AdvancedHMC, LogDensityProblems,
-  LogDensityProblemsAD, TransformVariables, ForwardDiff` alongside JuMinuit).
+  LogDensityProblemsAD, TransformVariables, ForwardDiff` alongside NativeMinuit).
   Bounded parameters are mapped to unconstrained ℝ with the proper log-Jacobian
   and sampled with a ForwardDiff gradient; it is the most efficient sampler for
   smooth, higher-dimensional posteriors but **requires an auto-differentiable
@@ -618,17 +618,17 @@ posterior_sample(m::Minuit; prior = :flat, kwargs...) =
     posterior_sample(PosteriorProblem(m; prior = prior); kwargs...)
 
 # Extension hook for `sampler = :nuts` (Hamiltonian Monte-Carlo / NUTS). The
-# implementation lives in `JuMinuitAdvancedHMCExt`, loaded automatically when
+# implementation lives in `NativeMinuitAdvancedHMCExt`, loaded automatically when
 # AdvancedHMC + LogDensityProblems + LogDensityProblemsAD + TransformVariables +
-# ForwardDiff are all loaded alongside JuMinuit. Until then this stub explains how
+# ForwardDiff are all loaded alongside NativeMinuit. Until then this stub explains how
 # to enable it. NUTS needs an auto-differentiable FCN; the gradient-free
 # `sampler = :stretch` is the fallback for FCNs that cannot be differentiated.
 function _posterior_sample_nuts(prob::PosteriorProblem; kwargs...)
-    ext = Base.get_extension(@__MODULE__, :JuMinuitAdvancedHMCExt)
+    ext = Base.get_extension(@__MODULE__, :NativeMinuitAdvancedHMCExt)
     ext === nothing && throw(ArgumentError(
         "sampler = :nuts requires the AdvancedHMC extension. Enable it with:\n" *
         "    using AdvancedHMC, LogDensityProblems, LogDensityProblemsAD, TransformVariables, ForwardDiff\n" *
-        "alongside `using JuMinuit`. NUTS needs an auto-differentiable FCN; for a " *
+        "alongside `using NativeMinuit`. NUTS needs an auto-differentiable FCN; for a " *
         "non-differentiable FCN use sampler = :stretch (gradient-free)."))
     return ext._nuts_impl(prob; kwargs...)
 end

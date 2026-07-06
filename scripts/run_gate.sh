@@ -3,7 +3,7 @@
 #
 # Phase 0 §3.4 evidence-gate driver.
 #
-# Activates scripts/ environment (which dev-paths the local JuMinuit
+# Activates scripts/ environment (which dev-paths the local NativeMinuit
 # package), instantiates deps if missing, runs scripts/run_perf.jl
 # against benchmark/perf-config.toml, prints the verdict.
 #
@@ -17,7 +17,7 @@ CONFIG="$REPO_ROOT/benchmark/perf-config.toml"
 
 cd "$SCRIPTS_DIR"
 
-echo ">>> Instantiating scripts/ environment (BenchmarkTools, JSON3, JuMinuit)"
+echo ">>> Instantiating scripts/ environment (BenchmarkTools, JSON3, NativeMinuit)"
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
 echo ">>> Running julia-perf gate against $CONFIG"

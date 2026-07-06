@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# JuMinuitAdvancedHMCExt — gradient-based NUTS posterior sampling.
+# NativeMinuitAdvancedHMCExt — gradient-based NUTS posterior sampling.
 #
 # Activated automatically when AdvancedHMC + LogDensityProblems +
 # LogDensityProblemsAD + TransformVariables + ForwardDiff are all loaded
-# alongside JuMinuit. Implements `JuMinuit._posterior_sample_nuts`, the
+# alongside NativeMinuit. Implements `NativeMinuit._posterior_sample_nuts`, the
 # `sampler = :nuts` path of `posterior_sample`.
 #
 # Design (matches the SOTA memo / consensus design):
@@ -19,9 +19,9 @@
 #     would silently wreck NUTS); the user is pointed at `sampler = :stretch`.
 # ─────────────────────────────────────────────────────────────────────────────
 
-module JuMinuitAdvancedHMCExt
+module NativeMinuitAdvancedHMCExt
 
-using JuMinuit
+using NativeMinuit
 using AdvancedHMC
 using LogDensityProblems
 using LogDensityProblemsAD
@@ -30,7 +30,7 @@ using ForwardDiff
 using Random
 using Statistics
 
-import JuMinuit: PosteriorProblem, PosteriorSample, LikelihoodEnsemble,
+import NativeMinuit: PosteriorProblem, PosteriorSample, LikelihoodEnsemble,
                  _posterior_rhat, _posterior_ess, _boundary_flags, _chain_seed
 
 # Build the unconstraining transform from the per-free-coordinate limits
@@ -94,7 +94,7 @@ function _eval_constrained(prob, θfree)
     return c, lp
 end
 
-# Called from `JuMinuit._posterior_sample_nuts` via `Base.get_extension`, so the
+# Called from `NativeMinuit._posterior_sample_nuts` via `Base.get_extension`, so the
 # stub and this implementation never share a method signature (no precompile
 # method-overwrite).
 function _nuts_impl(prob::PosteriorProblem; nsteps::Integer,

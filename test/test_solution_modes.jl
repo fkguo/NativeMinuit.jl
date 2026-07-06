@@ -7,7 +7,7 @@
 
 # Clustering is a WEAKDEP that is ALSO a test dependency (in Project.toml's
 # `test` target), so the DBSCAN extension gets standing CI coverage: loading it
-# here activates `JuMinuitClusteringExt`, and the "built-in :components ..."
+# here activates `NativeMinuitClusteringExt`, and the "built-in :components ..."
 # testset below then takes its DBSCAN-agreement branch. The complementary
 # "not loaded → friendly :dbscan error" path can no longer be reached in-process
 # (Clustering is loaded), so it is preserved by a dedicated subprocess test that
@@ -122,14 +122,14 @@ _fixed_matrix(nrow::Int, ncol::Int) =
         # WITHOUT whitening (naive Euclidean on raw coords, same threshold):
         # the built-in clusterer merges everything into ONE blob — the failure
         # the whitening requirement exists to prevent.
-        raw_labels, n_raw = JuMinuit._connected_components(permutedims(S), 1.0)
+        raw_labels, n_raw = NativeMinuit._connected_components(permutedims(S), 1.0)
         @test n_raw == 1
 
         # And the whitened clusterer (the path find_solution_modes takes) on the
         # SAME data finds 2 — directly contrasting the two metrics.
         σ = [ms.errors[i] for i in 1:2]
-        Zw = JuMinuit._whiten_samples(S, σ, :errors)
-        _, n_white = JuMinuit._connected_components(Zw, 1.0)
+        Zw = NativeMinuit._whiten_samples(S, σ, :errors)
+        _, n_white = NativeMinuit._connected_components(Zw, 1.0)
         @test n_white == 2
     end
 
@@ -196,7 +196,7 @@ _fixed_matrix(nrow::Int, ncol::Int) =
         comp = find_solution_modes(S, m; method = :components)
         @test length(comp) == 2
 
-        if isempty(methods(JuMinuit._dbscan_labels))
+        if isempty(methods(NativeMinuit._dbscan_labels))
             # Clustering NOT loaded → requesting :dbscan must raise a helpful,
             # actionable error (not an opaque MethodError).
             err = try
@@ -221,12 +221,12 @@ _fixed_matrix(nrow::Int, ncol::Int) =
     @testset "Clustering-not-loaded → helpful :dbscan error (subprocess)" begin
         # Clustering is in the test target (so the DBSCAN-agreement branch above
         # runs in CI), which means the not-loaded branch can't be reached in this
-        # process. Spawn a fresh Julia that loads JuMinuit WITHOUT `using
+        # process. Spawn a fresh Julia that loads NativeMinuit WITHOUT `using
         # Clustering` and confirm method=:dbscan throws the actionable 'load
         # Clustering' ArgumentError — not a bare MethodError. Mirrors the
         # Optim-bridge not-loaded subprocess test in test_optim_bridge.jl.
         code = """
-        using JuMinuit
+        using NativeMinuit
         fq(x) = (x[1] - 1.0)^2 + (x[2] - 2.0)^2
         m = Minuit(fq, [0.0, 0.0]; names = ["a", "b"], errors = [0.1, 0.1])
         migrad!(m)
@@ -536,7 +536,7 @@ _fixed_matrix(nrow::Int, ncol::Int) =
         migrad!(mr; maxfcn = 20, iterate = 1)
         @test !mr.valid
         @test !mr.accurate
-        @test JuMinuit.matrix(mr; skip_fixed = true) !== nothing
+        @test NativeMinuit.matrix(mr; skip_fixed = true) !== nothing
         S = _cloud([1.0, 1.0], [0.05, 0.05], 20)
         md = @test_logs (:warn, r"NOT trustworthy") match_mode = :any begin
             find_solution_modes(S, mr; whiten = :cov)

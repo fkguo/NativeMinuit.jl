@@ -1,11 +1,11 @@
 # Alternative minimizers (Optim.jl)
 
-MIGRAD is JuMinuit's workhorse, but it is not the only minimizer you can point at
+MIGRAD is NativeMinuit's workhorse, but it is not the only minimizer you can point at
 a [`Minuit`](@ref). [`optim`](@ref)`(m)` is the Julia-native analogue of iminuit's
 `Minuit.scipy()` escape hatch: it minimises the FCN with any optimizer from
 [Optim.jl](https://github.com/JuliaNLSolvers/Optim.jl) — LBFGS, BFGS, Nelder-Mead,
 Newton, … — starting from `m`'s current values, then **writes the optimum back
-into `m`** so you can carry on with JuMinuit's [`hesse!`](@ref) / [`minos!`](@ref)
+into `m`** so you can carry on with NativeMinuit's [`hesse!`](@ref) / [`minos!`](@ref)
 exactly as after a [`migrad!`](@ref).
 
 It is a package extension (like the Plots / DataFrames / ForwardDiff ones): Optim
@@ -14,7 +14,7 @@ bridge with `using Optim`; without it, `optim(m)` raises a helpful "load Optim"
 message rather than a bare `MethodError`.
 
 ```julia
-using JuMinuit, Optim
+using NativeMinuit, Optim
 
 m = Minuit(fcn, x0)
 optim(m; method = :lbfgs)   # minimise with Optim's LBFGS (or:  m |> optim)
@@ -36,8 +36,8 @@ default. Use [`optim`](@ref) when:
 - **You specifically want a particular optimizer** — say LBFGS with your own
   analytical gradient, or Newton's method on a smooth problem.
 
-For a robust, gradient-free fallback that stays inside pure JuMinuit (no Optim
-dependency), [`simplex`](@ref)`(m)` runs JuMinuit's own Nelder-Mead.
+For a robust, gradient-free fallback that stays inside pure NativeMinuit (no Optim
+dependency), [`simplex`](@ref)`(m)` runs NativeMinuit's own Nelder-Mead.
 
 ## Choosing the method
 
@@ -57,7 +57,7 @@ line search, history length, and so on — use the [`minimize_with`](@ref) alias
 hand it a constructed Optim optimizer, bypassing the name table entirely:
 
 ```julia
-using JuMinuit, Optim
+using NativeMinuit, Optim
 
 minimize_with(m, LBFGS())                  # an Optim optimizer object
 minimize_with(m, NelderMead())
@@ -120,10 +120,10 @@ just like [`migrad!`](@ref):
 What it does **not** do by itself is produce a covariance — neither does iminuit's
 `m.scipy`. The optimum is seeded back the same way [`migrad`](@ref) constructs its
 minimum (a diagonal seed at the converged point), so the natural next step is to
-refine the errors with JuMinuit's own machinery:
+refine the errors with NativeMinuit's own machinery:
 
 ```julia
-using JuMinuit, Optim
+using NativeMinuit, Optim
 
 m = Minuit(cost, x0)
 optim(m; method = :lbfgs)   # alternative minimizer finds the minimum
@@ -132,13 +132,13 @@ minos!(m)                   # asymmetric errors, if you want them
 ```
 
 This is the Julia-native counterpart of iminuit's scipy-then-`hesse()` flow: a
-different optimizer locates the minimum, and you still get JuMinuit's full
+different optimizer locates the minimum, and you still get NativeMinuit's full
 HESSE / MINOS error analysis afterwards (see
 [Error analysis](../error_analysis.md)).
 
 ## See also
 
-- [`simplex`](@ref) — JuMinuit's built-in gradient-free Nelder-Mead, no Optim needed.
+- [`simplex`](@ref) — NativeMinuit's built-in gradient-free Nelder-Mead, no Optim needed.
 - [`migrad!`](@ref) — the default minimizer.
 - [`hesse!`](@ref) / [`minos!`](@ref) — error analysis to run after the fit.
-- Implementation: [`ext/JuMinuitOptimExt.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/ext/JuMinuitOptimExt.jl).
+- Implementation: [`ext/NativeMinuitOptimExt.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/ext/NativeMinuitOptimExt.jl).

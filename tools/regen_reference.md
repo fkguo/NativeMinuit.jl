@@ -2,7 +2,7 @@
 
 The JSON files under `test/reference_data/` are produced by
 `tools/cpp_trace_harness.cxx` running C++ Minuit2 MIGRAD on a fixed
-corpus of benchmark FCNs. JuMinuit's test suite loads these as the
+corpus of benchmark FCNs. NativeMinuit's test suite loads these as the
 1e-10 numerical-equivalence oracle (the cross-platform parameter-value tolerance).
 
 ## When to regenerate
@@ -44,7 +44,7 @@ Run through this *before* `git add test/reference_data/*.json`:
       - What changed in the C++ side that motivated this regen
       - Which JSON files moved by more than 1 ULP and why
       - The machine the regen was performed on
-- [ ] Re-run JuMinuit's full test suite; expect either no change
+- [ ] Re-run NativeMinuit's full test suite; expect either no change
       (if benchmarks didn't move) or a documented set of tolerance
       bumps in `test/test_migrad_*.jl`.
 

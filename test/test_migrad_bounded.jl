@@ -175,7 +175,7 @@
         # Numerical-gradient path: plain CostFunction wrapper is fully
         # zero-alloc once warmed up.
         cf = CostFunction(x -> sum(abs2, x))
-        wrapped = JuMinuit._wrap_fcn_internal_to_external(cf, params).f
+        wrapped = NativeMinuit._wrap_fcn_internal_to_external(cf, params).f
         _alloc(wrapped, int_vec)              # warm up / compile
         @test _alloc(wrapped, int_vec) == 0
 
@@ -191,7 +191,7 @@
                 x -> (gscratch .= 2 .* x; gscratch)
             end,
         )
-        wcfg = JuMinuit._wrap_fcn_internal_to_external(cfg, params)
+        wcfg = NativeMinuit._wrap_fcn_internal_to_external(cfg, params)
         wf, wg = wcfg.f, wcfg.g
         _alloc(wf, int_vec); _alloc(wg, int_vec); _alloc_vec(n_free_p)  # warm up
         @test _alloc(wf, int_vec) == 0

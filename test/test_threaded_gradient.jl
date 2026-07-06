@@ -38,7 +38,7 @@ end
     @testset "Threaded result matches serial — Quad-4D" begin
         cf = CostFunction(x -> sum(abs2, x .- [1.0, 2.0, 3.0, 4.0]))
         par = MinimumParameters([0.5, 1.5, 2.5, 3.5], [0.1, 0.1, 0.1, 0.1], cf([0.5, 1.5, 2.5, 3.5]))
-        prev = JuMinuit.initial_gradient(par, par.dirin, cf)
+        prev = NativeMinuit.initial_gradient(par, par.dirin, cf)
         strategy = Strategy(0)
 
         # Serial
@@ -50,7 +50,7 @@ end
         # Threaded — same FCN, fresh state
         cf2 = CostFunction(x -> sum(abs2, x .- [1.0, 2.0, 3.0, 4.0]))
         par2 = MinimumParameters(copy(par.x), copy(par.dirin), par.fval)
-        prev2 = JuMinuit.initial_gradient(par2, par2.dirin, cf2)
+        prev2 = NativeMinuit.initial_gradient(par2, par2.dirin, cf2)
         out_threaded = FunctionGradient(zeros(4), zeros(4), zeros(4))
         x_work_threaded = similar(par2.x)
         numerical_gradient!(out_threaded, x_work_threaded, par2, prev2, cf2, strategy;
@@ -71,7 +71,7 @@ end
         # single-thread systems.
         cf = CostFunction(x -> sum(abs2, x))
         par = MinimumParameters([1.0, 2.0], [0.1, 0.1], cf([1.0, 2.0]))
-        prev = JuMinuit.initial_gradient(par, par.dirin, cf)
+        prev = NativeMinuit.initial_gradient(par, par.dirin, cf)
         out = FunctionGradient(zeros(2), zeros(2), zeros(2))
         # threaded=true; if nthreads==1 we skip the threaded branch
         numerical_gradient!(out, similar(par.x), par, prev, cf, Strategy(0);
@@ -146,7 +146,7 @@ end
         @testset ":auto on single-thread Julia — serial, no probe" begin
             m = Minuit(x -> sum(abs2, x .- 1.0), zeros(3); error = fill(0.1, 3),
                         threaded_gradient = :auto)
-            @test JuMinuit._use_threads(m) === false
+            @test NativeMinuit._use_threads(m) === false
             @test m._auto_threads[] === nothing       # never probed
             @test_logs min_level = Logging.Warn migrad!(m)   # no warnings
             @test m.fmin !== nothing
@@ -161,7 +161,7 @@ end
             f = x -> sum(abs2, x .- target)
             m_auto = Minuit(f, zeros(6); error = fill(0.1, 6),
                              threaded_gradient = :auto)
-            @test JuMinuit._use_threads(m_auto) === true   # safe → selects threading
+            @test NativeMinuit._use_threads(m_auto) === true   # safe → selects threading
             @test m_auto._auto_threads[] === true          # and memoizes the result
             migrad!(m_auto)
 
@@ -194,12 +194,12 @@ end
         @testset ":auto probe is memoized — runs once, not per call" begin
             f = x -> sum(abs2, x .- 1.0)
             m = Minuit(f, zeros(4); error = fill(0.1, 4), threaded_gradient = :auto)
-            @test JuMinuit._use_threads(m) === true       # first call probes
+            @test NativeMinuit._use_threads(m) === true       # first call probes
             @test m._auto_threads[] === true
             # Poison the cache: a re-probe of this SAFE FCN would return true,
             # so getting back the poisoned `false` proves no re-probe happened.
             m._auto_threads[] = false
-            @test JuMinuit._use_threads(m) === false
+            @test NativeMinuit._use_threads(m) === false
             # Repeated migrad! passes reuse the cache (no re-probe / no throw).
             m._auto_threads[] = nothing
             migrad!(m)

@@ -15,7 +15,7 @@
 # useful cross-check. See docs/src/error_analysis.md for the unified comparison.
 #
 # No C++ Minuit2 analogue (C++ Minuit2 has no resampling layer); this is a
-# JuMinuit extension built on top of `Data` / `model_fit` / `migrad!`. Three
+# NativeMinuit extension built on top of `Data` / `model_fit` / `migrad!`. Three
 # entry shapes are supported (see each method):
 #
 #   (i)  cost objects (feat/iminuit-cost-classes) — PREFERRED, added as methods

@@ -7,180 +7,180 @@ For internal helpers and non-exported names see [Internals](internals.md).
 ## Cost function
 
 ```@docs
-JuMinuit.CostFunction
-JuMinuit.CostFunctionWithGradient
-JuMinuit.CostFunctionAD
+NativeMinuit.CostFunction
+NativeMinuit.CostFunctionWithGradient
+NativeMinuit.CostFunctionAD
 ```
 
 ## MIGRAD (minimization)
 
 ```@docs
-JuMinuit.migrad
-JuMinuit.FunctionMinimum
-JuMinuit.BoundedFunctionMinimum
+NativeMinuit.migrad
+NativeMinuit.FunctionMinimum
+NativeMinuit.BoundedFunctionMinimum
 ```
 
 ## Parameters API (bounded / named / fixed)
 
 ```@docs
-JuMinuit.MinuitParameter
-JuMinuit.Parameters
+NativeMinuit.MinuitParameter
+NativeMinuit.Parameters
 ```
 
 ## Bound transformations
 
 ```@docs
-JuMinuit.BoundKind
-JuMinuit.bound_kind
-JuMinuit.int2ext
-JuMinuit.ext2int
-JuMinuit.dint2ext
-JuMinuit.int2ext_error
+NativeMinuit.BoundKind
+NativeMinuit.bound_kind
+NativeMinuit.int2ext
+NativeMinuit.ext2int
+NativeMinuit.dint2ext
+NativeMinuit.int2ext_error
 ```
 
 ## HESSE (covariance refinement)
 
 ```@docs
-JuMinuit.hesse
+NativeMinuit.hesse
 ```
 
 ## Covariance & diagnostics
 
 ```@docs
-JuMinuit.covariance
-JuMinuit.eigenvalues
-JuMinuit.global_cc
-JuMinuit.CovStatus
+NativeMinuit.covariance
+NativeMinuit.eigenvalues
+NativeMinuit.global_cc
+NativeMinuit.CovStatus
 ```
 
 ## MINOS (asymmetric errors)
 
 ```@docs
-JuMinuit.minos
-JuMinuit.MinosError
-JuMinuit.minos_upper
-JuMinuit.minos_lower
-JuMinuit.function_cross
-JuMinuit.MnCross
+NativeMinuit.minos
+NativeMinuit.MinosError
+NativeMinuit.minos_upper
+NativeMinuit.minos_lower
+NativeMinuit.function_cross
+NativeMinuit.MnCross
 ```
 
 ## Contours & profiles
 
 ```@docs
-JuMinuit.mncontour
-JuMinuit.contour_grid
-JuMinuit.ContourGrid
-JuMinuit.contour_ellipse
-JuMinuit.contour_exact
-JuMinuit.ContoursError
-JuMinuit.profile
-JuMinuit.mnprofile
+NativeMinuit.mncontour
+NativeMinuit.contour_grid
+NativeMinuit.ContourGrid
+NativeMinuit.contour_ellipse
+NativeMinuit.contour_exact
+NativeMinuit.ContoursError
+NativeMinuit.profile
+NativeMinuit.mnprofile
 ```
 
 ## iminuit-style Minuit wrapper
 
 ```@docs
-JuMinuit.Minuit
-JuMinuit.AbstractFit
-JuMinuit.Fit
-JuMinuit.ArrayFit
-JuMinuit.migrad!
-JuMinuit.minos!
-JuMinuit.hesse!
-JuMinuit.HesseResult
-JuMinuit.set_precision
+NativeMinuit.Minuit
+NativeMinuit.AbstractFit
+NativeMinuit.Fit
+NativeMinuit.ArrayFit
+NativeMinuit.migrad!
+NativeMinuit.minos!
+NativeMinuit.hesse!
+NativeMinuit.HesseResult
+NativeMinuit.set_precision
 ```
 
 ## Gradients & threading
 
 ```@docs
-JuMinuit.is_thread_safe
-JuMinuit.ThreadSafetyError
+NativeMinuit.is_thread_safe
+NativeMinuit.ThreadSafetyError
 ```
 
 ## Other minimizers
 
 ```@docs
-JuMinuit.simplex
-JuMinuit.scan
+NativeMinuit.simplex
+NativeMinuit.scan
 ```
 
 ## Per-parameter mutators
 
 ```@docs
-JuMinuit.fix!
-JuMinuit.release!
-JuMinuit.set_value!
-JuMinuit.set_error!
-JuMinuit.set_limits!
-JuMinuit.set_lower_limit!
-JuMinuit.set_upper_limit!
-JuMinuit.remove_limits!
+NativeMinuit.fix!
+NativeMinuit.release!
+NativeMinuit.set_value!
+NativeMinuit.set_error!
+NativeMinuit.set_limits!
+NativeMinuit.set_lower_limit!
+NativeMinuit.set_upper_limit!
+NativeMinuit.remove_limits!
 ```
 
 ## IMinuit.jl compatibility
 
 ```@docs
-JuMinuit.Data
-JuMinuit.chisq
-JuMinuit.model_fit
-JuMinuit.@model_fit
-JuMinuit.args
-JuMinuit.matrix
-JuMinuit.chi2
-JuMinuit.poisson_chi2
-JuMinuit.multinominal_chi2
-JuMinuit.func_argnames
+NativeMinuit.Data
+NativeMinuit.chisq
+NativeMinuit.model_fit
+NativeMinuit.@model_fit
+NativeMinuit.args
+NativeMinuit.matrix
+NativeMinuit.chi2
+NativeMinuit.poisson_chi2
+NativeMinuit.multinominal_chi2
+NativeMinuit.func_argnames
 ```
 
 ## Strategy & precision
 
 ```@docs
-JuMinuit.Strategy
-JuMinuit.MachinePrecision
+NativeMinuit.Strategy
+NativeMinuit.MachinePrecision
 ```
 
 ## Cost functions
 
 ```@docs
-JuMinuit.AbstractCost
-JuMinuit.LeastSquares
-JuMinuit.UnbinnedNLL
-JuMinuit.ExtendedUnbinnedNLL
-JuMinuit.BinnedNLL
-JuMinuit.ExtendedBinnedNLL
-JuMinuit.CostSum
-JuMinuit.errordef
+NativeMinuit.AbstractCost
+NativeMinuit.LeastSquares
+NativeMinuit.UnbinnedNLL
+NativeMinuit.ExtendedUnbinnedNLL
+NativeMinuit.BinnedNLL
+NativeMinuit.ExtendedBinnedNLL
+NativeMinuit.CostSum
+NativeMinuit.errordef
 ```
 
 ## Error analysis (sampling & confidence regions)
 
 ```@docs
-JuMinuit.delta_chisq
-JuMinuit.chisq_cl
-JuMinuit.get_contours_samples
-JuMinuit.contour_df_samples
-JuMinuit.contour_parameter_sets
+NativeMinuit.delta_chisq
+NativeMinuit.chisq_cl
+NativeMinuit.get_contours_samples
+NativeMinuit.contour_df_samples
+NativeMinuit.contour_parameter_sets
 ```
 
 ## Derived quantities (Δχ²-region intervals & profile bands)
 
 ```@docs
-JuMinuit.extremize
-JuMinuit.profile_band
-JuMinuit.ExtremizeResult
-JuMinuit.ProfileBand
+NativeMinuit.extremize
+NativeMinuit.profile_band
+NativeMinuit.ExtremizeResult
+NativeMinuit.ProfileBand
 ```
 
 ## Likelihood-ensemble MCMC (marginal quantile bands)
 
 ```@docs
-JuMinuit.mcmc_sample
-JuMinuit.LikelihoodEnsemble
-JuMinuit.quantiles
-JuMinuit.quantile_band
-JuMinuit.save_ensemble
-JuMinuit.load_ensemble
+NativeMinuit.mcmc_sample
+NativeMinuit.LikelihoodEnsemble
+NativeMinuit.quantiles
+NativeMinuit.quantile_band
+NativeMinuit.save_ensemble
+NativeMinuit.load_ensemble
 ```
 
 ## Bayesian posterior analysis (priors & credible intervals)
@@ -196,60 +196,60 @@ sampling never mutates the `Minuit` object or `m.nfcn`. See the
 [Bayesian analysis guide](bayesian.md) for worked examples and how to enable NUTS.
 
 ```@docs
-JuMinuit.bayesian
-JuMinuit.BayesianReport
-JuMinuit.posterior_sample
-JuMinuit.PosteriorProblem
-JuMinuit.PosteriorSample
-JuMinuit.isconsistent
-JuMinuit.Prior
-JuMinuit.flat_prior
-JuMinuit.normal_prior
-JuMinuit.uniform_prior
-JuMinuit.half_normal_prior
-JuMinuit.combine_priors
-JuMinuit.credible_interval
-JuMinuit.derived_interval
-JuMinuit.upper_limit
-JuMinuit.lower_limit
-JuMinuit.CredibleLimit
-JuMinuit.posterior_summary
-JuMinuit.posterior_mean
-JuMinuit.posterior_median
-JuMinuit.posterior_std
-JuMinuit.effective_sample_size
-JuMinuit.rhat
+NativeMinuit.bayesian
+NativeMinuit.BayesianReport
+NativeMinuit.posterior_sample
+NativeMinuit.PosteriorProblem
+NativeMinuit.PosteriorSample
+NativeMinuit.isconsistent
+NativeMinuit.Prior
+NativeMinuit.flat_prior
+NativeMinuit.normal_prior
+NativeMinuit.uniform_prior
+NativeMinuit.half_normal_prior
+NativeMinuit.combine_priors
+NativeMinuit.credible_interval
+NativeMinuit.derived_interval
+NativeMinuit.upper_limit
+NativeMinuit.lower_limit
+NativeMinuit.CredibleLimit
+NativeMinuit.posterior_summary
+NativeMinuit.posterior_mean
+NativeMinuit.posterior_median
+NativeMinuit.posterior_std
+NativeMinuit.effective_sample_size
+NativeMinuit.rhat
 ```
 
 ## Resampling (bootstrap & jackknife)
 
 ```@docs
-JuMinuit.bootstrap
-JuMinuit.jackknife
-JuMinuit.BootstrapResult
-JuMinuit.JackknifeResult
-JuMinuit.correlation
+NativeMinuit.bootstrap
+NativeMinuit.jackknife
+NativeMinuit.BootstrapResult
+NativeMinuit.JackknifeResult
+NativeMinuit.correlation
 ```
 
 ## Multi-modal solution detection
 
 ```@docs
-JuMinuit.find_solution_modes
-JuMinuit.SolutionMode
-JuMinuit.SolutionModes
+NativeMinuit.find_solution_modes
+NativeMinuit.SolutionMode
+NativeMinuit.SolutionModes
 ```
 
 ## Escaping a local basin
 
 ```@docs
-JuMinuit.find_deeper_minimum
+NativeMinuit.find_deeper_minimum
 ```
 
 ## Alternative minimizers (Optim.jl integration)
 
 ```@docs
-JuMinuit.optim
-JuMinuit.minimize_with
+NativeMinuit.optim
+NativeMinuit.minimize_with
 ```
 
 ## Plotting & rich output
@@ -260,13 +260,13 @@ load through the Plots extension (`using Plots`). See the
 [Plotting & rich output](guides/plotting.md) guide.
 
 ```@docs
-JuMinuit.to_latex
-JuMinuit.mn_plot_text
-JuMinuit.draw_contour
-JuMinuit.draw_mncontour
-JuMinuit.draw_profile
-JuMinuit.draw_mnprofile
-JuMinuit.draw_mnmatrix
+NativeMinuit.to_latex
+NativeMinuit.mn_plot_text
+NativeMinuit.draw_contour
+NativeMinuit.draw_mncontour
+NativeMinuit.draw_profile
+NativeMinuit.draw_mnprofile
+NativeMinuit.draw_mnmatrix
 ```
 
 ## Common accessors

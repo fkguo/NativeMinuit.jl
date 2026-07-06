@@ -22,7 +22,7 @@
 # shallow basin, with vs. without a fixed parameter), not a recommended physical
 # fit — judge physicality separately and do error analysis at the minimum you adopt.
 #
-# Run (needs CSV/DataFrames/StaticArrays/QuadGK + JuMinuit; slow — each round is
+# Run (needs CSV/DataFrames/StaticArrays/QuadGK + NativeMinuit; slow — each round is
 # many full MIGRADs on an ~11 ms FCN; stops on convergence):
 #     julia --project=. BenchmarkExamples/IAM_2Pformfactor/find_deeper_minimum_demo.jl
 #   Tunable env (defaults): IAM_NDISC=20  IAM_SEED=1  IAM_MAXROUNDS=40
@@ -37,7 +37,7 @@ const MAXR  = parse(Int, get(ENV, "IAM_MAXROUNDS", "40"))
 
 const IAM_DIR = @__DIR__
 cd(IAM_DIR)
-using CSV, DataFrames, StaticArrays, QuadGK, JuMinuit
+using CSV, DataFrames, StaticArrays, QuadGK, NativeMinuit
 
 # ── constants + model (mirror error_crosscheck.jl / bench.jl setup) ──────────
 const unit = 1.0
@@ -57,7 +57,7 @@ include(joinpath(IAM_DIR, "src", "phaseshifts.jl"))
 const lecr0 = [0.56e-3, 1.21e-3, -2.79e-3, -0.36e-3, 1.4e-3, 0.07e-3, -0.44e-3, 0.78e-3]
 const L6FIX = [false, false, false, false, false, true, false, false]   # L6 (index 6) fixed
 
-_load(f) = JuMinuit.Data(DataFrame(CSV.File(f, header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
+_load(f) = NativeMinuit.Data(DataFrame(CSV.File(f, header=[:w,:δ,:err], delim=' ', ignorerepeated=true)))
 d00 = _load("./datajl/pipi/pipi00_Roy-GKPY_PRD83_074004.dat")
 d11 = _load("./datajl/pipi/pipi11_Roy-GKPY_PRD83_074004.dat")
 d20 = _load("./datajl/pipi/pipi20_Roy-GKPY_PRD83_074004.dat")
@@ -96,7 +96,7 @@ function make_refit(fixL6::Bool)
             s
         end
         ms = Minuit(chi2r, collect(start); names = nm, errors = fill(1e-6, 8),
-                    fixed = fixL6 ? L6FIX : fill(false, 8), strategy = JuMinuit.Strategy(1))
+                    fixed = fixL6 ? L6FIX : fill(false, 8), strategy = NativeMinuit.Strategy(1))
         migrad!(ms)
         ms.valid ? collect(ms.values) : fill(NaN, 8)
     end

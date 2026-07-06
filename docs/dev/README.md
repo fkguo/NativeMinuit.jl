@@ -8,7 +8,7 @@
 > `find_solution_modes` overhaul + the iminuit-parity contour family, v0.5.1
 > `extremize`/`profile_band` + `mcmc_sample`, …). For the current state of
 > the package, see the [CHANGELOG](../../CHANGELOG.md) and the
-> [manual](https://fkguo.github.io/JuMinuit.jl/dev).
+> [manual](https://fkguo.github.io/NativeMinuit.jl/dev).
 
 | File | What it is |
 | --- | --- |

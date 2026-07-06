@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 //
-// JuMinuit C++ reference-data harness.
+// NativeMinuit C++ reference-data harness.
 //
 // Runs C++ Minuit2 MIGRAD on a corpus of benchmark FCNs (Rosenbrock,
 // quadratic, Gaussian NLL) and dumps the FunctionMinimum + key state
 // as JSON. The output is committed into test/reference_data/ and
-// loaded by JuMinuit's test suite as the 1e-10 oracle.
+// loaded by NativeMinuit's test suite as the 1e-10 oracle.
 //
 // Phase 0 contract:
 // - Strategy(0) — matches Julia Phase 0 lock (DR-008).
@@ -213,7 +213,7 @@ void dump_minimum(std::ostream &out,
     out << "],\n";
 
     // External covariance — upper triangle row-major, only authoritative
-    // entries (n*(n+1)/2). Use the JuMinuit Symmetric :U convention so
+    // entries (n*(n+1)/2). Use the NativeMinuit Symmetric :U convention so
     // the JSON loads directly into a parent(Symmetric(M, :U)) parent.
     if (mn.HasCovariance()) {
         const MnUserCovariance &cov = mn.UserCovariance();
@@ -453,7 +453,7 @@ void run_contour_case(const std::string &outdir,
 // Independent HESSE oracle: run Strategy(0) MIGRAD then a STANDALONE
 // MnHesse call to refine the inverse Hessian via numerical 2nd
 // derivatives. Dumps the refined V (= cov / (2·up)) inverse Hessian
-// matrix elements so JuMinuit's `hesse(cf, state)` can be checked
+// matrix elements so NativeMinuit's `hesse(cf, state)` can be checked
 // directly without the Strategy(1+) inner-loop path.
 void run_hesse_case(const std::string &outdir,
                     const std::string &name,
@@ -478,7 +478,7 @@ void run_hesse_case(const std::string &outdir,
 
     // Standalone HESSE refinement at the converged state, using the
     // MnUserParameterState-input overload (the public-API path that
-    // mirrors what JuMinuit's `hesse(cf, state)` does).
+    // mirrors what NativeMinuit's `hesse(cf, state)` does).
     MnHesse hesse(stra);
     MnUserParameterState hessed_user = hesse(fcn, mn.UserState());
 
@@ -492,7 +492,7 @@ void run_hesse_case(const std::string &outdir,
     const unsigned n = static_cast<unsigned>(mn.UserState().VariableParameters());
 
     // The user-state covariance is the EXTERNAL covariance matrix
-    // (2·up·V). Dump that — JuMinuit's hesse() returns a MinimumState
+    // (2·up·V). Dump that — NativeMinuit's hesse() returns a MinimumState
     // whose state.error.inv_hessian × 2·up is the same thing.
     const auto &cov_hessed = hessed_user.Covariance();
 
@@ -536,7 +536,7 @@ int main(int argc, char *argv[])
 {
     const std::string outdir = (argc > 1) ? argv[1] : ".";
 
-    std::cout << "JuMinuit C++ reference-data harness — Minuit2 "
+    std::cout << "NativeMinuit C++ reference-data harness — Minuit2 "
               << kMinuit2Version << " @ " << kMinuit2Commit << "\n";
     std::cout << "Output directory: " << outdir << "\n";
 

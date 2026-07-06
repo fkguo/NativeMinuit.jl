@@ -258,9 +258,9 @@ verify_threading=true)` (the default for high-level callers).
 Use this to probe a new FCN before committing to `threaded_gradient=true`:
 
 ```julia
-using JuMinuit
+using NativeMinuit
 cf = CostFunction(my_chi2)
-if Threads.nthreads() > 1 && JuMinuit.is_thread_safe(cf, x0)
+if Threads.nthreads() > 1 && NativeMinuit.is_thread_safe(cf, x0)
     m = Minuit(my_chi2, x0; threaded_gradient=true)
 else
     m = Minuit(my_chi2, x0)
@@ -573,7 +573,7 @@ function _migrad_loop(
     # `verify_threading=true` for safety. Inner cross-search probes
     # (`_migrad_with_fixed`, `_migrad_with_multi_fixed`) skip via
     # `verify_threading=false` — the outer call already verified the
-    # FCN, and JuMinuit's `cf_fixed` splice infrastructure (Phase G.1
+    # FCN, and NativeMinuit's `cf_fixed` splice infrastructure (Phase G.1
     # per-thread `full_buf`) does not introduce thread-unsafety on
     # top of a thread-safe user FCN.
     if threaded_gradient && verify_threading && n >= 1 && is_valid(seed)
@@ -622,7 +622,7 @@ function _migrad_loop(
     # validity. So C++ effectively NEVER bails here in practice —
     # `seed.IsValid()` is a no-op as long as the seed object was built.
     #
-    # JuMinuit's `is_valid(seed::MinimumState)` is stricter — it
+    # NativeMinuit's `is_valid(seed::MinimumState)` is stricter — it
     # short-circuits to `false` whenever `seed.error.status` is
     # `MnHesseFailed` or `MnInvertFailed`. That over-rejects the
     # `seed_state(Strategy(2))` bootstrap case where MnHesse bails on a
@@ -767,7 +767,7 @@ function _migrad_loop(
         # take its iter-1 trial step. That's the basin-walk path that
         # lets the IAM x_jm warm start reach χ²=322.59 like iminuit does.
         #
-        # **Status-gated entry shortcut** (JuMinuit-only optimization, see
+        # **Status-gated entry shortcut** (NativeMinuit-only optimization, see
         # `docs/dev/DAVIDON_CXX_AUDIT.md` option B): when (a) edm is already
         # below tolerance AND (b) the current V has status `MnHesseValid`
         # (i.e., came from a real Hesse / DFP-update, NOT a placeholder),

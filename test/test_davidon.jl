@@ -30,7 +30,7 @@ using LinearAlgebra
         V = Symmetric(copy(parent(V0)), :U)
         vg_work = zeros(n)
         vUpd_work = Symmetric(zeros(n, n), :U)
-        new_dc, status = JuMinuit.davidon_update!(
+        new_dc, status = NativeMinuit.davidon_update!(
             V, dx, dg, prev_dc, vg_work, vUpd_work)
         @test status === :updated
 
@@ -74,7 +74,7 @@ using LinearAlgebra
         V = Symmetric(copy(parent(V0)), :U)
         vg_work = zeros(n)
         vUpd_work = Symmetric(zeros(n, n), :U)
-        _, status = JuMinuit.davidon_update!(V, dx, dg, 0.0, vg_work, vUpd_work)
+        _, status = NativeMinuit.davidon_update!(V, dx, dg, 0.0, vg_work, vUpd_work)
         @test status === :updated
 
         expected = (dx * dx') / delgam - (vg * vg') / gvg
@@ -95,7 +95,7 @@ using LinearAlgebra
         V = Symmetric(copy(parent(V0)), :U)
         vg_w = zeros(n)
         vUpd_w = Symmetric(zeros(n, n), :U)
-        new_dc, status = (@test_logs (:warn, r"delgam = 0") JuMinuit.davidon_update!(
+        new_dc, status = (@test_logs (:warn, r"delgam = 0") NativeMinuit.davidon_update!(
             V, dx, dg_zero, 0.5, vg_w, vUpd_w))
         @test status === :unchanged_delgam_zero
         @test new_dc == 0.5
@@ -105,7 +105,7 @@ using LinearAlgebra
         V_bad = Symmetric(Float64[-1.0 0.0; 0.0 -1.0], :U)
         dg = [1.0, 1.0]
         V2 = Symmetric(copy(parent(V_bad)), :U)
-        new_dc2, status2 = (@test_logs (:warn, r"gvg ≤ 0") JuMinuit.davidon_update!(
+        new_dc2, status2 = (@test_logs (:warn, r"gvg ≤ 0") NativeMinuit.davidon_update!(
             V2, dx, dg, 0.3, vg_w, vUpd_w))
         @test status2 === :unchanged_gvg_nonpositive
         @test new_dc2 == 0.3
@@ -132,9 +132,9 @@ using LinearAlgebra
         # barrier on 1.11). The real in-function alloc is 0 on both 1.11/1.12.
         _a6(f, a, b, c, d, e, g) = @allocated f(a, b, c, d, e, g)
         # Warmup the barrier (mutates V), then reset to a fresh known matrix.
-        _a6(JuMinuit.davidon_update!, V, dx, dg, 0.0, vg_work, vUpd_work)
+        _a6(NativeMinuit.davidon_update!, V, dx, dg, 0.0, vg_work, vUpd_work)
         copyto!(parent(V), Matrix{Float64}(I, n, n))
-        @test _a6(JuMinuit.davidon_update!, V, dx, dg, 0.0, vg_work, vUpd_work) == 0
+        @test _a6(NativeMinuit.davidon_update!, V, dx, dg, 0.0, vg_work, vUpd_work) == 0
     end
 
     # ─────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ using LinearAlgebra
         err0 = MinimumError(Symmetric(M, :U), 0.5)
         dx = [0.1, 0.2, 0.3]
         dg = [0.5, 0.4, 0.3]
-        err_new = JuMinuit.davidon_update(err0, dx, dg)
+        err_new = NativeMinuit.davidon_update(err0, dx, dg)
         @test err_new isa MinimumError
         @test is_available(err_new)
         @test err_new.status == MnHesseValid
@@ -190,7 +190,7 @@ using LinearAlgebra
         V = Symmetric(copy(parent(V0)), :U)
         vg_work = zeros(n)
         vUpd_work = Symmetric(zeros(n, n), :U)
-        new_dc, status = JuMinuit.davidon_update!(
+        new_dc, status = NativeMinuit.davidon_update!(
             V, dx, dg, prev_dc, vg_work, vUpd_work)
         @test status === :updated
         @test new_dc ≈ expected_dcov atol = 1e-12

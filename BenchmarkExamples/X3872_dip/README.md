@@ -1,11 +1,11 @@
-# X(3872) dip-structure fit — JuMinuit benchmark example
+# X(3872) dip-structure fit — NativeMinuit benchmark example
 
-Originally written for IMinuit.jl. Adapted here as a JuMinuit
+Originally written for IMinuit.jl. Adapted here as a NativeMinuit
 benchmark + stress test.
 
 ## Run online
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/JuMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
 
 `Xdip_published.ipynb` runs interactively on [Binder](https://mybinder.org)
 — free, no login. The first launch builds the image (several minutes); later
@@ -33,7 +33,7 @@ for specific parameter regions, which serves as the discriminator.
 - Decay width parameter
 - Normalization
 
-## Fit characteristics relevant to JuMinuit
+## Fit characteristics relevant to NativeMinuit
 
 | Property | Value |
 |---|---|
@@ -50,19 +50,19 @@ is exactly where naive cov-MC error bands fail (see paper text).
 ## How to reproduce
 
 Original env was IMinuit.jl + Plots + DataFrames. To run against
-JuMinuit:
+NativeMinuit:
 
 ```julia
 using Pkg
 Pkg.activate(".")  # this directory
 Pkg.add(["DataFrames", "CSV", "Plots", "Distributions",
          "ForwardDiff", "LinearAlgebra"])
-Pkg.develop(path = "../..")   # JuMinuit.jl repo root
-using JuMinuit, DataFrames, CSV, Distributions
+Pkg.develop(path = "../..")   # NativeMinuit.jl repo root
+using NativeMinuit, DataFrames, CSV, Distributions
 # … see notebook for the rest
 ```
 
-The notebook already uses `using JuMinuit` (migrated from `using IMinuit`);
+The notebook already uses `using NativeMinuit` (migrated from `using IMinuit`);
 the rest of the API (`Minuit`, `migrad`, `minos`, `args`, `matrix`, `Data`,
 `chisq`, `model_fit`, `@model_fit`, `mncontour`, …) is drop-in compatible
 with IMinuit.jl. The online launch above uses the ready-made `.binder/`
@@ -71,7 +71,7 @@ environment, so no manual setup is needed there.
 ## Citing
 
 If you reuse this fit setup or data in a publication, please cite the
-original analysis and acknowledge JuMinuit.jl:
+original analysis and acknowledge NativeMinuit.jl:
 
 > V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
 > "How does the X(3872) show up in e⁺e⁻ collisions: Dip versus peak",

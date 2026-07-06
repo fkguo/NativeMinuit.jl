@@ -100,8 +100,8 @@
         # restoring this clamp — it's what lets IAM x_jm warm-start
         # walk to χ²=322.59 via the V≈I-induced large Newton step.
         cf = CostFunction(x -> 1e9 * x[1]^2 + 0.0 * x[2], 1.0)
-        seed = JuMinuit.seed_state(cf, [0.5, 0.5], [0.1, 0.1],
-                                    Strategy(2), JuMinuit.MachinePrecision())
+        seed = NativeMinuit.seed_state(cf, [0.5, 0.5], [0.1, 0.1],
+                                    Strategy(2), NativeMinuit.MachinePrecision())
         # The seed status is MnHesseFailed (sag=0 on param 2 bails the
         # diagonal pass) — this matches C++ behavior and is the EXPECTED
         # status for this pathological FCN.
@@ -127,16 +127,16 @@
         # returning fmin.is_valid=false with nfcn unchanged from the seed.
         # Post-fix: MIGRAD iterates from the bailed-hesse seed.
         cf = CostFunction(x -> 1e9 * x[1]^2 + 0.0 * x[2], 1.0)
-        seed = JuMinuit.seed_state(cf, [0.5, 0.5], [0.1, 0.1],
-                                    Strategy(2), JuMinuit.MachinePrecision())
+        seed = NativeMinuit.seed_state(cf, [0.5, 0.5], [0.1, 0.1],
+                                    Strategy(2), NativeMinuit.MachinePrecision())
         @test seed.error.status == MnHesseFailed   # bailed, as expected
-        n_seed = JuMinuit.ncalls(cf)
+        n_seed = NativeMinuit.ncalls(cf)
         # `_migrad_loop` must run — at minimum, evaluate FCN more than
         # the seed did and reach the minimum of the x[1] subspace.
-        fmin = JuMinuit._migrad_loop(seed, cf, Strategy(2), 0.1,
+        fmin = NativeMinuit._migrad_loop(seed, cf, Strategy(2), 0.1,
                                       200 + 100 * 2 + 5 * 4,
-                                      JuMinuit.MachinePrecision())
-        @test JuMinuit.ncalls(cf) > n_seed   # MIGRAD actually iterated
+                                      NativeMinuit.MachinePrecision())
+        @test NativeMinuit.ncalls(cf) > n_seed   # MIGRAD actually iterated
         # The non-degenerate subspace converges: x[1] -> 0 (minimum of 1e9·x[1]²)
         @test abs(fmin.state.parameters.x[1]) < 1e-3
         # The x[1] residual is small (FCN at minimum should be ≈ 0 along x[1])

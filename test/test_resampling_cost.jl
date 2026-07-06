@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-using JuMinuit
+using NativeMinuit
 using Random
 using Statistics
 using Test
@@ -91,7 +91,7 @@ using Test
                      [-2 * sum(d.x .* r), -2 * sum(r)])
         m = Minuit(ls, [1.0, 0.0]; grad = gchisq); migrad!(m)
         @test m.values[1] ≈ 2.0 rtol = 0.1            # anchor used the analytic grad
-        @test !haskey(JuMinuit._fit_kwargs(m), :grad)  # not carried into re-fits
+        @test !haskey(NativeMinuit._fit_kwargs(m), :grad)  # not carried into re-fits
         bs = bootstrap(ls, m; nresample = 100, seed = 1)
         @test bs.n_valid == 100
         @test all(isfinite, bs.std)

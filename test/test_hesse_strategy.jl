@@ -41,7 +41,7 @@ using LinearAlgebra: norm
         cf = CostFunction(x -> sum(abs2, x))
         m = migrad(cf, [1.0, 2.0, 3.0], [0.1, 0.1, 0.1])
         @test m.is_valid
-        st0 = JuMinuit.hesse(cf, m.state, Strategy(0))
+        st0 = NativeMinuit.hesse(cf, m.state, Strategy(0))
         @test is_valid(st0.error)
         @test is_accurate(st0.error)
         # Strategy(0) skips HGC, but the diagonal+off-diagonal pass alone
@@ -60,7 +60,7 @@ using LinearAlgebra: norm
         cf = CostFunction(x -> sum(abs2, x))
         m = migrad(cf, [1.0, 1.0], [0.1, 0.1])
         reset_ncalls!(cf)
-        st0 = JuMinuit.hesse(cf, m.state, Strategy(0))
+        st0 = NativeMinuit.hesse(cf, m.state, Strategy(0))
         nfcn_s0 = ncalls(cf)
         # Strategy(0) HESSE on a 2-param quadratic should converge the
         # diagonal pass in 1 cycle → 2 calls per coord (4) + 1 off-diag
@@ -82,9 +82,9 @@ using LinearAlgebra: norm
         # Converged near (+1, +1). The 1D quartic minima are degenerate
         # in sign — MIGRAD will pick the basin from the initial point.
         # Run HESSE at three strategy levels and compare.
-        st0 = JuMinuit.hesse(cf, m.state, Strategy(0))
-        st1 = JuMinuit.hesse(cf, m.state, Strategy(1))
-        st2 = JuMinuit.hesse(cf, m.state, Strategy(2))
+        st0 = NativeMinuit.hesse(cf, m.state, Strategy(0))
+        st1 = NativeMinuit.hesse(cf, m.state, Strategy(1))
+        st2 = NativeMinuit.hesse(cf, m.state, Strategy(2))
         for st in (st0, st1, st2)
             @test is_valid(st.error)
         end
@@ -113,9 +113,9 @@ using LinearAlgebra: norm
         cf = CostFunction(x -> (x[1] - 1.0)^2 + (x[2] + 2.0)^2)
         m = migrad(cf, [0.0, 0.0], [0.5, 0.5])
         @test m.is_valid
-        st0 = JuMinuit.hesse(cf, m.state, Strategy(0))
-        st1 = JuMinuit.hesse(cf, m.state, Strategy(1))
-        st2 = JuMinuit.hesse(cf, m.state, Strategy(2))
+        st0 = NativeMinuit.hesse(cf, m.state, Strategy(0))
+        st1 = NativeMinuit.hesse(cf, m.state, Strategy(1))
+        st2 = NativeMinuit.hesse(cf, m.state, Strategy(2))
         # Strategy(0) gst comes from the diagonal pass; Strategy(1)/(2)
         # additionally have HGC. For a perfect quadratic, HGC's relative
         # `change < 0.05` should fire on cycle 1 or 2 (since the
@@ -184,8 +184,8 @@ using LinearAlgebra: norm
 
         # Now run HESSE on both. P2 should refresh AD-grad g2/gst from
         # the wildly-wrong seed values to fresh numerical values.
-        st_num = JuMinuit.hesse(cf_num, m_num.state, Strategy(1))
-        st_ad  = JuMinuit.hesse(cf_ad,  m_ad.state,  Strategy(1))
+        st_num = NativeMinuit.hesse(cf_num, m_num.state, Strategy(1))
+        st_ad  = NativeMinuit.hesse(cf_ad,  m_ad.state,  Strategy(1))
         @test is_valid(st_num.error)
         @test is_valid(st_ad.error)
 
@@ -236,7 +236,7 @@ using LinearAlgebra: norm
 
         # WITH P2: HESSE refreshes g2 to ~2000 before the diagonal pass.
         # The returned inv_hessian[1,1] should ≈ 1/2000 = 5e-4.
-        st = JuMinuit.hesse(cf_ad, m.state, Strategy(1))
+        st = NativeMinuit.hesse(cf_ad, m.state, Strategy(1))
         @test is_valid(st.error)
         @test st.error.inv_hessian[1, 1] ≈ 1 / 2000 atol = 1e-5
         @test st.error.inv_hessian[2, 2] ≈ 1 / 2     atol = 1e-5
@@ -261,7 +261,7 @@ using LinearAlgebra: norm
         x_w = similar(par.x)
         g2 = [2.0]       # true g2 for quadratic
 
-        JuMinuit.hessian_gradient!(grd, gst, dgrd, x_w, par, cf, g2,
+        NativeMinuit.hessian_gradient!(grd, gst, dgrd, x_w, par, cf, g2,
                                     Strategy(1), MachinePrecision())
         # After refinement, grd should be near the analytic 0.2 = 2·0.1.
         @test grd[1] ≈ 0.2 atol = 1e-6
@@ -280,7 +280,7 @@ using LinearAlgebra: norm
         x_w = similar(par.x)
         g2_in = [2.0, 2.0]
         g2_check = copy(g2_in)
-        JuMinuit.hessian_gradient!(grd, gst, dgrd, x_w, par, cf, g2_in,
+        NativeMinuit.hessian_gradient!(grd, gst, dgrd, x_w, par, cf, g2_in,
                                     Strategy(2), MachinePrecision())
         @test g2_in == g2_check  # untouched
     end
@@ -300,7 +300,7 @@ using LinearAlgebra: norm
         dgrd = [0.0]
         x_w = similar(par.x)
         g2 = [2.0]
-        JuMinuit.hessian_gradient!(grd, gst, dgrd, x_w, par, cf, g2,
+        NativeMinuit.hessian_gradient!(grd, gst, dgrd, x_w, par, cf, g2,
                                     Strategy(2), MachinePrecision())
         @test grd[1] == 0.7   # untouched — grdnew==0 break is pre-commit
         @test gst[1] == 0.05  # untouched
@@ -329,7 +329,7 @@ using LinearAlgebra: norm
         cf = CostFunction(x -> x[1]^2)
         par = MinimumParameters([0.001], [0.1], cf([0.001]))
         grad_in = FunctionGradient([0.002], [2.0], [0.1])  # near-min grad
-        (gr_out, _) = JuMinuit.hessian_gradient(par, grad_in, cf,
+        (gr_out, _) = NativeMinuit.hessian_gradient(par, grad_in, cf,
                                                   Strategy(2))
         # g2 must be unchanged (HGC contract):
         @test gr_out.g2 == grad_in.g2
@@ -357,7 +357,7 @@ using LinearAlgebra: norm
         dgrd = [0.0]
         x_w = similar(par.x)
         g2 = [2.0]
-        JuMinuit.hessian_gradient!(grd, gst, dgrd, x_w, par, cf, g2,
+        NativeMinuit.hessian_gradient!(grd, gst, dgrd, x_w, par, cf, g2,
                                     Strategy(2), MachinePrecision())
         # Analytic grad at x=-1.9: 2·(-1.9 + 2) = 0.2.
         @test grd[1] ≈ 0.2 atol = 1e-6
@@ -370,15 +370,15 @@ using LinearAlgebra: norm
         cf = CostFunction(x -> sum(abs2, x))
         par = MinimumParameters([1.0, 2.0], [0.1, 0.1], cf([1.0, 2.0]))
         # Wrong-length grd
-        @test_throws DimensionMismatch JuMinuit.hessian_gradient!(
+        @test_throws DimensionMismatch NativeMinuit.hessian_gradient!(
             [0.0], [0.1, 0.1], [0.0, 0.0], [0.0, 0.0], par, cf, [2.0, 2.0],
             Strategy(1), MachinePrecision())
         # Wrong-length gstep
-        @test_throws DimensionMismatch JuMinuit.hessian_gradient!(
+        @test_throws DimensionMismatch NativeMinuit.hessian_gradient!(
             [0.0, 0.0], [0.1], [0.0, 0.0], [0.0, 0.0], par, cf, [2.0, 2.0],
             Strategy(1), MachinePrecision())
         # Wrong-length g2
-        @test_throws DimensionMismatch JuMinuit.hessian_gradient!(
+        @test_throws DimensionMismatch NativeMinuit.hessian_gradient!(
             [0.0, 0.0], [0.1, 0.1], [0.0, 0.0], [0.0, 0.0], par, cf, [2.0],
             Strategy(1), MachinePrecision())
     end
@@ -391,7 +391,7 @@ using LinearAlgebra: norm
         par = MinimumParameters([0.05, 0.05], [0.1, 0.1], cf([0.05, 0.05]))
         # Build a FunctionGradient with seed values.
         grad_in = FunctionGradient([0.1, 0.1], [2.0, 2.0], [0.05, 0.05])
-        (gr_out, dgrd) = JuMinuit.hessian_gradient(par, grad_in, cf,
+        (gr_out, dgrd) = NativeMinuit.hessian_gradient(par, grad_in, cf,
                                                      Strategy(1))
         @test length(gr_out) == 2
         @test length(dgrd) == 2
@@ -410,7 +410,7 @@ using LinearAlgebra: norm
         cf = CostFunction(x -> sum(abs2, x))
         m = migrad(cf, [1.0, 2.0], [0.1, 0.1])
         for level in (0, 1, 2)
-            @test (@inferred JuMinuit.hesse(cf, m.state, Strategy(level))) isa MinimumState
+            @test (@inferred NativeMinuit.hesse(cf, m.state, Strategy(level))) isa MinimumState
         end
     end
 end
@@ -425,11 +425,11 @@ end
         @test m.is_valid
 
         reset_ncalls!(cf)
-        JuMinuit.hesse(cf, m.state, Strategy(0))
+        NativeMinuit.hesse(cf, m.state, Strategy(0))
         nfcn_s0 = ncalls(cf)
 
         reset_ncalls!(cf)
-        JuMinuit.hesse(cf, m.state, Strategy(2))
+        NativeMinuit.hesse(cf, m.state, Strategy(2))
         nfcn_s2 = ncalls(cf)
 
         # Strategy(2) HGC does up to 2 · 6 = 12 extra FCN calls for the
@@ -447,11 +447,11 @@ end
         m_num = migrad(cf_num, [0.0, 0.0], [0.1, 0.1])
 
         reset_ncalls!(cf_ad)
-        JuMinuit.hesse(cf_ad, m_ad.state, Strategy(1))
+        NativeMinuit.hesse(cf_ad, m_ad.state, Strategy(1))
         nfcn_ad = ncalls(cf_ad)
 
         reset_ncalls!(cf_num)
-        JuMinuit.hesse(cf_num, m_num.state, Strategy(1))
+        NativeMinuit.hesse(cf_num, m_num.state, Strategy(1))
         nfcn_num = ncalls(cf_num)
 
         # AD-grad path does an EXTRA numerical_gradient! call to refresh

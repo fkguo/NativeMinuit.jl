@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 # ─────────────────────────────────────────────────────────────────────────────
-# linalg.jl — JuMinuit's thin linear-algebra layer.
+# linalg.jl — NativeMinuit's thin linear-algebra layer.
 #
-# JuMinuit Phase 0 uses dense `Symmetric{Float64,Matrix{Float64}}` for the
+# NativeMinuit Phase 0 uses dense `Symmetric{Float64,Matrix{Float64}}` for the
 # inverse Hessian (DR-004). Storage convention: **`:U` upper-triangle
 # authoritative** — matches Julia's default `Symmetric(M)` and BLAS's
 # default `'U'` in `syr!`. C++ Minuit2 uses lower-triangular packed
@@ -20,7 +20,7 @@ using LinearAlgebra: BLAS, LAPACK
 """
     SYMMETRIC_UPLO
 
-The triangle convention used throughout JuMinuit: `:U` (upper-triangle
+The triangle convention used throughout NativeMinuit: `:U` (upper-triangle
 authoritative). Matches the default `Symmetric(M)` and the default
 `'U'` in `BLAS.syr!`. Document once; use everywhere.
 """

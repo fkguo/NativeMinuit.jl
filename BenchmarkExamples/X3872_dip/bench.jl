@@ -9,7 +9,7 @@
 #   Phys. Rev. D 109 (2024) 11, L111501, arXiv:2404.12003.
 #   https://inspirehep.net/literature/2778938
 
-using JuMinuit
+using NativeMinuit
 using DataFrames, CSV, QuadGK
 using LinearAlgebra, Random, Statistics, BenchmarkTools
 

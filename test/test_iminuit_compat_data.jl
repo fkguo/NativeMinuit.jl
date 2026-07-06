@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-using JuMinuit
+using NativeMinuit
 using Test
 
 @testset "iminuit_compat.jl — Data, chisq, model_fit, helpers" begin
@@ -122,7 +122,7 @@ using Test
         @test all(p -> p isa Tuple{Float64,Float64}, pts)
         # Default cl → joint-2D 68 % region: radius √2.279·σ ≈ 1.51 (σ = 1
         # for this uncorrelated quadratic; iminuit-parity semantics).
-        r = sqrt(JuMinuit.delta_chisq(0.68, 2))
+        r = sqrt(NativeMinuit.delta_chisq(0.68, 2))
         @test all(p -> abs(p[1] - 1.0) ≤ r + 0.02 && abs(p[2] - 2.0) ≤ r + 0.02, pts)
         @test maximum(abs(p[1] - 1.0) for p in pts) ≈ r atol = 0.02
     end
@@ -196,8 +196,8 @@ using Test
         @test m.params.pars[1].value ≈ 5.0 atol = 1e-6
         @test m.params.pars[1].value == m.values[1]
         # ... but the carry-forward leaves the underlying config field untouched
-        @test JuMinuit._init_params(m).pars[1].value == x0_original
-        @test JuMinuit._init_params(m).pars[1].error == err_original
+        @test NativeMinuit._init_params(m).pars[1].value == x0_original
+        @test NativeMinuit._init_params(m).pars[1].error == err_original
         # ... and reset(m) restores the initial values through the public API.
         reset(m)
         @test m.params.pars[1].value == x0_original
@@ -259,9 +259,9 @@ using Test
 
         # The Δχ² factors themselves must match iminuit's
         # `_cl_to_errordef(cl, npar=2)` (values recorded from iminuit 2.31.3).
-        @test JuMinuit.delta_chisq(0.68, 2) ≈ 2.27886856637673 rtol = 1e-10
-        @test JuMinuit.delta_chisq(1, 2) ≈ 2.295748928898636 rtol = 1e-10
-        @test JuMinuit.delta_chisq(2, 2) ≈ 6.180074306244168 rtol = 1e-10
+        @test NativeMinuit.delta_chisq(0.68, 2) ≈ 2.27886856637673 rtol = 1e-10
+        @test NativeMinuit.delta_chisq(1, 2) ≈ 2.295748928898636 rtol = 1e-10
+        @test NativeMinuit.delta_chisq(2, 2) ≈ 6.180074306244168 rtol = 1e-10
 
         # `size` is iminuit alias for `numpoints`
         pts1 = mncontour(m, 1, 2; numpoints = 8)
@@ -275,7 +275,7 @@ using Test
         @test maximum(abs(p[1]) for p in pts2σ) ≈ σx * sqrt(6.180074306244168) rtol = 0.01
         # The C++ Δχ²=up curve is recoverable: cl = chisq_cl(1, 2) ≈ 0.3935
         # → max|x| = σ_x (the MINOS ±1σ crossing).
-        pts_cpp = mncontour(m, 1, 2; numpoints = 8, cl = JuMinuit.chisq_cl(1.0, 2))
+        pts_cpp = mncontour(m, 1, 2; numpoints = 8, cl = NativeMinuit.chisq_cl(1.0, 2))
         @test maximum(abs(p[1]) for p in pts_cpp) ≈ σx rtol = 0.01
         # invalid cl rejected
         @test_throws ArgumentError mncontour(m, 1, 2; cl = -0.5)

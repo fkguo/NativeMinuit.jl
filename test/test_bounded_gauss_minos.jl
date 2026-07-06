@@ -77,7 +77,7 @@ using JSON
         @testset "par $(i-1) ($(i == 1 ? "μ" : "σ"))" begin
             @test haskey(m.minos_errors, i)
             err = m.minos_errors[i]
-            @test JuMinuit.is_valid(err)
+            @test NativeMinuit.is_valid(err)
             @test err.upper_valid == ref_entry["upper_valid"]
             @test err.lower_valid == ref_entry["lower_valid"]
             @test err.upper ≈ ref_entry["upper"] atol = atol_minos

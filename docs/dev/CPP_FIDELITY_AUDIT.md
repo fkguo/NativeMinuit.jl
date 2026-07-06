@@ -1,11 +1,11 @@
-# C++ Minuit2 ↔ JuMinuit line-by-line fidelity audit
+# C++ Minuit2 ↔ NativeMinuit line-by-line fidelity audit
 
 **Date**: 2026-05-30 · **Base**: `main` @ `3de0857` (after PR #16 + PR #17 §1-4 merged)
 **Reference**: `reference/Minuit2_cpp/{src,inc}/*` (GooFit/Minuit2 v6.24.0)
 **Line numbers**: all cites verified against `main` @ `3de0857`.
 **Scope**: deep, branch-by-branch comparison of individual ported algorithms —
 *not* the component-level coverage map (that lives in `DEFERRED.md` /
-`GAP_AUDIT.md`). Each section maps every C++ branch/exit path to its JuMinuit
+`GAP_AUDIT.md`). Each section maps every C++ branch/exit path to its NativeMinuit
 counterpart and classifies it: ✓ faithful · documented-divergence · minor ·
 missing.
 
@@ -48,7 +48,7 @@ code, ignored.
 
 ### Branch map
 
-| C++ (MnHesse.cxx) | JuMinuit (hesse.jl) | Verdict |
+| C++ (MnHesse.cxx) | NativeMinuit (hesse.jl) | Verdict |
 |---|---|---|
 | `amin=mfcn()`, `aimsag=√eps2·(\|amin\|+Up)`, `maxcalls=200+100n+5n²` (102–109) | 96–97, 91–93 | ✓ |
 | init `g2/gst/grd/dirin=gst/yy` (112–116) | 108–112 | ✓ |
@@ -118,13 +118,13 @@ remain byte-identical.
 `VariableMetricBuilder.cxx` ↔ `src/migrad.jl:_migrad_loop`. C++ splits MIGRAD
 into an **outer** `Minimum` (54–203: edmval scaling, validity gates, the
 do-while calling the inner loop + Strategy≥1 HESSE refinement) and an **inner**
-`Minimum` (205–375: the DFP iteration). JuMinuit inlines both into one
+`Minimum` (205–375: the DFP iteration). NativeMinuit inlines both into one
 `_migrad_loop` (outer `while iterate` wrapping inner `while true`) — same
 control flow.
 
 ### Inner DFP loop (C++ 205–375 ↔ migrad.jl 690–878)
 
-| C++ branch | JuMinuit | Verdict |
+| C++ branch | NativeMinuit | Verdict |
 |---|---|---|
 | `edm *= (1+3·Dcovar)` (229) | 586, 844 | ✓ |
 | `step = −V·g` (241) | 724 `sym_mul!` | ✓ |
@@ -143,7 +143,7 @@ control flow.
 
 ### Outer loop + finalization (C++ 54–203 ↔ migrad.jl 530–973)
 
-| C++ branch | JuMinuit | Verdict |
+| C++ branch | NativeMinuit | Verdict |
 |---|---|---|
 | `edmval *= 0.002` (66) + `tol·up` floor at eps2 (ModularFunctionMinimizer) | 530–534 | ✓ |
 | n==0 / seed-invalid / edm<0 gates (77–92) | 547–582 | ✓ (relaxed seed gate) |
@@ -184,14 +184,14 @@ control flow.
   retry test's bit-exact fixed-point assertion was relaxed to `≈` accordingly,
   since the bail now returns the C++-faithful earlier-pass point.)
 
-- **Negligible:** at the no-improvement exit JuMinuit keeps `s0`'s old fval;
+- **Negligible:** at the no-improvement exit NativeMinuit keeps `s0`'s old fval;
   C++ (size>1) records `pp.Y()` — differ by ≤ `eps·|fval|` (that branch's own
   entry condition), machine-precision.
 
 - **Structural equivalences:** two-method split → one inlined loop; C++ `result`
-  vector + reduced-state storage → JuMinuit `history` (storage-level-gated) +
+  vector + reduced-state storage → NativeMinuit `history` (storage-level-gated) +
   `final=s0`; MnPosDef bail returns a `FunctionMinimum` (C++) vs breaks-then-
-  builds (JuMinuit).
+  builds (NativeMinuit).
 
 - **Collaborators** (verified separately): `DavidonErrorUpdator`→davidon.jl and
   `VariableMetricEDMEstimator`→edm.jl line-by-line in `DAVIDON_CXX_AUDIT.md`;
@@ -209,7 +209,7 @@ implemented (e256506).
 ## 3. MnMinos
 
 `MnMinos.cxx` (213 lines) sets up each ±σ scan and delegates the actual
-root-finding to `MnFunctionCross.cxx` (512 lines). JuMinuit splits these the
+root-finding to `MnFunctionCross.cxx` (512 lines). NativeMinuit splits these the
 same way: `src/minos.jl` (the `FindCrossValue` setup + MinosError assembly) and
 `src/function_cross.jl::_cross_core` (the parabolic root-find, shared with
 MnContours). `function_cross.jl` is larger (1597 lines) because it also serves
@@ -217,7 +217,7 @@ contours, multi-fixed-parameter scans, the AD path, and warm-restart reuse.
 
 ### 3a. MnMinos::FindCrossValue (C++ MnMinos.cxx:94–197 ↔ minos.jl `minos(...)`)
 
-| C++ branch | JuMinuit | Verdict |
+| C++ branch | NativeMinuit | Verdict |
 |---|---|---|
 | `err = dir·Error(par)`, `val = value + err` (119–120) | `sigma_i = √(2·up·V[ii])` (226), dir applied in `function_cross` | ✓ |
 | limit clamp of `val` (122–129) | bounded-path int↔ext clamp (275–302) | ✓ (+ hardening below) |
@@ -229,7 +229,7 @@ contours, multi-fixed-parameter scans, the AD path, and warm-restart reuse.
 
 ### 3b. MnFunctionCross (C++ MnFunctionCross.cxx ↔ function_cross.jl `_cross_core` + helpers)
 
-| C++ branch | JuMinuit | Verdict |
+| C++ branch | NativeMinuit | Verdict |
 |---|---|---|
 | `aim = aminsv+up`, `tlf = tlr·up`, `tla = tlr`, `maxitr=15` (45–50) | 242, 261, `tla_base`, `maxitr` | ✓ |
 | inner `MnMigrad(…, MnStrategy(max(0,strategy−1)))` (106) | `Strategy(max(0, level−1))` (799, 965) | ✓ exact |
@@ -246,7 +246,7 @@ contours, multi-fixed-parameter scans, the AD path, and warm-restart reuse.
 
 - **RESOLVED (88bceea): default MINOS call budget.** C++ (and iminuit) default
   `maxcalls=0` → `2·(nvar+1)·(200+100·nvar+5·nvar²)` (≈30 100 for n=9);
-  JuMinuit's high-level `minos!`/`minos` previously let the downstream fall back
+  NativeMinuit's high-level `minos!`/`minos` previously let the downstream fall back
   to a fixed `maxcalls=1000` (minuit.jl, minos.jl:200), so on larger fits MINOS
   could hit `fcn_limit` where C++/iminuit keep going. Now, when the user passes
   no explicit `maxcall` (the `maxcall==0` sentinel), `_minos_error` forwards
@@ -259,7 +259,7 @@ contours, multi-fixed-parameter scans, the AD path, and warm-restart reuse.
 
 - **Structural-but-equivalent: `par_limit`/`aulim` detection.** C++ computes
   `aulim` inside MnFunctionCross with inline per-probe `limset && Fval<aim →
-  CrossParLimit` exits (66–104, 135, 178, 227, 294, 495). JuMinuit's core
+  CrossParLimit` exits (66–104, 135, 178, 227, 294, 495). NativeMinuit's core
   `_cross_core` is limit-agnostic (operates in the caller's frame); the bounded
   wrapper detects `par_limit` via the int↔ext transform + a post-hoc aulim-style
   check (function_cross.jl:1291, 1370–1388). Same outcome (par_limit raised when
@@ -286,7 +286,7 @@ the high-level path forwards the C++ n-scaled budget.
 
 ## 4. MnContours
 
-`MnContours.cxx:34-204` ↔ `src/contours.jl::contour_exact`. JuMinuit ships two
+`MnContours.cxx:34-204` ↔ `src/contours.jl::contour_exact`. NativeMinuit ships two
 contour routines: `contour` (a simplified convenience, documented as such) and
 **`contour_exact`** — the C++-faithful port audited here. The actual crossing
 search reuses the already-audited cross-search core via `function_cross_multi`
@@ -294,7 +294,7 @@ search reuses the already-audited cross-search core via `function_cross_multi`
 
 ### Branch map
 
-| C++ (MnContours.cxx) | JuMinuit (contour_exact) | Verdict |
+| C++ (MnContours.cxx) | NativeMinuit (contour_exact) | Verdict |
 |---|---|---|
 | `assert npoints>3` (38) | `npoints ≥ 4` (119) | ✓ |
 | `maxcalls = 100·(npoints+5)·(nvar+1)` (39) | 187 | ✓ exact |
@@ -364,7 +364,7 @@ reflect/contract/expand/ρ-fit branches and breaks, the post-loop centroid step,
 and the final `dirin·√(Up/Edm)` error scaling all map exactly.
 
 Findings:
-- **✓ RESOLVED (`2488fd9`) — default `minedm` was 10⁴× too tight.** JuMinuit used
+- **✓ RESOLVED (`2488fd9`) — default `minedm` was 10⁴× too tight.** NativeMinuit used
   `minedm = 1e-5·up` (simplex.jl:134-135); C++/iminuit's Simplex EDM goal is
   `toler·Up()` with default `toler=0.1`, i.e. **`0.1·up`** (`ModularFunctionMinimizer::Minimize`
   scales `effective_toler = toler·Up()` for *all* builders, ModularFunctionMinimizer.cxx:175;
@@ -373,7 +373,7 @@ Findings:
   is corrected. Simplex now stops at the C++ EDM goal (fewer iterations;
   `above_max_edm` no longer set spuriously).
 - **✓ RESOLVED (`2488fd9`) — initial-simplex edge was ~10× too large.** C++ edge =
-  `10·Gstep` with `Gstep = max(gsmin, 0.1·dirin)` ⇒ effective `≈ dirin`; JuMinuit
+  `10·Gstep` with `Gstep = max(gsmin, 0.1·dirin)` ⇒ effective `≈ dirin`; NativeMinuit
   seeded `10·errs` where `errs ≈ dirin` ⇒ edge `≈ 10·dirin`. Fixed to
   `10·max(gsmin, 0.1·|errs|)` ⇒ effective edge `≈ |errs|`, matching C++.
 - minor: do-while→while-precheck (pre-converged seed skips one reflection; same
@@ -448,7 +448,7 @@ Findings:
     at `MnStrategy(2)`) and flags component `i` when
     `|numerical_i − user_i| > dgrd_i` — the exact C++ tolerance (the
     `DeltaGradient` per-component uncertainty). C++ warns per component then
-    `assert(good)` (a no-op in release / iminuit builds); JuMinuit **warns and
+    `assert(good)` (a no-op in release / iminuit builds); NativeMinuit **warns and
     continues** — a wrong-gradient user is told, never crashed. Gated on
     `CostFunctionWithGradient.check_gradient` (default `true`, mirroring C++
     `FCNGradientBase::CheckGradient()`); the MINOS/contour cross-search probe
@@ -542,11 +542,11 @@ Findings:
   `MnCovarianceSqueeze` returns the valid `MinimumError(squeezed, err.Dcovar())`
   (diagonal `diag(V[i,i])`). The second-inversion (squeezed `H → V`) failure
   still tags **`MnInvertFailed`** (`MnCovarianceSqueeze.cxx:76-84`), unchanged.
-  Still **latent** (squeeze has no non-test caller — JuMinuit has no
+  Still **latent** (squeeze has no non-test caller — NativeMinuit has no
   `MnUserParameterState` analog), so this is a fidelity / future-proofing fix.
   The **`MnUserCovariance` overload** (`MnCovarianceSqueeze.cxx:19-63`, called
   from `MnUserParameterState` on parameter-fix) remains **intentionally
-  unported** — no caller exists in JuMinuit; documented as a deliberate
+  unported** — no caller exists in NativeMinuit; documented as a deliberate
   deferral.
 
 Verdict: MnEigen + global-cc faithful; CovSqueeze faithful — the latent
@@ -586,7 +586,7 @@ Findings:
   match exactly; default level 1.
 - **✅ RESOLVED (was MAJOR) — `MnMachinePrecision.eps` was missing the factor of 4.** C++
   `fEpsMac = 4·numeric_limits<double>::epsilon() = 8.88e-16`
-  (`MnMachinePrecision.cxx:26`); JuMinuit `MachinePrecision() = MachinePrecision(eps(Float64))`
+  (`MnMachinePrecision.cxx:26`); NativeMinuit `MachinePrecision() = MachinePrecision(eps(Float64))`
   = `2.22e-16` (precision.jl). Consequently `eps2 = 2·√eps` is **2× too small**
   (2.98e-8 vs C++ 5.96e-8). `eps2` is the master tolerance threading through the
   *entire* engine via the default `MachinePrecision()`: the numerical-gradient

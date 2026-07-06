@@ -1,6 +1,6 @@
-# Error analysis in JuMinuit — which method, when
+# Error analysis in NativeMinuit — which method, when
 
-JuMinuit offers eight ways to put an uncertainty on a fitted parameter — or on
+NativeMinuit offers eight ways to put an uncertainty on a fitted parameter — or on
 a **derived quantity** (any scalar `f(θ)`, or a model curve's pointwise error
 band). They are **not** interchangeable: they answer genuinely different
 questions, and they diverge in exactly the situations where it matters. This
@@ -82,7 +82,7 @@ factor-of-2 between `−ln L` and `−2 ln L` is exactly why the two carry diffe
 χ²-equivalent level is `ΔFCN / up = 1` regardless of `up` — that normalization by
 `up` is exactly what makes a `−ln L` fit and a `χ²` fit give the same errors.
 
-## The methods in JuMinuit
+## The methods in NativeMinuit
 
 ### HESSE — `hesse(m)`
 Builds the covariance from the numerically-evaluated second-derivative (Hessian)
@@ -105,7 +105,7 @@ crossings are meaningless.
 MINOS answers "which values of **parameter** `θᵢ` are consistent with the
 data"; it has no notion of a **derived** scalar `f(θ)` — a peak position, a
 ratio of amplitudes, the model curve at one energy, a Legendre moment.
-[`extremize`](@ref JuMinuit.extremize) is MINOS-for-a-function: the exact
+[`extremize`](@ref NativeMinuit.extremize) is MINOS-for-a-function: the exact
 profile interval
 
 ```
@@ -120,7 +120,7 @@ profiled out (Wilks: one constraint ⇒ 1 dof; in the linear-Gaussian limit the
 answer is exactly the projection theorem `f̂ ± √(Δχ²·cᵀCc)`, full parameter
 correlations included). For `f(θ) = θ[i]` it reproduces the MINOS interval.
 
-[`profile_band`](@ref JuMinuit.profile_band) sweeps the same construction
+[`profile_band`](@ref NativeMinuit.profile_band) sweeps the same construction
 along a grid for a curve family `f(x, θ)` (`x` first, `θ` the full parameter
 vector — the same callback shape as `quantile_band`) — the standard **pointwise**
 profile-likelihood error band for figures. Each `x` carries its own `cl`
@@ -305,7 +305,7 @@ save_ensemble("ensemble_B.dat", ens; comment = "error set B")   # reusable error
 ens = load_ensemble("ensemble_B.dat")       # …in a later session: no re-sampling
 
 # A foreign / hand-rolled file (only `# …` comments + `fval p₁ p₂ …` rows, e.g.
-# a `# cols: chi2 a b` header) loads too, but a non-JuMinuit header is NOT
+# a `# cols: chi2 a b` header) loads too, but a non-NativeMinuit header is NOT
 # parsed as metadata: names default to p1,p2,… and `up` to NaN unless supplied.
 ens = load_ensemble("legacy.dat"; names = ["a", "b"], up = 1.0)
 ```
@@ -322,7 +322,7 @@ never visits the `Δχ² ≤ 1` shell — and a region sampler asked for
 `get_contours_samples` when the deliverable is a **joint confidence region**;
 use `mcmc_sample` when the deliverable is **likelihood-weighted quantiles of
 derived quantities**. (The ensemble is also a ready-made *seed bank* for
-[`extremize`](@ref JuMinuit.extremize) / [`profile_band`](@ref JuMinuit.profile_band)
+[`extremize`](@ref NativeMinuit.extremize) / [`profile_band`](@ref NativeMinuit.profile_band)
 — pass the members extreme in `f` via `seeds`; they tell the profile
 optimizer where the low-χ² corridors are.)
 
@@ -332,7 +332,7 @@ parameter limit they legitimately differ:
 
 | | profile envelope band | likelihood-ensemble quantile band |
 |---|---|---|
-| construction | pointwise `[min, max]` of `f` over `{Δχ² ≤ delta_chisq(cl, 1)}` (constrained extremization — [`profile_band`](@ref JuMinuit.profile_band); explicit `delta = delta_chisq(cl, k)` only for joint statements) | pointwise 16–84% quantiles of `f` over the likelihood ensemble (`quantile_band`) |
+| construction | pointwise `[min, max]` of `f` over `{Δχ² ≤ delta_chisq(cl, 1)}` (constrained extremization — [`profile_band`](@ref NativeMinuit.profile_band); explicit `delta = delta_chisq(cl, k)` only for joint statements) | pointwise 16–84% quantiles of `f` over the likelihood ensemble (`quantile_band`) |
 | nature | frequentist confidence band | likelihood/posterior-mass band |
 | best fit | **contained by construction** | **need not be contained** (mode ≠ median) |
 | needs | an optimizer reaching the region edge (`extremize`/`profile_band`; multi-start, seeds!) | likelihood-weighted samples (this section) |
@@ -358,7 +358,7 @@ volume effect above makes hitting the region hopeless in high dimension;
 the band (it misses the region's corners); (iii) quantiles of *uniform-in-region*
 samples answer no calibrated statistical question. Sampling is the right tool
 for **likelihood-weighted quantiles** (this section); region *edges* are an
-**optimization** problem ([`extremize`](@ref JuMinuit.extremize) / MINOS /
+**optimization** problem ([`extremize`](@ref NativeMinuit.extremize) / MINOS /
 `contour_exact`).
 
 **Tuning (field-tested recipe).** Proposal step ≈ `0.25–0.35 ×` the HESSE σ
@@ -392,7 +392,7 @@ coordinates:
 \log p(θ \mid \text{data}) = -\,\frac{\text{fcn}(θ)}{2\,\text{up}} + \log \text{prior}(θ).
 ```
 
-The result is a [`PosteriorSample`](@ref JuMinuit.PosteriorSample) — a
+The result is a [`PosteriorSample`](@ref NativeMinuit.PosteriorSample) — a
 `LikelihoodEnsemble` plus Bayesian provenance (prior, kept log-likelihood /
 log-posterior, per-chain IDs, R̂ / ESS, boundary flags). Everything is
 **non-mutating**: the fit, `m.values`, `m.errors`, and `m.nfcn` are untouched.
@@ -436,7 +436,7 @@ prior × limits support, rather than starting a dead chain.
     - A credible interval/limit is a probability statement about θ **given the
       prior** — not a frequentist confidence interval, CLs, Feldman–Cousins, or
       MINOS interval. `upper_limit`/`lower_limit` return a
-      [`CredibleLimit`](@ref JuMinuit.CredibleLimit), not a `merror`.
+      [`CredibleLimit`](@ref NativeMinuit.CredibleLimit), not a `merror`.
     - `flat_prior` is flat in **external** coordinates — a parameterization
       choice, **not** an "uninformative"/Jeffreys prior. Re-parameterize and the
       flat prior changes.
@@ -468,7 +468,7 @@ and confidence intervals coincide; quote which one you computed.
 
 ### Bootstrap — `bootstrap(model, data, start; ...)`
 Resamples the dataset and re-fits `nresample` times, returning a
-[`BootstrapResult`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/resampling.jl):
+[`BootstrapResult`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/resampling.jl):
 
 - **Nonparametric** (`kind = :nonparametric`, default): draws `N` data points
   **with replacement** and re-fits. The spread of θ̂ over the resamples is the
@@ -505,7 +505,7 @@ HESSE/MINOS, or from a parametric / Poisson-count bootstrap (see the
 ### Jackknife — `jackknife(model, data, start; ...)`
 Deletes one point (delete-1, the default) — or one consecutive block
 (`d > 1`) — re-fits, and aggregates the leave-one-out estimates θ̂₍ⱼ₎ into a
-[`JackknifeResult`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/resampling.jl):
+[`JackknifeResult`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/resampling.jl):
 
 - **variance** `((g−1)/g)·Σⱼ(θ̂₍ⱼ₎ − θ̄)²` (with `g = N` groups for delete-1) —
   comparable to the HESSE error²;
@@ -597,7 +597,7 @@ different points of one error ellipse, and must be enumerated and fit separately
 ### Step 1 — cluster the accepted samples into modes
 
 ```julia
-using JuMinuit
+using NativeMinuit
 m = Minuit(chi2, x0; names = pnames);  migrad!(m)
 
 r       = get_contours_samples(m; ...)        # NamedTuple; r.samples has rows = vectors
@@ -619,7 +619,7 @@ SolutionModes: 2 distinct solution(s) from 500 accepted sample(s)
     them independently; do NOT merge into a single error bar.
 ```
 
-Each [`SolutionMode`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/solution_modes.jl) carries: the minimum-χ²
+Each [`SolutionMode`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/solution_modes.jl) carries: the minimum-χ²
 **representative** sample of its cluster, that χ² and its **Δχ²** versus the
 global best, the per-parameter **(min, max)** range over the cluster, the point
 count and **fraction**, and the member row indices. Modes are sorted by χ²
@@ -737,11 +737,11 @@ prominently:
 ```
 
 The flag is exposed as `mode.new_min`. This connects directly to the IAM
-cold-start convergence gap (see [`IAM_CONVERGENCE_GAP.md`](https://github.com/fkguo/JuMinuit.jl/blob/main/docs/dev/IAM_CONVERGENCE_GAP.md)):
+cold-start convergence gap (see [`IAM_CONVERGENCE_GAP.md`](https://github.com/fkguo/NativeMinuit.jl/blob/main/docs/dev/IAM_CONVERGENCE_GAP.md)):
 a separated cluster can be exactly the basin a stiff cold-start fit failed to
 reach. Per-mode re-fits are parallelized across threads when the fit opts into
 threading (`m.threaded_gradient`, honoring the same FCN thread-safety requirement as
-JuMinuit's threaded gradient).
+NativeMinuit's threaded gradient).
 
 ### Expensive cost functions: control every FCN call
 
@@ -847,7 +847,7 @@ perturbation form instead.
 
 - **`method = :dbscan`** (optional) — density-based clustering for arbitrary
   cluster shapes and explicit outlier handling, via the `Clustering.jl` package
-  extension (`ext/JuMinuitClusteringExt.jl`). Activates on `using Clustering`;
+  extension (`ext/NativeMinuitClusteringExt.jl`). Activates on `using Clustering`;
   without it, requesting `:dbscan` raises an actionable error pointing at
   `:components`. Uses a spatial tree, so ~O(N·log N) — prefer it for very large N.
 
@@ -869,13 +869,13 @@ perturbation form instead.
 ## Visualizing the results
 
 Every error-analysis output above ships a [RecipesBase](https://github.com/JuliaPlots/RecipesBase.jl)
-recipe, so `plot(...)` works from Plots.jl with no extra glue (JuMinuit depends
+recipe, so `plot(...)` works from Plots.jl with no extra glue (NativeMinuit depends
 only on `RecipesBase`, not on Plots). A parameter pair is chosen with `vars`
 (indices or names; default the first two free parameters) and a single parameter
 with `par`.
 
 ```julia
-using JuMinuit, Plots
+using NativeMinuit, Plots
 
 # MC-Δχ² sample cloud — a 2D scatter of the accepted set, coloured by Δχ².
 r = get_contours_samples(m; nsamples = 20_000, cl = 1, seed = 1)
@@ -897,7 +897,7 @@ plot(modes)                      # no samples → per-mode bounding boxes + reps
 ```
 
 The recipes are backend-agnostic; pick a backend (`gr()`, `plotlyjs()`, …) as
-usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/plot_recipes.jl).
+usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/plot_recipes.jl).
 
 ## A short decision guide
 
@@ -908,8 +908,8 @@ usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/mai
 3. **Error on a derived quantity or a curve** (a ratio, a lineshape, a moment —
    not a single fit parameter): build a **likelihood ensemble** with
    `mcmc_sample` and read `quantiles` / `quantile_band` (marginal construction);
-   for a band that must contain the best fit, use [`extremize`](@ref JuMinuit.extremize) /
-   [`profile_band`](@ref JuMinuit.profile_band) over `Δχ² ≤ delta_chisq(cl, 1)`
+   for a band that must contain the best fit, use [`extremize`](@ref NativeMinuit.extremize) /
+   [`profile_band`](@ref NativeMinuit.profile_band) over `Δχ² ≤ delta_chisq(cl, 1)`
    instead (profile construction; an explicit `delta = delta_chisq(cl, k)` is
    for genuinely joint statements only). At parameter
    limits the two differ legitimately — see the comparison table above.
@@ -931,17 +931,17 @@ usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/JuMinuit.jl/blob/mai
 
 ## See also
 
-- Resampling implementation: [`src/resampling.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/resampling.jl);
-  tests [`test/test_resampling_errors.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/test/test_resampling_errors.jl)
+- Resampling implementation: [`src/resampling.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/resampling.jl);
+  tests [`test/test_resampling_errors.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/test/test_resampling_errors.jl)
 - MC-Δχ² / `delta_chisq` implementation:
-  [`src/error_sampling.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/error_sampling.jl); tests
-  [`test/test_error_sampling.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/test/test_error_sampling.jl)
+  [`src/error_sampling.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/error_sampling.jl); tests
+  [`test/test_error_sampling.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/test/test_error_sampling.jl)
 - Likelihood-ensemble MCMC / quantile bands:
-  [`src/mcmc.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/mcmc.jl); tests
-  [`test/test_mcmc.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/test/test_mcmc.jl)
+  [`src/mcmc.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/mcmc.jl); tests
+  [`test/test_mcmc.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/test/test_mcmc.jl)
 - Bayesian posterior analysis (priors, posterior, credible intervals):
-  [`src/posterior.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/posterior.jl),
-  [`src/priors.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/priors.jl); tests
-  [`test/test_bayesian_bridge.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/test/test_bayesian_bridge.jl)
-- HESSE / MINOS / contours: [`src/hesse.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/hesse.jl),
-  [`src/minos.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/minos.jl), [`src/contours.jl`](https://github.com/fkguo/JuMinuit.jl/blob/main/src/contours.jl)
+  [`src/posterior.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/posterior.jl),
+  [`src/priors.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/priors.jl); tests
+  [`test/test_bayesian_bridge.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/test/test_bayesian_bridge.jl)
+- HESSE / MINOS / contours: [`src/hesse.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/hesse.jl),
+  [`src/minos.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/minos.jl), [`src/contours.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/contours.jl)

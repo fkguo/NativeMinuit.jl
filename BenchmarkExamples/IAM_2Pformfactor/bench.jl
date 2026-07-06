@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Real IAM 2π form-factor benchmark — numerical vs AD vs threaded.
 # Sources the original notebook setup; replaces `using IMinuit` with
-# `using JuMinuit` (drop-in compatible API).
+# `using NativeMinuit` (drop-in compatible API).
 
 using LinearAlgebra, Random, Statistics
 BLAS.set_num_threads(1)
@@ -11,12 +11,12 @@ println("Threads: nthreads=", Threads.nthreads(), " maxthreadid=", Threads.maxth
 const IAM_DIR = @__DIR__   # script-relative, portable across machines
 cd(IAM_DIR)
 
-# Mimic notebook environment but use JuMinuit instead of IMinuit
+# Mimic notebook environment but use NativeMinuit instead of IMinuit
 using CSV, DataFrames
 using StaticArrays
 using QuadGK
 using Interpolations
-using JuMinuit   # was: using IMinuit
+using NativeMinuit   # was: using IMinuit
 using ForwardDiff
 
 # Constants from notebook (must precede src/ includes that reference them)
@@ -71,12 +71,12 @@ data_GKPRY_ππ11_df = DataFrame(CSV.File("./datajl/pipi/pipi11_Roy-GKPY_PRD83_0
 data_GKPRY_ππ20_df = DataFrame(CSV.File("./datajl/pipi/pipi20_Roy-GKPY_PRD83_074004.dat",
     header = [:w, :δ, :err], delim=' ', ignorerepeated=true))
 
-# Data(df) is now supported directly via JuMinuitDataFramesExt
+# Data(df) is now supported directly via NativeMinuitDataFramesExt
 # (drop-in IMinuit.jl compatibility — extension auto-activates when
 # `using DataFrames` is in scope).
-data_ππ00 = JuMinuit.Data(data_GKPRY_ππ00_df)
-data_ππ11 = JuMinuit.Data(data_GKPRY_ππ11_df)
-data_ππ20 = JuMinuit.Data(data_GKPRY_ππ20_df)
+data_ππ00 = NativeMinuit.Data(data_GKPRY_ππ00_df)
+data_ππ11 = NativeMinuit.Data(data_GKPRY_ππ11_df)
+data_ππ20 = NativeMinuit.Data(data_GKPRY_ππ20_df)
 
 println("Loaded data: ππ00=$(length(data_ππ00.x)) pts, ππ11=$(length(data_ππ11.x)) pts, ππ20=$(length(data_ππ20.x)) pts")
 
@@ -87,7 +87,7 @@ println("Loaded data: ππ00=$(length(data_ππ00.x)) pts, ππ11=$(length(data_
 # channels that the notebook excludes via various weight functions.
 # ─────────────────────────────────────────────────────────────────────────
 # From notebook cell 40 — sind-based residual to handle 360°-periodicity
-function chisq_ps(dist::Function, data::JuMinuit.Data, par; fitrange = ())
+function chisq_ps(dist::Function, data::NativeMinuit.Data, par; fitrange = ())
     fitrange = (isempty(fitrange) ? (1:data.ndata) : fitrange)
     res = 0.0
     @inbounds for i = fitrange[1]:fitrange[end]
@@ -137,12 +137,12 @@ end
 
 errs0 = fill(1e-6, 9)
 
-fn_num() = (cf = JuMinuit.CostFunction(chi2_iam, 1.0); migrad(cf, paras0, errs0); cf)
+fn_num() = (cf = NativeMinuit.CostFunction(chi2_iam, 1.0); migrad(cf, paras0, errs0); cf)
 t_num = run_5("numerical 1T", fn_num; n_rounds=3)
 
 # threaded numerical — Phase G path, works on any FCN
 if Threads.nthreads() > 1
-    fn_th() = (cf = JuMinuit.CostFunction(chi2_iam, 1.0); migrad(cf, paras0, errs0; threaded_gradient=true); cf)
+    fn_th() = (cf = NativeMinuit.CostFunction(chi2_iam, 1.0); migrad(cf, paras0, errs0; threaded_gradient=true); cf)
     t_th = run_5("threaded numerical", fn_th; n_rounds=3)
 else
     println("  threaded numerical: SKIPPED (need julia -t N)")
@@ -151,7 +151,7 @@ end
 
 # AD — may fail on IAM because of non-generic Float64-restrictions
 # in amplitude/T-matrix internals
-fn_ad() = (cf = JuMinuit.CostFunctionAD(chi2_iam, 1.0); migrad(cf, paras0, errs0); cf)
+fn_ad() = (cf = NativeMinuit.CostFunctionAD(chi2_iam, 1.0); migrad(cf, paras0, errs0); cf)
 t_ad = run_5("AD (ForwardDiff)", fn_ad; n_rounds=3)
 
 println("\n=== Summary (3-round median, IAM 3-channel ππ fit, n=9) ===")
@@ -170,14 +170,14 @@ end
 # Tolerance is tlr × |par_scale|; for IAM LECs (10⁻⁴–10⁻³) we use 1e-7.
 # ─────────────────────────────────────────────────────────────────────────
 println("\n=== Correctness cross-check: minima from each path ===")
-cf_n = JuMinuit.CostFunction(chi2_iam, 1.0)
+cf_n = NativeMinuit.CostFunction(chi2_iam, 1.0)
 fm_n = migrad(cf_n, paras0, errs0)
 println("  numerical 1T: fval=", round(fm_n.state.parameters.fval; digits=6),
         ", x=", round.(fm_n.state.parameters.x; sigdigits=6))
 println("    is_valid=", fm_n.is_valid, ", edm=", round(fm_n.state.edm; sigdigits=3))
 
 if Threads.nthreads() > 1
-    cf_t = JuMinuit.CostFunction(chi2_iam, 1.0)
+    cf_t = NativeMinuit.CostFunction(chi2_iam, 1.0)
     fm_t = migrad(cf_t, paras0, errs0; threaded_gradient=true)
     println("  threaded 8T:  fval=", round(fm_t.state.parameters.fval; digits=6),
             ", x=", round.(fm_t.state.parameters.x; sigdigits=6))

@@ -5,7 +5,7 @@
 # and docs/UPSTREAM.md.
 
 """
-    JuMinuit
+    NativeMinuit
 
 Native-Julia port of the C++ Minuit2 function-minimization library — the
 algorithm at the heart of every HEP fit. A drop-in replacement for IMinuit.jl
@@ -33,10 +33,10 @@ The implementation mirrors `reference/Minuit2_cpp/` (pinned to GooFit/Minuit2
 diff cleanly. Development history, the C++-fidelity audit, and the
 deferred-feature list live in `docs/dev/`.
 
-See the [manual](https://fkguo.github.io/JuMinuit.jl) for tutorials and the
+See the [manual](https://fkguo.github.io/NativeMinuit.jl) for tutorials and the
 full API.
 """
-module JuMinuit
+module NativeMinuit
 
 using LinearAlgebra
 using Logging
@@ -131,7 +131,7 @@ export squeeze_symmetric, squeeze_error
 export MnCross, MinosError, minos, minos_lower, minos_upper
 # NB: the bare `contour` (≤ 0.4 the ellipse approximation) is deliberately
 # NOT exported — it collides with `Plots.contour` / `GR.contour` under
-# `using JuMinuit, Plots`. `JuMinuit.contour` survives as a deprecated
+# `using NativeMinuit, Plots`. `NativeMinuit.contour` survives as a deprecated
 # alias of `contour_ellipse`; iminuit's grid-slice `contour` is
 # `contour_grid`.
 export ContoursError, contour_ellipse, contour_exact, contour_parameter_sets
@@ -164,7 +164,7 @@ export fix!, release!, set_value!, set_error!, set_limits!, remove_limits!
 # One-sided limit setters (mirror C++ MnUserParameters::SetUpper/LowerLimit)
 export set_upper_limit!, set_lower_limit!
 # IMinuit.jl-compatible helpers (NB: `reset` extends `Base.reset`,
-# `matrix` is JuMinuit's own — IMinuit.jl's matrix returns the
+# `matrix` is NativeMinuit's own — IMinuit.jl's matrix returns the
 # correlation/covariance matrix with the same signature).
 export args, matrix, set_precision
 export CostFunctionWithGradient, analytical_gradient, analytical_gradient!
@@ -206,4 +206,4 @@ export optim, minimize_with
 # Terminal / SSH / headless-CI ASCII renderer (plot_text.jl, gap M2)
 export mn_plot_text
 
-end # module JuMinuit
+end # module NativeMinuit

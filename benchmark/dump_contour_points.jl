@@ -4,7 +4,7 @@
 
 using Pkg
 Pkg.activate(joinpath(@__DIR__, "..", "scripts"))
-using JuMinuit
+using NativeMinuit
 using Random, LinearAlgebra, Printf
 BLAS.set_num_threads(1)
 Random.seed!(0xCAFE_F00D)
@@ -40,9 +40,9 @@ cases = [
 ]
 
 for (name, f, x0, errs, up) in cases
-    cf = JuMinuit.CostFunction(f, up)
-    fmin = JuMinuit.migrad(cf, x0, errs)
-    ce = JuMinuit.contour_exact(fmin, cf, 1, 2; npoints=30)
+    cf = NativeMinuit.CostFunction(f, up)
+    fmin = NativeMinuit.migrad(cf, x0, errs)
+    ce = NativeMinuit.contour_exact(fmin, cf, 1, 2; npoints=30)
     println("== $name ==")
     println("  npts=$(length(ce.points))  nfcn=$(ce.nfcn)")
     @printf("  fmin_x=%.15g  fmin_y=%.15g\n",

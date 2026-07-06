@@ -6,8 +6,8 @@ asymmetric errors in five minutes. We use the iminuit / IMinuit.jl-style
 cost function, the parameters, and the fit result, with property access
 (`m.values`, `m.errors`, `m.fval`, …) you can copy-paste from iminuit.
 
-We assume Julia ≥ 1.11 and `JuMinuit` installed
-(`Pkg.add("JuMinuit")` once registered, or `Pkg.add(url=...)` from the
+We assume Julia ≥ 1.11 and `NativeMinuit` installed
+(`Pkg.add("NativeMinuit")` once registered, or `Pkg.add(url=...)` from the
 repository).
 
 ## A first end-to-end fit
@@ -16,7 +16,7 @@ Define an FCN — any `f(x::AbstractVector) -> Real`. Here it is a simple
 χ² with its minimum at `(1, 2, 3)`:
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 fcn(x) = (x[1] - 1.0)^2 + (x[2] - 2.0)^2 + (x[3] - 3.0)^2
 
@@ -30,7 +30,7 @@ migrad!(m)                              # run MIGRAD; mutates m in place
 Displaying `m` in a REPL or notebook prints the rich result table:
 
 ```
-JuMinuit.Minuit  fval=0  edm=0  nfcn=36
+NativeMinuit.Minuit  fval=0  edm=0  nfcn=36
 [✓ Valid minimum] [✓ EDM below goal] [✓ Below call limit] [✓ Covariance accurate] [✓ No params at limit]
 ┌───┬──────┬─────────────┬─────────┬─────────┬───────┐
 │ # │ Name │ Value       │ Limit − │ Limit + │ Fixed │
@@ -101,7 +101,7 @@ definition, so `Minuit(cost, x0)` reads `up` and the data count off the
 cost automatically:
 
 ```julia
-using JuMinuit
+using NativeMinuit
 
 model(x, p) = p[1] * x + p[2]            # a straight line y = a·x + b
 xdata = [1.0, 2.0, 3.0, 4.0, 5.0]

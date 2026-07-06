@@ -24,7 +24,7 @@
 #     (iminuit warns per occurrence via MnPrint, invisible at default
 #     print level); inner/warm-restart/multistart probes stay silent.
 
-using JuMinuit
+using NativeMinuit
 using Test
 using LinearAlgebra
 using Logging
@@ -196,11 +196,11 @@ end
         for bad in (NaN, Inf, -Inf)
             # in-place variant (the strategy ≥ 1 hesse path that crashed)
             S = Symmetric([1.0 bad; 0.0 1.0], :U)
-            @test JuMinuit.make_posdef!(S, prec) == true   # no throw; tag applies
+            @test NativeMinuit.make_posdef!(S, prec) == true   # no throw; tag applies
 
             # n=1 fall-through (previously reached the eigenvalue gate)
             S1 = Symmetric(fill(bad, 1, 1), :U)
-            @test JuMinuit.make_posdef!(S1, prec) == true
+            @test NativeMinuit.make_posdef!(S1, prec) == true
 
             # allocating variant (MIGRAD-loop recovery path)
             err = MinimumError(Symmetric([bad 0.0; 0.0 1.0], :U), 0.0)
@@ -212,7 +212,7 @@ end
         end
         # `make_posdef!` is unchanged for finite input
         Sok = Symmetric([2.0 0.1; 0.0 3.0], :U)
-        @test JuMinuit.make_posdef!(Sok, prec) == false
+        @test NativeMinuit.make_posdef!(Sok, prec) == false
     end
 
     @testset "standalone hesse on a NaN-straddling FCN: invalid, no throw" begin
@@ -241,7 +241,7 @@ end
                     strategy = Strategy(0), maxfcn = 300,
                     warn_nonfinite = false)
         @test occursin("fval non-finite", sprint(show, MIME("text/plain"), fm))
-        d = JuMinuit.to_dict(fm)
+        d = NativeMinuit.to_dict(fm)
         @test d["nonfinite_fval"] === true
         @test d["n_nonfinite_calls"] >= 1
         @test d["valid"] === false
@@ -250,8 +250,8 @@ end
         with_logger(NullLogger()) do
             migrad!(m; maxfcn = 300)
         end
-        @test occursin("FCN value finite", JuMinuit._checklist_text(m))
-        db = JuMinuit.to_dict(m.fmin)
+        @test occursin("FCN value finite", NativeMinuit._checklist_text(m))
+        db = NativeMinuit.to_dict(m.fmin)
         @test db["nonfinite_fval"] === true
     end
 

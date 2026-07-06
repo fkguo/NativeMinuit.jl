@@ -5,7 +5,7 @@
 # quantiles/bands of derived quantities, and the plain-text ensemble
 # persistence.
 
-using JuMinuit
+using NativeMinuit
 using Test
 using LinearAlgebra
 using Logging
@@ -305,7 +305,7 @@ end
             path = joinpath(dir, "ens.dat")
             save_ensemble(path, ens; comment = "error set demo\nsecond line")
             txt = read(path, String)
-            @test startswith(txt, "# JuMinuit LikelihoodEnsemble v1")
+            @test startswith(txt, "# NativeMinuit LikelihoodEnsemble v1")
             @test occursin("# error set demo\n", txt)
             @test occursin("# second line\n", txt)
             @test occursin("# cols: fval a b c", txt)

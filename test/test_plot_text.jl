@@ -165,7 +165,7 @@
     end
 
     @testset "_mn_bins smoke checks (round numbers + C++ parity)" begin
-        bl, bh, nb, bwid = JuMinuit._mn_bins(-1.0, 1.0, 10)
+        bl, bh, nb, bwid = NativeMinuit._mn_bins(-1.0, 1.0, 10)
         @test bl <= -1.0 && bh >= 1.0
         @test nb >= 1
         @test bwid > 0
@@ -174,7 +174,7 @@
         # Mantissa must be one of {2, 2.5, 5, 10} · 10^k. Sample 4 ranges.
         for (a, b, n) in [(-1.0, 1.0, 10), (0.0, 100.0, 20),
                            (-0.5, 0.5, 30), (10.0, 11.0, 8)]
-            _, _, _, w = JuMinuit._mn_bins(a, b, n)
+            _, _, _, w = NativeMinuit._mn_bins(a, b, n)
             log_ = floor(Int, log10(w))
             mant = w / 10.0^log_
             @test any(isapprox(mant, m; atol=1e-9)
@@ -184,7 +184,7 @@
         # C++ parity on exact-negative-multiple `alb` (codex BLOCKING #1).
         # For (-1, 1, 10) with bwid=0.25, alb = -1/0.25 = -4.0 exactly.
         # C++ shifts lwid below trunc → bl must be < -1.0 (strict).
-        bl5, bh5, nb5, bw5 = JuMinuit._mn_bins(-1.0, 1.0, 10)
+        bl5, bh5, nb5, bw5 = NativeMinuit._mn_bins(-1.0, 1.0, 10)
         @test bw5 == 0.25
         @test bl5 < -1.0 - 1e-12
         @test bh5 > 1.0 + 1e-12

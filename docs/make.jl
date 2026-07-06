@@ -7,19 +7,19 @@
 ENV["GKSwstype"] = "100"   # headless GR backend for the @example figures
 
 using Documenter
-using JuMinuit
+using NativeMinuit
 
-DocMeta.setdocmeta!(JuMinuit, :DocTestSetup, :(using JuMinuit); recursive = true)
+DocMeta.setdocmeta!(NativeMinuit, :DocTestSetup, :(using NativeMinuit); recursive = true)
 
 makedocs(
-    sitename = "JuMinuit.jl",
+    sitename = "NativeMinuit.jl",
     authors  = "Feng-Kun Guo",
-    modules  = [JuMinuit],
+    modules  = [NativeMinuit],
     format   = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
-        canonical  = "https://fkguo.github.io/JuMinuit.jl",
+        canonical  = "https://fkguo.github.io/NativeMinuit.jl",
         edit_link  = "main",
-        repolink   = "https://github.com/fkguo/JuMinuit.jl",
+        repolink   = "https://github.com/fkguo/NativeMinuit.jl",
         # The API reference is intentionally one large page; raise the
         # per-page HTML size limit above its rendered size.
         size_threshold      = 600_000,
@@ -50,7 +50,7 @@ makedocs(
 # CI deployment to gh-pages (skips on local builds)
 if get(ENV, "GITHUB_ACTIONS", "false") == "true"
     deploydocs(
-        repo = "github.com/fkguo/JuMinuit.jl",
+        repo = "github.com/fkguo/NativeMinuit.jl",
         devbranch = "main",
         push_preview = true,
     )

@@ -1,4 +1,4 @@
-# Benchmark results — JuMinuit.jl vs IMinuit.jl on real physics fits
+# Benchmark results — NativeMinuit.jl vs IMinuit.jl on real physics fits
 
 This file captures the most recent comparison runs of the two example
 fits across all available execution schemes. Re-run with:
@@ -18,10 +18,10 @@ centroid). The tables below are the **2026-05-31 re-run** on commit
 
 | label       | description                                              |
 |-------------|----------------------------------------------------------|
-| `jm_num`    | JuMinuit numerical gradient, sequential                  |
-| `jm_ad`     | JuMinuit AD (ForwardDiff) — package extension            |
-| `jm_th_num` | JuMinuit threaded numerical                              |
-| `jm_th_ad`  | JuMinuit threaded AD                                     |
+| `jm_num`    | NativeMinuit numerical gradient, sequential                  |
+| `jm_ad`     | NativeMinuit AD (ForwardDiff) — package extension            |
+| `jm_th_num` | NativeMinuit threaded numerical                              |
+| `jm_th_ad`  | NativeMinuit threaded AD                                     |
 | `iminuit`   | Python `iminuit` via PyCall (IMinuit.jl)                 |
 
 ## X(3872) dip fit — 3 params, FCN ~ 38 μs/call, 4 data points
@@ -47,11 +47,11 @@ detail; see [`../docs/dev/AD_OFFSET_X3872.md`](../docs/dev/AD_OFFSET_X3872.md)).
 
 **Headlines**
 
-- JuMinuit **AD vs iminuit**: **1.6× faster** on migrad+HESSE (4.7 vs 7.4 ms)
+- NativeMinuit **AD vs iminuit**: **1.6× faster** on migrad+HESSE (4.7 vs 7.4 ms)
   and **2.1× faster** on MINOS (72.8 vs 154.7 ms).
-- JuMinuit **numerical vs iminuit**: ~1.2× faster on both (6.2 vs 7.4 ms;
+- NativeMinuit **numerical vs iminuit**: ~1.2× faster on both (6.2 vs 7.4 ms;
   131.2 vs 154.7 ms).
-- AD is ~1.3× faster than JuMinuit-numerical on migrad, ~1.8× on MINOS.
+- AD is ~1.3× faster than NativeMinuit-numerical on migrad, ~1.8× on MINOS.
 - The 3-parameter problem is too small for threading to help
   (`jm_th_*` ≈ sequential).
 
@@ -62,7 +62,7 @@ points") on every parameter pair; the wall-times are time-to-early-exit,
 not a successful contour. Not a meaningful comparison for this fit.
 
 (MINOS for `par[2]` now returns `(-0.0043, +0.0043)` on both backends —
-an earlier JuMinuit `(0, 0)` edge case in `function_cross` for this tight
+an earlier NativeMinuit `(0, 0)` edge case in `function_cross` for this tight
 well has been resolved.)
 
 ## IAM ππ phase-shift fit — paper-faithful 7 free LECs (L6 fixed)
@@ -81,20 +81,20 @@ well has been resolved.)
 **Cold-start MIGRAD `fval`** (same seed; lower = deeper; reproduce with
 [`iam_strategy_sweep.jl`](IAM_2Pformfactor/iam_strategy_sweep.jl); iminuit 2.18.0):
 
-| `Strategy`    | JuMinuit (1-shot / +retry) | iminuit (1-shot / +retry) |
+| `Strategy`    | NativeMinuit (1-shot / +retry) | iminuit (1-shot / +retry) |
 |---------------|---------------------------:|--------------------------:|
 | 0             | 358.78 ✓ / 358.78 ✓        | 350.09 ✗ / 350.09 ✗       |
 | 1 *(default)* | 502.24 ✗ / **360.10 ✓**    | 456.53 ✗ / 456.53 ✗       |
 | 2             | 337.66 ✗ / 337.66 ✗        | 376.76 ✗ / 376.76 ✗       |
 
 ✓/✗ = MIGRAD valid/invalid. Default-config wall-time (S=1 + retry, migrad+hesse,
-min of 3): **JuMinuit 16.2 s → 360.10 (valid)**; iminuit 10.7 s → 456.53 (invalid —
+min of 3): **NativeMinuit 16.2 s → 360.10 (valid)**; iminuit 10.7 s → 456.53 (invalid —
 it gives up earlier). `jm_ad` still FAILS (IAM source non-generic) and `jm_th_*` is
 SKIPPED (Phase-H rejects the thread-unsafe FCN).
 
 **Headlines**
 
-- **JuMinuit and iminuit are the *same* optimizer numerically.** Seeded near any
+- **NativeMinuit and iminuit are the *same* optimizer numerically.** Seeded near any
   minimum (locally well-conditioned), they converge to the same point to **~10⁻⁹**
   ([`iam_localmin_check.jl`](IAM_2Pformfactor/iam_localmin_check.jl)); a +0.5σ nudge
   drops *both* into a deeper shared basin at **≈322**. So the cold-start splits in
@@ -102,7 +102,7 @@ SKIPPED (Phase-H rejects the thread-unsafe FCN).
   far-enough start lets ULP-level Julia-vs-C++ arithmetic decide which basin (a
   butterfly effect). The C++ oracle tests and the M2 fit show the same: identical
   minima whenever the surface is well-conditioned.
-- **On a cold start JuMinuit is the more robust here**: it reaches a *valid* minimum
+- **On a cold start NativeMinuit is the more robust here**: it reaches a *valid* minimum
   at S=0 and at its default S=1 (360.10), while iminuit fails to validate at *any*
   strategy and — being invalid — hard-refuses MINOS/MNCONTOUR. That is path-luck on
   a chaotic surface, not a systematic edge (in the over-parameterized 9-free variant
@@ -116,7 +116,7 @@ SKIPPED (Phase-H rejects the thread-unsafe FCN).
   before any work — the silent-wrong-answer guard demonstrated on a real fit.
 - The **AD path fails** here: the IAM source (`src/amplitudes.jl`, …) carries
   `Float64` annotations that block ForwardDiff `Dual` propagation — a
-  limitation of the IAM code, not of JuMinuit.
+  limitation of the IAM code, not of NativeMinuit.
 
 ## Methodology
 
