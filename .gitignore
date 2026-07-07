@@ -21,6 +21,9 @@
 /.claude/
 /scratch/
 
+# Local agent instructions, not package content
+/AGENTS.md
+
 # C++ harness build artifacts (regenerable via tools/regen_reference.sh)
 /tools/build/
 
