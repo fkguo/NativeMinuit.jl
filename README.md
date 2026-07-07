@@ -369,8 +369,8 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   chaotic surface. Here NativeMinuit happens to converge to a *valid* minimum at its
   default (and runs MINOS/contours, which iminuit refuses on its invalid one)
   (details in [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)).
-- **Large coupled-channel amplitude fit** — 57 free parameters, from an
-  independent vector-charmonium coupled-channel analysis now available as
+- **Large coupled-channel amplitude fit** — 57 free parameters, from a
+  vector-charmonium coupled-channel analysis now available as
   [arXiv:2606.06180](https://arxiv.org/abs/2606.06180) (single-threaded; a heavy,
   multi-second-per-call FCN). The FCN is the **same Julia code** for both
   backends, so it cancels from the comparison — only the optimizer differs. By
