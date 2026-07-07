@@ -30,6 +30,7 @@ Published analysis: V. Baru, F.-K. Guo, C. Hanhart, A. Nefediev,
 "How does the X(3872) show up in e⁺e⁻ collisions: Dip versus peak",
 *Phys. Rev. D* **109** (2024) 11, L111501,
 [arXiv:2404.12003](https://arxiv.org/abs/2404.12003),
+[DOI:10.1103/PhysRevD.109.L111501](https://doi.org/10.1103/PhysRevD.109.L111501),
 [INSPIRE 2778938](https://inspirehep.net/literature/2778938).
 
 | scheme       | migrad+hesse | minos (3 params) | mncontour (20 pts) |
@@ -69,7 +70,9 @@ well has been resolved.)
 
 > Free LECs **L1, L2, L3, L4, L5, L7, L8** (7); **L6 fixed** = 0.07×10⁻³ — in
 > ππ/Kπ/KK̄ only `2L6+L8` enters, so the paper
-> ([arXiv:2011.00921](https://arxiv.org/abs/2011.00921)) fixes L6; the πη
+> ([arXiv:2011.00921](https://arxiv.org/abs/2011.00921),
+> [DOI:10.1007/JHEP04(2021)086](https://doi.org/10.1007/JHEP04(2021)086))
+> fixes L6; the πη
 > normalization `c` is **not** a ππ-fit parameter and is dropped (it was the
 > vestigial flat 9th param). FCN ~9 ms/call, ππ I=0/1/2 phase shifts. This is a
 > deliberately **ill-conditioned stress-test**: the IAM unitarization is nonlinear

@@ -32,6 +32,7 @@ the DD̄* threshold. The published version of the analysis underlying
 > "How does the X(3872) show up in e⁺e⁻ collisions: Dip versus peak",
 > *Phys. Rev. D* **109** (2024) 11, L111501,
 > [arXiv:2404.12003](https://arxiv.org/abs/2404.12003),
+> [DOI:10.1103/PhysRevD.109.L111501](https://doi.org/10.1103/PhysRevD.109.L111501),
 > [INSPIRE 2778938](https://inspirehep.net/literature/2778938).
 
 Files:
@@ -75,8 +76,11 @@ reported through `1/a`. Files: `x6200_double_jpsi.jl`, `data_lhcb.csv`
 Multi-channel χPT-IAM fit of meson-meson scattering phase shifts +
 form factors, used in
 
-> F.-K. Guo et al., *Inverse-amplitude method study of two-pseudoscalar
-> form factors*, 2020 (data from refs in the `datajl/` directory).
+> Y.-J. Shi, C.-Y. Seng, F.-K. Guo, B. Kubis, U.-G. Meißner, W. Wang,
+> "Two-Meson Form Factors in Unitarized Chiral Perturbation Theory",
+> *JHEP* **04** (2021) 086,
+> [arXiv:2011.00921](https://arxiv.org/abs/2011.00921),
+> [DOI:10.1007/JHEP04(2021)086](https://doi.org/10.1007/JHEP04(2021)086).
 
 Files:
 - `iamfit.ipynb` — fit driver (outputs stripped).

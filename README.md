@@ -352,11 +352,15 @@ Either way, confirm the fix with `NativeMinuit.is_thread_safe(cf, x0)` (or just 
 
 On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
 
-- **X(3872) dip line shape** (3 params, J/ψρ + DD̄* coupled channels) — NativeMinuit
-  with AD gradients runs migrad+HESSE **1.6× faster than iminuit** (4.7 vs 7.4 ms)
-  and MINOS **2.1×** faster (72.8 vs 154.7 ms); the numerical path is ~1.2×
-  faster too. All schemes reach the published `fval = 0.0174`.
-- **The IAM fit** ([fkguo/IAMfit](https://github.com/fkguo/IAMfit)) — an
+- **X(3872) dip line shape** (3 params, J/ψρ + DD̄* coupled channels;
+  [arXiv:2404.12003](https://arxiv.org/abs/2404.12003),
+  [Phys. Rev. D DOI](https://doi.org/10.1103/PhysRevD.109.L111501)) —
+  NativeMinuit with AD gradients runs migrad+HESSE **1.6× faster than iminuit**
+  (4.7 vs 7.4 ms) and MINOS **2.1×** faster (72.8 vs 154.7 ms); the numerical
+  path is ~1.2× faster too. All schemes reach the published `fval = 0.0174`.
+- **The IAM fit** ([fkguo/IAMfit](https://github.com/fkguo/IAMfit);
+  [arXiv:2011.00921](https://arxiv.org/abs/2011.00921),
+  [JHEP DOI](https://doi.org/10.1007/JHEP04(2021)086)) — an
   **ill-conditioned**, multi-basin Inverse-Amplitude-Method fit (7 free LECs,
   paper-faithful) and the worked **thread-safety** case study above (the
   shared-buffer race). A **robustness stress-test**, not a speed/fval showcase:
@@ -366,13 +370,15 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   default (and runs MINOS/contours, which iminuit refuses on its invalid one)
   (details in [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)).
 - **Large coupled-channel amplitude fit** — 57 free parameters, from an
-  independent unpublished analysis (single-threaded; a heavy, multi-second-per-call
-  FCN). The FCN is the **same Julia code** for both backends, so it cancels from
-  the comparison — only the optimizer differs. By the metric that reflects that,
-  NativeMinuit lands on the **same minimum** (Δχ² ≈ 2×10⁻⁵; 55 of 57 free parameters
-  agree to <1%, the rest weakly-constrained flat directions) in **nearly the same
-  number of MIGRAD evaluations** (7562 vs 7446 — a 1.6% difference): its MIGRAD is
-  about as call-efficient as C++ Minuit2's, which is what matters when each
+  independent vector-charmonium coupled-channel analysis now available as
+  [arXiv:2606.06180](https://arxiv.org/abs/2606.06180) (single-threaded; a heavy,
+  multi-second-per-call FCN). The FCN is the **same Julia code** for both
+  backends, so it cancels from the comparison — only the optimizer differs. By
+  the metric that reflects that, NativeMinuit lands on the **same minimum**
+  (Δχ² ≈ 2×10⁻⁵; 55 of 57 free parameters agree to <1%, the rest
+  weakly-constrained flat directions) in **nearly the same number of MIGRAD
+  evaluations** (7562 vs 7446 — a 1.6% difference): its MIGRAD is about as
+  call-efficient as C++ Minuit2's, which is what matters when each
   evaluation is expensive. Wall time is then just `nfcn × (shared FCN cost)` — the optimizer's
   own per-call overhead is negligible against a multi-second FCN, so here the FCN,
   not the optimizer, sets the clock. (The cheap-FCN benchmarks above are where
