@@ -60,8 +60,8 @@ m.merrors       # asymmetric ±σ per parameter (name-keyed Dict)
 ## What's included
 
 - **Minuit2 algorithms** — MIGRAD, HESSE, MINOS, MnContours, Simplex and
-  Scan; bounds, fixed parameters, and Strategy levels 0/1/2, ported with
-  line-by-line C++ fidelity and iminuit-matching defaults.
+  Scan; bounds, fixed parameters, and Strategy levels 0/1/2, ported against
+  upstream C++ Minuit2 with iminuit-matching defaults.
 - **iminuit / IMinuit.jl-compatible front end** — `m.values`, `m.errors`,
   `migrad!`, `minos!`, `mncontour`, named-parameter access, per-parameter
   `fix!`/`set_limits!`, and Jupyter-first rich output. `Fit`/`ArrayFit` are
