@@ -2,7 +2,8 @@
 
 [![Dev docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://fkguo.github.io/NativeMinuit.jl/dev)
 [![License: LGPL v2.1+](https://img.shields.io/badge/License-LGPL%20v2.1%2B-blue.svg)](LICENSE)
-[![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fv1%2Fmonthly_downloads%2FNativeMinuit&query=total_requests&suffix=%2Fmonth&label=downloads&color=brightgreen)](https://juliapkgstats.com/pkg/NativeMinuit)
+[![Julia General](https://img.shields.io/badge/Julia%20General-registered-9558B2.svg)](https://github.com/JuliaRegistries/General/tree/master/N/NativeMinuit)
+[![Pkg downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fv2%2Ftotal_downloads%2FNativeMinuit&query=total_requests&label=Pkg%20downloads&color=brightgreen)](https://juliapkgstats.com/pkg/NativeMinuit)
 
 Native-Julia port of the C++ [Minuit2](https://root.cern.ch/doc/master/Minuit2Page.html)
 function-minimization library — the workhorse of every HEP fit. NativeMinuit is a
