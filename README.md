@@ -4,6 +4,8 @@
 [![License: LGPL v2.1+](https://img.shields.io/badge/License-LGPL%20v2.1%2B-blue.svg)](LICENSE)
 [![Julia General](https://img.shields.io/badge/Julia%20General-registered-9558B2.svg)](https://github.com/JuliaRegistries/General/tree/master/N/NativeMinuit)
 [![Pkg requests](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fpackages%2FNativeMinuit%2Fstats%3Ftimeframe%3Dall%26user_data%3Dtrue%26ci_data%3Dtrue%26missing_data%3Dtrue&query=timeframe_requests&label=Pkg%20requests&color=brightgreen)](https://juliapkgstats.com/pkg/NativeMinuit?timeframe=all&trendingPeriod=14d&userData=true&ciData=true&missingData=true)
+[![Binder: IAM fit](https://img.shields.io/badge/Binder-IAM%20fit-F37626?logo=jupyter)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
+[![Binder: X(3872) dip](https://img.shields.io/badge/Binder-X%283872%29%20dip-F37626?logo=jupyter)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
 
 Native-Julia port of the C++ [Minuit2](https://root.cern.ch/doc/master/Minuit2Page.html)
 function-minimization library — the workhorse of every HEP fit. NativeMinuit is a
@@ -17,9 +19,6 @@ intervals, three samplers), bootstrap / jackknife, and multi-modal detection.
 
 License: **LGPL 2.1 or later** (mirrors upstream Minuit2). This is a derivative
 work of C++ Minuit2 — see [`LICENSE`](LICENSE) and [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
-
-[![IAM fit (Binder)](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FIAM_2Pformfactor%2Fiamfit.ipynb)
-[![X(3872) dip (Binder)](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fkguo/NativeMinuit.jl/main?urlpath=lab%2Ftree%2FBenchmarkExamples%2FX3872_dip%2FXdip_published.ipynb)
 
 ## Installation
 
