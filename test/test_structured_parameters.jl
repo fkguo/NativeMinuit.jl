@@ -19,6 +19,7 @@
 using ComponentArrays
 using Optim
 using AdvancedHMC, LogDensityProblems, LogDensityProblemsAD, TransformVariables
+using ForwardDiff
 
 # Count callbacks that did NOT arrive with the expected axes. Returns
 # (n_bad, n_total) so a test can also assert the path was exercised at all.
@@ -381,6 +382,50 @@ _struct_obj(p) = (p.a - 1.0)^2 + 3 * (p.b - 2.0)^2 + 0.5 * (p.a - 1.0) * (p.b - 
         @test tot[] > 0
         @test length(ps.ensemble) > 0
         @test ps.ensemble.best isa ComponentVector
+    end
+
+    # The MIGRAD AD paths, separately from the NUTS one above: the ForwardDiff
+    # extension differentiates the objective at the container itself, so the
+    # Dual-eltype calls it makes must arrive structured too — the probe counts
+    # every call, Float64 and Dual alike.
+    @testset "CostFunctionAD keeps the axes" begin
+        f, bad, tot = _axis_probe(expected_axes)
+        result = migrad(NativeMinuit.CostFunctionAD(f), start, errs)
+        @test result.is_valid
+        @test bad[] == 0
+        @test tot[] > 0
+        @test result.state.parameters.x isa ComponentVector
+        @test result.state.gradient.grad isa ComponentVector
+        @test ComponentArrays.getaxes(result.state.parameters.x) == expected_axes
+
+        # Numeric parity with the identical AD fit on a plain vector.
+        flat = migrad(NativeMinuit.CostFunctionAD(_flat_obj), flat_start, errs)
+        @test collect(result.state.parameters.x) == collect(flat.state.parameters.x)
+        @test result.state.parameters.fval == flat.state.parameters.fval
+        @test result.state.nfcn == flat.state.nfcn
+    end
+
+    @testset "user ForwardDiff gradient keeps the axes" begin
+        f, bad, tot = _axis_probe(expected_axes)
+        gbad = Ref(0)
+        gtot = Ref(0)
+        g = p -> begin
+            gtot[] += 1
+            (p isa ComponentVector && ComponentArrays.getaxes(p) == expected_axes) ||
+                (gbad[] += 1)
+            ForwardDiff.gradient(_struct_obj, p)
+        end
+        m = Minuit(f, start; errors = errs, grad = g)
+        migrad!(m)
+        hesse!(m)
+        minos!(m)
+        @test m.valid
+        @test bad[] == 0
+        @test tot[] > 0
+        @test gbad[] == 0
+        @test gtot[] > 0
+        @test m.values[1] ≈ 1.0 atol = 1e-4
+        @test m.values[2] ≈ 2.0 atol = 1e-4
     end
 
     @testset "profile_band endpoints keep the axes" begin
