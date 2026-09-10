@@ -33,6 +33,23 @@ function _AUTO_RACEY_CHI2(par)
     return s
 end
 
+# Ground truth for the call-counter exactness test at the bottom of this file:
+# the FCN counts its own invocations with an ATOMIC, so the tally is exact under
+# any thread interleaving, and the fit's `m.nfcn` must equal it. n = 300 makes
+# the per-coordinate tasks of the threaded gradient long enough that concurrent
+# `+= 1` on a plain Ref lost increments on every measured run at 4 and 8 threads
+# (and on most runs at 2).
+const _NFCN_TRUTH = Threads.Atomic{Int}(0)
+const _NFCN_TARGET = collect(range(-1.0, 1.0; length = 300))
+function _NFCN_COUNTED_CHI2(x)
+    Threads.atomic_add!(_NFCN_TRUTH, 1)
+    s = 0.0
+    @inbounds for i in eachindex(x)
+        s += (x[i] - _NFCN_TARGET[i])^2 * (1 + 0.1i)
+    end
+    return s
+end
+
 @testset "numerical_gradient! — Phase 2.2 threaded path" begin
 
     @testset "Threaded result matches serial — Quad-4D" begin
@@ -215,4 +232,38 @@ end
             @test_throws ThreadSafetyError migrad!(m_true)
         end
     end
+end
+
+@testset "FCN call counter is exact under the threaded gradient" begin
+    # `cf.nfcn` / `cf.n_nonfinite` are plain (non-atomic) Refs. Up to v0.7.2 the
+    # threaded gradient loop incremented them from every worker thread through
+    # the counting call operator and LOST increments — on this exact problem
+    # (Julia 1.12, `julia -t 8`): m.nfcn = 49514 against 49653 true calls —
+    # while the numerics stayed bit-identical to the serial fit. The threaded
+    # branch now tallies its calls per coordinate and folds them into the
+    # shared counters after the parallel loop. This pins `m.nfcn == true call
+    # count` on both paths, plus threaded/serial `fval` bit-identity.
+    #
+    # Single-threaded Julia: `numerical_gradient!` gates its parallel loop on
+    # `Threads.nthreads() > 1`, so `threaded_gradient = true` runs the serial
+    # branch and the "threaded" half below is NOT discriminating there — it
+    # only re-checks the serial path and passes trivially. The race is
+    # exercised under `julia -t N>1` (CI runs the suite with 4 threads).
+    n = length(_NFCN_TARGET)
+    function fit_counted(threaded)
+        _NFCN_TRUTH[] = 0
+        m = Minuit(_NFCN_COUNTED_CHI2, zeros(n); errors = fill(0.1, n),
+                   threaded_gradient = threaded)
+        migrad!(m)
+        return (nfcn = m.nfcn, truth = _NFCN_TRUTH[], fval = m.fval, valid = m.valid)
+    end
+
+    serial = fit_counted(false)
+    @test serial.valid
+    @test serial.nfcn == serial.truth
+
+    threaded = fit_counted(true)      # verify_threading defaults to true: its
+    @test threaded.valid              # probe calls are counted on both sides
+    @test threaded.nfcn == threaded.truth
+    @test threaded.fval == serial.fval          # numerics untouched, bit-identical
 end

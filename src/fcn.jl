@@ -126,6 +126,23 @@ A non-finite return (`NaN`/`±Inf`) additionally increments the
 end
 
 """
+    _evaluate_uncounted(cf::CostFunction, x::AbstractVector) -> Float64
+
+Evaluate the user function at `x` **without** touching `cf.nfcn` or
+`cf.n_nonfinite`. Same conversion / return-type contract as the call
+operator above (the two one-line bodies are kept in sync by hand).
+
+Both counters are plain, non-atomic `Ref`s, so `cf(x)` must never be
+issued from several threads at once: concurrent `+= 1` loses increments.
+A parallel evaluator calls this instead, tallies its own calls in
+thread-private storage, and adds the tallies to the shared counters
+serially once its parallel region has finished — see the threaded branch
+of [`numerical_gradient!`](@ref). Serial code keeps calling `cf(x)`.
+"""
+@inline _evaluate_uncounted(cf::CostFunction, x::AbstractVector) =
+    Float64(cf.f(x))::Float64
+
+"""
     ncalls(cf::CostFunction) -> Int
 
 Number of times this `CostFunction` has been called.

@@ -3,6 +3,25 @@
 All notable changes to NativeMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 and [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **FCN call counter is exact under `threaded_gradient = true`.** The
+  threaded central-difference gradient loop evaluated the FCN through the
+  counting call operator from every worker thread, and the plain
+  (non-atomic) `nfcn` / `n_nonfinite` `Ref` increments raced: `m.nfcn`
+  under-counted (measured on v0.7.2 with Julia 1.12 at 8 threads, a
+  300-parameter quadratic: 49514 reported vs 49653 true calls), so
+  threaded and serial fits could not be compared by call count and
+  `maxfcn` budgets were checked against a lower bound. The threaded loop
+  now evaluates the FCN uncounted, tallies its calls per coordinate in
+  disjoint slots, and adds the tallies to the shared counters once after
+  the parallel region. The serial call operator and every optimizer
+  numeric are unchanged (threaded and serial `fval` bit-identical, as
+  before); a new test pins `m.nfcn` against an in-FCN atomic ground truth
+  (non-discriminating, but passing, on single-threaded Julia).
+
 ## [0.7.3] — 2026-10-03
 
 ### Fixed

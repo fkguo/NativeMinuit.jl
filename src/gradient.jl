@@ -176,6 +176,11 @@ Zero-allocation in the inner cycle (no per-iteration vector creation;
 the user FCN may allocate at its discretion — that's measured separately
 by `bench_long_fit.jl`). The FCN call counter (`cf.nfcn[]`) advances
 2× per cycle per coordinate, capped at `2·n·ncycle` for a full call.
+On the threaded branch the calls are made through `_evaluate_uncounted`,
+tallied per coordinate, and added to `cf.nfcn[]` / `cf.n_nonfinite[]`
+once after the parallel loop — the counters are plain `Ref`s, and
+incrementing them from several threads at once loses counts. The
+counters therefore end at exactly the value the serial branch leaves.
 """
 function numerical_gradient!(
     out::FunctionGradient,
@@ -226,6 +231,18 @@ function numerical_gradient!(
         # foreign-task scenarios).
         n_buffers = max(Threads.maxthreadid(), Threads.nthreads())
         x_work_perthread = [copy(x_work) for _ in 1:n_buffers]
+        # Call counting. `cf.nfcn` / `cf.n_nonfinite` are plain (non-atomic)
+        # Refs; the counting call operator `cf(x)` issued from every worker
+        # thread raced on them and LOST increments (v0.7.2, 8 threads,
+        # n = 300: 139 of ~49.6k calls dropped). So the loop body evaluates
+        # the FCN uncounted, tallies its own calls for coordinate `i` into
+        # slot `i` of the two vectors below (disjoint slots, written once
+        # per coordinate — no race, and no shared cache line hammered on
+        # every call), and the tallies are folded into the shared counters
+        # serially after the parallel region. The counters end exactly
+        # where the serial branch would leave them.
+        ncalls_i = zeros(Int, n)        # FCN calls made for coordinate i
+        nnonfinite_i = zeros(Int, n)    # … of which returned NaN / ±Inf
         # Phase G — `:static` scheduling. Codex review: under non-`:static`
         # schedules Julia DOES NOT guarantee `Threads.threadid()` stays
         # constant within a single iteration body (task may migrate
@@ -243,6 +260,8 @@ function numerical_gradient!(
             xtf = xw[i]
             epspri = eps2 + abs(out.grad[i] * eps2)
             stepb4 = 0.0
+            ncyc = 0      # cycles run for this coordinate (2 FCN calls each)
+            nnf = 0       # non-finite returns among them
             @inbounds for _ in 1:ncycle
                 optstp = sqrt(dfmin / (abs(out.g2[i]) + epspri))
                 step = max(optstp, abs(0.1 * out.gstep[i]))
@@ -257,10 +276,13 @@ function numerical_gradient!(
                 stepb4 = step
 
                 xw[i] = xtf + step
-                fs1 = cf(xw)
+                fs1 = _evaluate_uncounted(cf, xw)
                 xw[i] = xtf - step
-                fs2 = cf(xw)
+                fs2 = _evaluate_uncounted(cf, xw)
                 xw[i] = xtf
+                ncyc += 1
+                isfinite(fs1) || (nnf += 1)
+                isfinite(fs2) || (nnf += 1)
 
                 grdb4 = out.grad[i]
                 out.grad[i] = 0.5 * (fs1 - fs2) / step
@@ -270,7 +292,12 @@ function numerical_gradient!(
                     break
                 end
             end
+            @inbounds ncalls_i[i] = 2 * ncyc
+            @inbounds nnonfinite_i[i] = nnf
         end
+        # Serial fold-in, after every task has finished.
+        cf.nfcn[] += sum(ncalls_i)
+        cf.n_nonfinite[] += sum(nnonfinite_i)
         return out
     end
 
