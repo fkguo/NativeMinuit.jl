@@ -60,6 +60,51 @@ using Logging
     @test collect(md.values) ≈ collect(m1.values)
 end
 
+@testset "find_deeper_minimum — reject a candidate invalidated by HESSE" begin
+    # C² transition from a lower flat basin (x[1] ≤ -1) to the quadratic
+    # basin at x[1] = 1. Strategy(0) MIGRAD accepts a point in the flat
+    # basin, but HESSE cannot determine its curvature near the lower bound.
+    function flat_basin(x)
+        t = clamp(x[1] + 1.0, 0.0, 1.0)
+        w = t^3 * (10.0 - 15.0 * t + 6.0 * t^2)
+        w * ((x[1] - 1.0)^2 + 1.0) + (x[2] - 2.0)^2
+    end
+    m = Minuit(flat_basin, [1.0, 2.0]; errors = [0.1, 0.1], strategy = 0,
+               limits = [(-10.0, 10.0), nothing], fixed = [false, true])
+    incumbent = NativeMinuit._clone_minuit(m)
+    migrad!(incumbent); hesse(incumbent)
+    @test incumbent.valid
+
+    # Verify the actual validity transition, without changing solver state.
+    cand = NativeMinuit._clone_minuit(incumbent; values = [-10.0, 2.0])
+    migrad!(cand)
+    @test cand.valid
+    @test isfinite(cand.fval)
+    @test cand.fval < incumbent.fval - 1e-3
+    hesse(cand)
+    @test !cand.valid
+    @test cand.fmin.internal.hesse_failed
+
+    # The seeded restart clamps x[1] to -10 and reaches that same flat basin.
+    # A rejected candidate must neither replace best nor mark the round as
+    # improving (which would emit the max_rounds warning at this cap).
+    logger = Test.TestLogger(min_level = Logging.Warn)
+    result = with_logger(logger) do
+        find_deeper_minimum(m; n_restarts = 1, perturb = 200.0,
+                            seed = 1, max_rounds = 1)
+    end
+    @test result.valid
+    @test result.fval ≈ incumbent.fval atol = 1e-6 rtol = 0
+    @test collect(result.values) ≈ collect(incumbent.values) atol = 1e-6 rtol = 0
+    @test isempty(logger.logs)
+    @test result.limits[1] == (-10.0, 10.0)
+    @test -10.0 <= result.values[1] <= 10.0
+    @test result.fixed[2] == true
+    @test result.values[2] == 2.0
+    @test m.fmin === nothing
+    @test collect(m.values) == [1.0, 2.0]
+end
+
 @testset "find_deeper_minimum — perturbation honours LIMITS and FIXED" begin
     # ── Bounded: the deep well at x[1]≈−1 is OUTSIDE [0,2]; the search must stay
     # in bounds and therefore CANNOT reach it. ────────────────────────────────

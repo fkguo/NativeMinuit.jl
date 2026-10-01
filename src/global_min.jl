@@ -163,6 +163,9 @@ function find_deeper_minimum(m::Minuit;
             ok || continue
             if cand.valid && isfinite(cand.fval) && cand.fval < best.fval - min_improvement
                 hesse(cand)
+                # HESSE can invalidate a candidate accepted by MIGRAD.
+                cand.valid && isfinite(cand.fval) &&
+                    cand.fval < best.fval - min_improvement || continue
                 best = cand
                 improved = true
             end
