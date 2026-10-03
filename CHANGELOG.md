@@ -3,6 +3,15 @@
 All notable changes to NativeMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 and [Semantic Versioning](https://semver.org/).
 
+## [0.7.3] — 2026-10-03
+
+### Fixed
+
+- Parameter-perturbation `find_deeper_minimum` searches now recheck candidate
+  validity, the finite objective value, and the improvement threshold after
+  HESSE. Candidates invalidated by HESSE no longer replace the best solution
+  or mark a search round as improving.
+
 ## [0.7.2] — 2026-09-03
 
 ### Changed
