@@ -175,14 +175,17 @@ mutable struct Minuit <: AbstractFit
     # Computed once on first use by `_use_threads(m)` and reused by every later
     # gradient / MINOS / contour evaluation, so the probe never re-runs.
     _auto_threads::Base.RefValue{Union{Nothing,Bool}}
-    # FCN calls spent by MINOS (`minos!`, `minos_upper`, `minos_lower`) on the
-    # current fit result. `m.nfcn` reports `nfcn(m.fmin) + this`, so the
-    # counter accumulates over MIGRAD, HESSE and MINOS like iminuit's `nfcn`;
-    # it is zeroed whenever a new fit result is published through `m.fmin`
-    # (HESSE preserves it, since it refines the same fit).
-    _minos_nfcn::Base.RefValue{Int}
+    # FCN calls spent on the current fit that are not recorded on `m.fmin`
+    # itself: the other MIGRAD passes and Simplex passes of a `migrad!`
+    # retry, and MINOS (`minos!`, `minos_upper`, `minos_lower`). `m.nfcn`
+    # reports `nfcn(m.fmin) + this`, so it counts every evaluation of the
+    # current fit like iminuit's `nfcn` (MIGRAD with retries, HESSE, MINOS).
+    # Zeroed whenever a new fit result is published through `m.fmin`;
+    # `migrad!` then stores its retry surplus, and HESSE preserves it since
+    # it refines the same fit.
+    _extra_nfcn::Base.RefValue{Int}
     # Inner constructor: defaults `_auto_threads` to an unprobed Ref and the
-    # MINOS call counter to zero so the 13-positional-arg construction used
+    # extra call counter to zero so the 13-positional-arg construction used
     # by the keyword constructors keeps working unchanged (defining any inner
     # ctor suppresses the auto-generated all-field one).
     function Minuit(fcn, params, fmin, minos_errors, prec, cfwg, strategy,
@@ -705,6 +708,9 @@ function migrad!(m::Minuit;
     # and reads the canonical `errors` store directly.
     base_errs = _config_step_vector(_init_params(m))
     visited = Tuple{Vector{Float64},Float64}[_visited_entry(bfm)]
+    # Every FCN call of this invocation (all MIGRAD passes and Simplex
+    # passes); the surplus over the published pass goes to `m.nfcn` below.
+    total_calls = nfcn(bfm)
     for _pass in 2:Int(iterate)
         _retry_stop_early(bfm) && break
 
@@ -723,6 +729,7 @@ function migrad!(m::Minuit;
             # ONE aggregate warning at the end, like the migrad passes).
             sx = simplex(m.fcn, params_pert; maxfcn = maxfcn, prec = m.prec,
                           warn_nonfinite = false)
+            total_calls += nfcn(sx)
             params_next = _build_resume_params(m, sx)
         elseif use_simplex
             # iminuit default: plain Simplex from the failed state — its
@@ -740,6 +747,7 @@ function migrad!(m::Minuit;
             sx = simplex(m.fcn, failed; maxfcn = maxfcn, prec = m.prec,
                           minedm = max(Float64(tol) * m.fcn.up, m.prec.eps2),
                           warn_nonfinite = false)
+            total_calls += nfcn(sx)
             params_next = _build_resume_params(m, sx; floor_errors = false)
         else
             # iminuit `use_simplex=False`: MIGRAD at Strategy(2) directly from
@@ -759,6 +767,7 @@ function migrad!(m::Minuit;
                              print_level = print_level,
                              prior_cov = prior_cov)
         npass += 1
+        total_calls += nfcn(bfm)
         nf_total += _nonfinite_calls(bfm)
         best_bfm = _retry_select_better(bfm, best_bfm)
 
@@ -772,6 +781,10 @@ function migrad!(m::Minuit;
     end
 
     _publish_fmin!(m, best_bfm)
+    # Publishing zeroed the extra counter; add back the calls of this
+    # invocation that the published pass does not carry (other passes,
+    # Simplex), so `m.nfcn` is the invocation's total as in iminuit.
+    getfield(m, :_extra_nfcn)[] = total_calls - nfcn(best_bfm)
     m.n_passes = npass
     # P6: warn ONCE at the end of the whole migrad! run (handoff F7) —
     # iminuit warns per NaN return via MnPrint (suppressed at default
@@ -1086,16 +1099,22 @@ first). Returns `m`.
 The crossing search is the C++ `MnFunctionCross` algorithm (parabolic
 root-find, crossing tolerance `0.01·up` on the function value and `0.01`
 on the step multiplier, the reported end point being the model prediction
-at convergence), so the end points satisfy `FCN_profile − FCN_min = up`
-to about `1e-4·up` on well-behaved fits, as in Minuit2 / iminuit.
+at convergence, including Minuit2's early exit on the quadratic model when
+the first probe already lies within the tolerance). The termination is
+the same as Minuit2's, so the end points agree with it; on the smooth
+fits of `test/test_minos_crossing_parity.jl` they satisfy `FCN_profile −
+FCN_min = up` to about `1e-4·up`, while a strongly non-quadratic profile
+can leave a larger deviation within the `0.01·up` tolerance, in Minuit2 as
+here.
 
 `strategy` defaults to the stored `m.strategy` (iminuit's `MnMinos(fcn,
 fmin, self.strategy)`); as in Minuit2 the inner MIGRADs run one level
 lower (`max(0, strategy − 1)`), and `tol` (iminuit's `m.tol`) is their
-tolerance (`0.5·tol`). `maxcall=0` uses the Minuit2 budget
-`2(n+1)(200 + 100n + 5n²)` per side. The FCN calls spent are added to
-`m.nfcn` (iminuit accumulates MIGRAD + HESSE + MINOS calls) and are
-also available per parameter as `m.minos_errors[i].nfcn`.
+tolerance (`0.5·tol`). `maxcall` is the call budget of each inner MIGRAD
+of the search, as in Minuit2; `maxcall=0` uses its default
+`2(n+1)(200 + 100n + 5n²)`. The FCN calls spent are added to `m.nfcn`
+(iminuit accumulates MIGRAD + HESSE + MINOS calls) and are also available
+per parameter as `m.minos_errors[i].nfcn`.
 """
 function minos!(m::Minuit, par::Integer;
                 threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
@@ -1184,7 +1203,7 @@ function _minos_error(m::Minuit, par::Int;
     has_any_bound = has_limits(p) || has_lower_limit(p) || has_upper_limit(p)
     me = _minos_error_dispatch(m, par, p, has_any_bound, _tg, print_level, fwd)
     # Account the calls on `m.nfcn` (iminuit: `self._fcn._nfcn` accumulates).
-    getfield(m, :_minos_nfcn)[] += me.nfcn
+    getfield(m, :_extra_nfcn)[] += me.nfcn
     return me
 end
 
@@ -1319,7 +1338,8 @@ function _minos_external_via_function_cross(
                 continue
             end
             i_int = bfm.params.int_of_ext[ext_i]
-            shift_int = sigma_int_ind * (V_int[ind_int, i_int] /
+            # σ on the displacement, not on the HESSE step — see src/minos.jl.
+            shift_int = Float64(sigma) * sigma_int_ind * (V_int[ind_int, i_int] /
                                           V_int[ind_int, ind_int])
             kind = bound_kind(p_i)
             xt_i_int = int_state.parameters.x[i_int]
@@ -1749,14 +1769,15 @@ function Base.getproperty(m::Minuit, name::Symbol)
     elseif name === :edm
         return m.fmin === nothing ? NaN : edm(m.fmin)
     elseif name === :nfcn
-        # MIGRAD (+ retries) + HESSE calls recorded on the fit result, plus
-        # the MINOS calls made on it (iminuit's `nfcn` accumulates all three).
+        # Calls recorded on the published fit result (its MIGRAD pass and
+        # HESSE) plus the calls of the current fit that are not on it (other
+        # retry passes, Simplex passes, MINOS): iminuit's `nfcn` counts all.
         return m.fmin === nothing ? 0 :
-               nfcn(m.fmin) + getfield(m, :_minos_nfcn)[]
+               nfcn(m.fmin) + getfield(m, :_extra_nfcn)[]
     # iminuit/IMinuit.jl alias: `ncalls`
     elseif name === :ncalls
         return m.fmin === nothing ? 0 :
-               nfcn(m.fmin) + getfield(m, :_minos_nfcn)[]
+               nfcn(m.fmin) + getfield(m, :_extra_nfcn)[]
     elseif name === :valid
         return m.fmin === nothing ? false : is_valid(m.fmin)
     # iminuit/IMinuit.jl alias: `is_valid`
@@ -1817,10 +1838,11 @@ end
 # rebuilding the Minuit object.
 function Base.setproperty!(m::Minuit, name::Symbol, val)
     if name === :fmin
-        # A new fit result starts a fresh call count; MINOS calls on the
-        # previous result no longer belong to `m.nfcn`. (`hesse(m)` restores
-        # the counter around its own assignment — it refines the same fit.)
-        getfield(m, :_minos_nfcn)[] = 0
+        # A new fit result starts a fresh call count; calls attached to the
+        # previous result no longer belong to `m.nfcn`. (`migrad!` adds its
+        # retry surplus right after publishing; `hesse(m)` restores the
+        # counter around its own assignment — it refines the same fit.)
+        getfield(m, :_extra_nfcn)[] = 0
         setfield!(m, :fmin, val)
     elseif name === :strategy
         setfield!(m, :strategy, val isa Strategy ? val : Strategy(Int(val)))
@@ -1912,6 +1934,7 @@ end
 function _replace_all_params!(m::Minuit, new_pars::Vector{MinuitParameter})
     setfield!(m, :params, Parameters(new_pars, _init_params(m)))
     setfield!(m, :fmin, nothing)
+    getfield(m, :_extra_nfcn)[] = 0
     empty!(m.minos_errors)
     return m
 end
@@ -2420,14 +2443,14 @@ function hesse(m::Minuit; strategy::Union{Strategy,Integer} = m.strategy,
         NativeMinuit._internal_to_external_results(new_fmin_int, bfm.params,
                                                 bfm.internal.up)
 
-    # HESSE refines the same fit: keep the MINOS calls already spent on it
-    # in `m.nfcn` (the `:fmin` setter zeroes the counter for a NEW fit).
-    minos_calls = getfield(m, :_minos_nfcn)[]
+    # HESSE refines the same fit: keep the retry / MINOS calls already spent
+    # on it in `m.nfcn` (the `:fmin` setter zeroes the counter for a NEW fit).
+    minos_calls = getfield(m, :_extra_nfcn)[]
     m.fmin = BoundedFunctionMinimum(
         new_fmin_int, bfm.params, ext_values, ext_errors_vec, ext_cov_mat,
         bfm.internal_cf,
     )
-    getfield(m, :_minos_nfcn)[] = minos_calls
+    getfield(m, :_extra_nfcn)[] = minos_calls
     return m
 end
 

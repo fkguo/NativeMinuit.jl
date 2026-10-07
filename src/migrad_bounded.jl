@@ -192,14 +192,20 @@ function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
             return g_int
         end
     end
-    # Share the user-facing CFwG's nfcn + ngrad Refs so call counters
-    # surfaced via `m.nfcn` / `m.ngrad` reflect ALL calls (the wrap
-    # closure is what the inner MIGRAD actually drives). `check_gradient`
-    # must be forwarded too — this wrap is on the path EVERY `migrad!(m;
-    # grad=…)` takes, so dropping it would silently re-enable the
-    # CheckGradient seed check and defeat the `check_gradient=false` opt-out.
+    # The FCN call counter is FRESH per wrapped run, exactly like the
+    # numerical wrapper above: the run's `FunctionMinimum.nfcn` and its
+    # `maxfcn` budget are then its own calls, not the user cost function's
+    # cumulative history. (Sharing the user Ref here made every analytical-
+    # gradient fit report and budget cumulative counts, and made each
+    # bounded MINOS probe report the whole history as its own count.)
+    # `ngrad` and the non-finite tally stay shared: `m.ngrad` is a running
+    # total like iminuit's, and the non-finite tally is baseline-corrected
+    # per run. `check_gradient` must be forwarded — this wrap is on the path
+    # EVERY `migrad!(m; grad=…)` takes, so dropping it would silently
+    # re-enable the CheckGradient seed check and defeat the
+    # `check_gradient=false` opt-out.
     return CostFunctionWithGradient(wrapped_f, wrapped_g, up,
-                                     cf.nfcn, cf.ngrad, cf.n_nonfinite;
+                                     Ref(0), cf.ngrad, cf.n_nonfinite;
                                      check_gradient = cf.check_gradient)
 end
 

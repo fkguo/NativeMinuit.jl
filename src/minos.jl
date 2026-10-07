@@ -403,7 +403,11 @@ function minos(
         vlimlo_int = -piby2 + distnn_int
         @inbounds for k in 1:n
             k == par_idx && continue
-            shift = sigma_i * (V[par_idx, k] / Vii)
+            # C++ `xunit = sqrt(up/m(ind,ind))` reads the σ²-scaled `up`
+            # under iminuit's `_TemporaryErrordef`, so the displacement of
+            # the other parameters grows with σ; the HESSE step `sigma_i`
+            # itself (C++ `err = upar.Error(par)`) does not.
+            shift = Float64(sigma) * sigma_i * (V[par_idx, k] / Vii)
             j = k < par_idx ? k : k - 1
             su = x_min[k] + shift     # dir = +1, raw INT shift
             sl = x_min[k] - shift     # dir = -1, raw INT shift

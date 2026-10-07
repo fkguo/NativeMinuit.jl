@@ -58,8 +58,11 @@ Result of `function_cross`. Mirrors C++ `MnCross`
 - `new_min::Bool` — `true` if a lower minimum was discovered during the
   scan (Phase 1+ should restart MIGRAD here).
 - `fcn_limit::Bool` — `true` if the call budget was exhausted.
-- `par_limit::Bool` — `true` if a parameter bound was hit (Phase 1+
-  only; always `false` in first cut).
+- `par_limit::Bool` — `true` when a probe converged below the aim at the
+  parameter bound (C++ `CrossParLimit`). C++ marks that result *valid*
+  with the limit flag raised; here it is `valid = false, par_limit =
+  true`, and the user-facing [`MinosError`](@ref) lifts it to a valid
+  at-limit side.
 - `ext_state::Union{Nothing,Vector{Float64}}` — the inner-bounded-MIGRAD's
   converged EXTERNAL parameter vector at the crossing (bounded path
   only; always `nothing` for unbounded `function_cross`, and `nothing`
@@ -319,7 +322,7 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
     end
 
     # ── Probe at α = 0, i.e. at `pmid` (C++ `min0`, lines 119-136) ─────────
-    min0, nf = _probe(0.0, maxcalls - nfcn)
+    min0, nf = _probe(0.0, maxcalls)
     nfcn += nf
     if print_level >= 2
         _trace_info(print_level, "MnFunctionCross",
@@ -349,7 +352,7 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
     end
 
     # ── Probe 2 (C++ `min1`, lines 164-186) ──────────────────────────────
-    min1, nf = _probe(aopt, maxcalls - nfcn)
+    min1, nf = _probe(aopt, maxcalls)
     nfcn += nf
     if print_level >= 2
         _trace_info(print_level, "MnFunctionCross",
@@ -379,7 +382,7 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
                 aopt = aulim
                 limset = true
             end
-            min1, nf = _probe(aopt, maxcalls - nfcn)
+            min1, nf = _probe(aopt, maxcalls)
             nfcn += nf
             if print_level >= 2
                 _trace_info(print_level, "MnFunctionCross",
@@ -426,7 +429,7 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
         limset = true
     end
 
-    min2, nf = _probe(aopt, maxcalls - nfcn)
+    min2, nf = _probe(aopt, maxcalls)
     nfcn += nf
     if print_level >= 2
         _trace_info(print_level, "MnFunctionCross",
@@ -512,7 +515,7 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
             limset = true
         end
 
-        min2, nf = _probe(aopt, maxcalls - nfcn)
+        min2, nf = _probe(aopt, maxcalls)
         nfcn += nf
         if print_level >= 2
             _trace_info(print_level, "MnFunctionCross",
@@ -1053,7 +1056,10 @@ function function_cross_multi(
             end
             inner_min, nf = _migrad_with_multi_fixed(
                 cf, state, par_idxs, v_probe;
-                tol = 0.5 * tlr, maxcalls = budget,
+                # `0.5·tlr` is C++ `mgr_tlr`; the EDM goal it yields is
+                # `0.002·tol·up`, and under iminuit's `_TemporaryErrordef`
+                # that `up` is the σ²-scaled one, so scale `tol` by σ² here.
+                tol = 0.5 * tlr * Float64(sigma)^2, maxcalls = budget,
                 prec = prec, strategy = strategy,
                 warm_state = warm_state_ref[],
                 scratch = scratch_holder[],
@@ -1273,7 +1279,9 @@ constrained-minimum (other params re-optimized) satisfies
   at `tlf = 0.01·up` on the function value and `tla = 0.01` on α (C++
   lines 40-46), and the returned α is the model prediction (quadratic,
   linear or parabolic) at convergence, not the last probed α.
-- `maxcalls::Integer=1000` — call budget across all inner MIGRADs.
+- `maxcalls::Integer=1000` — call budget of EACH inner MIGRAD (C++ passes
+  the full `maxcalls` to every `migrad(maxcalls, mgr_tlr)` of the search;
+  the search itself is capped at 15 probes).
 - `strategy::Strategy=Strategy(0)` — passed to inner MIGRADs.
 - `prec::MachinePrecision`.
 - `sigma::Real=1.0` — confidence level in σ-units. The crossing aim
@@ -1370,8 +1378,9 @@ function function_cross(
             # (MnMinos.cxx:118-131 → `xmid = val`, `xdir = err`).
             v = x_pivot + step * (1.0 + aopt)
             _get_scratch!(scratch_holder, n - 1)
+            # σ² on `tol`: see the matching comment in `function_cross_multi`.
             inner_min, nf = _migrad_with_fixed(cf, state, par_idx, v;
-                                tol = 0.5 * tlr, maxcalls = budget,
+                                tol = 0.5 * tlr * Float64(sigma)^2, maxcalls = budget,
                                 prec = prec, strategy = strategy,
                                 warm_state = warm_state_ref[],
                                 scratch = scratch_holder[],
@@ -1689,8 +1698,9 @@ function function_cross_external(
             # with `similar(values)`, and they are what the user's objective
             # and gradient are called with.
             inner_params = Parameters(inner_pars, params)
+            # σ² on `tol`: see the matching comment in `function_cross_multi`.
             inner_bfm = migrad(cf, inner_params;
-                                tol = 0.5 * tlr, maxfcn = Int(budget),
+                                tol = 0.5 * tlr * Float64(sigma)^2, maxfcn = Int(budget),
                                 strategy = inner_strategy, prec = prec,
                                 threaded_gradient = threaded_gradient,
                                 print_level = print_level,
@@ -1732,15 +1742,13 @@ function function_cross_external(
         if result.valid
             result = _shift_aopt(result, 1.0)
         end
-        # Round-3 partial-truncation fix: search exited invalid AND
-        # we hit the bound during the walk → relabel as par_limit.
-        if !result.valid && limset[] && !result.par_limit
-            result = MnCross(result.state, result.aopt, result.nfcn;
-                              valid = false, par_limit = true,
-                              new_min = result.new_min,
-                              fcn_limit = result.fcn_limit,
-                              ext_state = last_ext_state[])
-        end
+        # A search that touched the bound but then failed for another
+        # reason (call limit, new minimum, invalid inner MIGRAD, no bracket)
+        # keeps that failure: C++ MnFunctionCross returns the call-limit /
+        # new-minimum / invalid result first and raises CrossParLimit only
+        # for a probe that converged below the aim at the bound
+        # (`_cross_probe_verdict`), so `limset` alone never makes a side
+        # "at limit" here.
         # M4: attach the captured ext snapshot — the inner-MIGRAD's
         # converged ext values at the crossing, or at the bound for an
         # at-limit side. `_cross_core` builds its MnCross without
