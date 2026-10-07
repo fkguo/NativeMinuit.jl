@@ -892,7 +892,7 @@ function _migrad_with_multi_fixed(
         fake_err = MinimumError(Symmetric(Matrix{Float64}(undef, 0, 0), :U), MnHesseValid)
         fake_grad = FunctionGradient(0)
         fake_state = MinimumState(fake_par, fake_err, fake_grad, 0.0, 1)
-        fake_min = FunctionMinimum(fake_state, fake_state, cf.up;
+        fake_min = FunctionMinimum(fake_state, fake_state, Float64(up_inner);
                                     is_valid = true)
         return fake_min, 1
     end
