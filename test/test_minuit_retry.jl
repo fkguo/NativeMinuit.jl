@@ -445,6 +445,34 @@ using ForwardDiff
               (md.fval < mm.fval ? md.fmin : mm.fmin)
     end
 
+    @testset "m.nfcn is exact on the failed-HESSE exit and across scan → HESSE" begin
+        # x[1]^2 with a second, inert parameter: the end-of-run HESSE of a
+        # Strategy(1) MIGRAD fails (singular Hessian) and MIGRAD keeps the
+        # pre-HESSE state; its HESSE calls were made nonetheless and must be
+        # counted — single pass, with retries, and after a further HESSE.
+        for it in (1, 5)
+            cnt = Ref(0)
+            m = Minuit(x -> (cnt[] += 1; x[1]^2), [0.1, 0.1]; errors = [0.05, 0.05],
+                       strategy = 1, tol = 1e-6)
+            migrad!(m; iterate = it, maxfcn = 4000)
+            @test !m.valid
+            @test m.nfcn == cnt[]
+            hesse(m)
+            @test m.nfcn == cnt[]
+        end
+        # A scan publishes its own calls, and a HESSE on the retained best
+        # point continues from them.
+        cnt = Ref(0)
+        m = Minuit(x -> (cnt[] += 1; sum(abs2, x)), [0.1, 0.2]; errors = [0.1, 0.1])
+        scan(m, 1; maxsteps = 5)
+        @test m.nfcn == cnt[]
+        hesse(m)
+        @test m.nfcn == cnt[]
+        reset(m); c0 = cnt[]
+        scan(m, 1; maxsteps = 5)
+        @test m.nfcn == cnt[] - c0
+    end
+
     @testset "analytical-gradient fit: a stalled first pass is retried at Strategy(2)" begin
         # The same noisy likelihood with an exact (ForwardDiff) gradient of
         # the noisy function: the first pass at Strategy(0) stalls without

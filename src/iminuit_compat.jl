@@ -443,9 +443,10 @@ function scan(m::Minuit, par::Integer;
                 maxsteps::Integer = 41,
                 low::Real = 0.0, high::Real = 0.0)
     base = _scan_base_params(m)
+    c0 = ncalls(m.fcn)
     points = scan(m.fcn, base, Int(par);
                   maxsteps = maxsteps, low = low, high = high)
-    _scan_retain_best!(m, base, Int(par), points)
+    _scan_retain_best!(m, base, Int(par), points; nfcn = ncalls(m.fcn) - c0)
     return points
 end
 function scan(m::Minuit, par::AbstractString; kwargs...)
@@ -474,7 +475,8 @@ _scan_base_params(m::Minuit) =
 # finite fval the Minuit is left untouched — we never publish a NaN-valued
 # "valid" state.
 function _scan_retain_best!(m::Minuit, base::Parameters, par::Int,
-                             points::Vector{Tuple{Float64,Float64}})
+                             points::Vector{Tuple{Float64,Float64}};
+                             nfcn::Integer = ncalls(m.fcn))
     best_x = 0.0
     best_f = Inf
     found = false
@@ -489,7 +491,7 @@ function _scan_retain_best!(m::Minuit, base::Parameters, par::Int,
     new_pars = collect(base.pars)
     new_pars[par] = _build_value_par(new_pars[par], best_x)
     retained = Parameters(new_pars, _init_params(m))
-    m.fmin = _point_function_minimum(m.fcn, retained, best_f)
+    m.fmin = _point_function_minimum(m.fcn, retained, best_f; nfcn = nfcn)
     return m
 end
 
