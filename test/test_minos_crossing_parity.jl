@@ -32,16 +32,21 @@
 #     deliberate difference in cost per probe, not in the crossing found.
 
 using JSON
-using DelimitedFiles
+# Whitespace-separated numeric table (the minos_parity_*.txt data files),
+# read without DelimitedFiles (not a standard library since Julia 1.9).
+function _mp_readrows(path)
+    rows = [parse.(Float64, split(l)) for l in eachline(path) if !isempty(strip(l))]
+    return permutedims(reduce(hcat, rows))
+end
 
 const _MP_DIR = joinpath(@__DIR__, "reference_data")
 const _MP_REF = JSON.parsefile(joinpath(_MP_DIR, "minos_parity_cpp.json"))
 
 # ── The five problems (identical to tools/minos_parity_trace.cxx) ──────────
-let gauss = readdlm(joinpath(_MP_DIR, "minos_parity_gauss5.txt")),
-    bw = readdlm(joinpath(_MP_DIR, "minos_parity_bw6.txt")),
-    ex = readdlm(joinpath(_MP_DIR, "minos_parity_exp2.txt")),
-    H = readdlm(joinpath(_MP_DIR, "minos_parity_quad4_H.txt"))
+let gauss = _mp_readrows(joinpath(_MP_DIR, "minos_parity_gauss5.txt")),
+    bw = _mp_readrows(joinpath(_MP_DIR, "minos_parity_bw6.txt")),
+    ex = _mp_readrows(joinpath(_MP_DIR, "minos_parity_exp2.txt")),
+    H = _mp_readrows(joinpath(_MP_DIR, "minos_parity_quad4_H.txt"))
 
     global _mp_rosen(p) = (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2
     global function _mp_quad4(p)
