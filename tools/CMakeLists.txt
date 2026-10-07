@@ -40,3 +40,7 @@ add_custom_target(regen_reference
     DEPENDS cpp_trace_harness
     COMMENT "Regenerating test/reference_data/*.json"
 )
+
+# MINOS parity reference generator (see the header of minos_parity_trace.cxx).
+add_executable(minos_parity_trace minos_parity_trace.cxx)
+target_link_libraries(minos_parity_trace PUBLIC Minuit2::Minuit2)
