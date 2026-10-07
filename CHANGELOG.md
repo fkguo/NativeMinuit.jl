@@ -5,6 +5,29 @@ and [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`migrad!` retries now follow iminuit 2.31.3's `_robust_low_level_fit`.**
+  After an invalid first pass (and no call-limit exit) every retry runs at
+  `Strategy(2)` and, with the new default `use_simplex=true`, a plain Simplex
+  is run from the failed state before each retry MIGRAD, which then starts
+  from the Simplex point with a full numerical Hessian at its seed;
+  `use_simplex=false` restarts MIGRAD at `Strategy(2)` from the failed state
+  keeping its inverse Hessian. The previous default re-ran MIGRAD at the
+  user's strategy without Simplex, so on a stalled first pass it tended to
+  re-produce the stall and give up. On 16 constructed stalls (deterministic
+  high-frequency noise of relative size 1e-8 to 1e-5 on a Gaussian-likelihood
+  and on Rosenbrock functions, first pass invalid without reaching the call
+  budget) the old default recovered 7 valid fits, the iminuit flow 8 (0 vs 3
+  on the 7 Gaussian-likelihood cases) and the multistart 11; the primary
+  reason for the change is that NativeMinuit now takes the same retry path
+  as iminuit on the same failure. NativeMinuit's perturbed Simplex
+  multistart, previously selected by `use_simplex=true`, is now
+  `multistart=true`; `use_simplex` has iminuit's meaning. The retry's
+  fixed-point stop is kept, and the published pass is now chosen valid-first
+  (a valid pass always beats an invalid one; then the lowest finite `fval`)
+  instead of lowest-fval-first. A first pass that validates is unaffected.
+
 ### Fixed
 
 - **MINOS crossing search is now the C++ `MnFunctionCross` algorithm line
