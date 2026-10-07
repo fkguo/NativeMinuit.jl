@@ -17,6 +17,8 @@
 #     arXiv:2404.12003).
 # ─────────────────────────────────────────────────────────────────────────────
 
+using ForwardDiff
+
 @testset "minuit retry layer (iminuit _robust_low_level_fit parity)" begin
 
     # Shared convex FCN: an unbounded paraboloid centred at (1, 2). Pass 1
@@ -419,6 +421,18 @@
         # the no-Simplex variant also escalates to Strategy(2) and runs
         mn = mk(); migrad!(mn; iterate = 5, use_simplex = false, maxfcn = 200000)
         @test mn.n_passes >= 2
+        # m.nfcn is the whole invocation: every MIGRAD pass and Simplex pass,
+        # not only the published pass (independent counter)
+        for us in (true, false)
+            cnt = Ref(0)
+            mc = Minuit(x -> (cnt[] += 1; noisy_gauss(x)), [0.5, 1.5, 0.3]; errors = fill(0.1, 3),
+                        strategy = 0, tol = 1e-4)
+            migrad!(mc; iterate = 5, use_simplex = us, maxfcn = 200000)
+            @test mc.n_passes >= 2
+            @test mc.nfcn == cnt[]
+            hesse(mc)
+            @test mc.nfcn == cnt[]
+        end
         # the multistart extension still works through its own keyword
         mm = mk(); migrad!(mm; iterate = 5, multistart = true, maxfcn = 200000)
         @test mm.n_passes >= 2
@@ -429,6 +443,32 @@
         # among valid passes the lower fval wins; among invalid ones too
         @test NativeMinuit._retry_select_better(md.fmin, mm.fmin) ===
               (md.fval < mm.fval ? md.fmin : mm.fmin)
+    end
+
+    @testset "analytical-gradient fit: a stalled first pass is retried at Strategy(2)" begin
+        # The same noisy likelihood with an exact (ForwardDiff) gradient of
+        # the noisy function: the first pass at Strategy(0) stalls without
+        # reaching the budget, and the iminuit retry flow recovers a valid fit
+        # through the analytical-gradient path at Strategy(2).
+        function noisy_gauss_ad(p)
+            mu, sg, a = p[1], p[2], p[3]
+            sg <= 0 && return one(eltype(p)) * 1e30
+            s = zero(eltype(p))
+            for i in 0:40
+                x = 0.1 * i - 2.0; d = (x - mu) / sg
+                s += 0.5 * d * d + log(sg) + a * a * 0.01
+            end
+            return s * (1 + 1e-6 * (sin(1e4 * mu) + sin(2e4 * sg) + sin(3e4 * a))) * (1 + 1e-6 * sin(1e6 * mu))
+        end
+        mk_ad() = Minuit(noisy_gauss_ad, [0.5, 1.5, 0.3]; errors = fill(0.1, 3), strategy = 0, tol = 1e-4,
+                         grad = x -> ForwardDiff.gradient(noisy_gauss_ad, x), check_gradient = false)
+        m1 = mk_ad(); migrad!(m1; iterate = 1, maxfcn = 200000)
+        @test !m1.valid
+        @test !m1.fmin.internal.reached_call_limit
+        m5 = mk_ad(); migrad!(m5; iterate = 5, maxfcn = 200000)
+        @test m5.n_passes >= 2
+        @test m5.valid
+        @test m5.ngrad > 0
     end
 
     @testset "retry policy helpers (unit)" begin

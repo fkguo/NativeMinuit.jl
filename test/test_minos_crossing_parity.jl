@@ -134,14 +134,16 @@ function _mp_counted(f)
     end
     return g, scan, trace, ncalls
 end
-# number of distinct consecutive values = inner minimisations (probes)
-function _mp_nprobes(trace)
-    n = 0; prev = NaN
+# distinct consecutive values of the scanned parameter = the probe sequence
+# (one inner minimisation per entry), in order
+function _mp_probes(trace)
+    out = Float64[]; prev = NaN
     for v in trace
-        v == prev || (n += 1; prev = v)
+        v == prev || (push!(out, v); prev = v)
     end
-    n
+    out
 end
+_mp_nprobes(trace) = length(_mp_probes(trace))
 
 function _mp_build(fcn, x0, e0, up, lowlim; strategy, tol, names)
     kw = Dict{Symbol,Any}(Symbol("limit_" * names[i]) => (0.0, nothing) for i in lowlim)
@@ -198,8 +200,15 @@ end
                     @test !e.upper_par_limit && !e.lower_par_limit
                     @test e.nfcn == dc                       # MinosError.nfcn is the true count
                     minos_total += dc
-                    # (3) same crossing-search structure as C++ ...
-                    @test _mp_nprobes(trace) == length(r["probes"])
+                    # (3) same crossing-search structure as C++: the ordered
+                    # probe positions, not just their number ...
+                    probes = _mp_probes(trace)
+                    @test length(probes) == length(r["probes"])
+                    scale_p = abs(r["upper"]) + abs(r["lower"])
+                    for (k, rp) in enumerate(r["probes"])
+                        k <= length(probes) || break
+                        @test abs(probes[k] - rp[1]) <= 1e-3 * scale_p
+                    end
                     # ... same end points to the inner-MIGRAD tolerance ...
                     scale = abs(r["upper"]) + abs(r["lower"])
                     @test abs(e.upper - r["upper"]) <= dtol * scale
@@ -225,8 +234,93 @@ end
                     end
                 end
             end
-            # m.nfcn accumulates the MINOS calls (iminuit convention)
+            # m.nfcn accumulates the MINOS calls (iminuit convention) and is
+            # exactly the independent count of every call made on this fit
             @test m.nfcn == nfcn_before + minos_total
+            @test m.nfcn == ncalls[]
+            hesse(m; strategy = Strategy(1))
+            @test m.nfcn == ncalls[]                 # HESSE adds, MINOS kept, no double count
+        end
+    end
+
+    @testset "maxcall is the budget of each inner MIGRAD (C++ semantics)" begin
+        # Rosenbrock y: 11 probes of at most 19 calls each in the reference
+        # (minos_parity_cpp.json); a budget of 40 per inner MIGRAD succeeds
+        # in Minuit2 / iminuit, and would fail if applied to the whole search.
+        g, scan, trace, ncalls = _mp_counted(_mp_rosen)
+        m = _mp_build(g, [-1.2, 1.0], [0.1, 0.1], 1.0, Int[]; strategy = 1, tol = 0.1, names = ["p0", "p1"])
+        migrad!(m); hesse(m)
+        minos!(m, 2; maxcall = 40)
+        e = m.minos_errors[2]
+        r = _MP_REF["problems"]["rosen2"]["minos"][2]
+        @test e.lower_valid && e.upper_valid
+        @test !e.lower_fcn_limit && !e.upper_fcn_limit
+        @test abs(e.upper - r["upper"]) <= 2e-4 * (abs(r["upper"]) + abs(r["lower"]))
+        @test abs(e.lower - r["lower"]) <= 2e-4 * (abs(r["upper"]) + abs(r["lower"]))
+    end
+
+    @testset "sigma = 2: aim, inner tolerance and pre-shift all scale (closed form)" begin
+        # Gaussian means have the exact 2σ profile interval x̄ ± s·√(e^{4/n} − 1).
+        g, _, _, _ = _mp_counted(_mp_gauss)
+        names = ["p$(i-1)" for i in 1:10]
+        m = _mp_build(g, [1.3, 1.0, 2.3, 1.0, 3.3, 1.0, 4.3, 1.0, 5.3, 1.0], fill(0.1, 10), 0.5, Int[];
+                      strategy = 1, tol = 0.1, names = names)
+        migrad!(m); hesse(m)
+        for i in (1, 5, 9)
+            minos!(m, i; sigma = 2.0)
+            e = m.minos_errors[i]
+            @test e.upper_valid && e.lower_valid
+            k = (i - 1) ÷ 2
+            lo1, hi1, hw1 = _mp_gauss_exact(i)
+            xb = 0.5 * (lo1 + hi1)
+            n = 50
+            hw2 = hw1 * sqrt(exp(4 / n) - 1) / sqrt(exp(1 / n) - 1)
+            @test abs(e.min_par_value + e.upper - (xb + hw2)) <= 2e-4 * hw2
+            @test abs(e.min_par_value + e.lower - (xb - hw2)) <= 2e-4 * hw2
+            # ΔNLL/up at the end points is σ² = 4
+            vals = collect(Float64, m.values); errs = collect(Float64, m.errors)
+            for v in (e.min_par_value + e.upper, e.min_par_value + e.lower)
+                q = _mp_q(_mp_gauss, vals, errs, names, Int[], 0.5, m.fval, i, v)
+                @test abs(q - 4) <= 1e-3
+            end
+        end
+    end
+
+    @testset "a bound-touching search that fails keeps its failure (C++ MnCross flags)" begin
+        # Upper bound at 0.5 truncates the HESSE step, so the first probe sits
+        # at the bound; with a one-call budget it exits on the call limit.
+        # Minuit2 / iminuit report an invalid upper side with the call-limit
+        # flag and NO parameter-limit flag; the side must not be published as
+        # a valid at-limit result.
+        m = Minuit(x -> x[1]^2 + x[2]^2, [0.0, 0.0]; errors = [0.1, 0.1],
+                   name = ["p0", "p1"], limit_p0 = (nothing, 0.5))
+        migrad!(m); hesse(m)
+        minos!(m, 1; maxcall = 1)
+        e = m.minos_errors[1]
+        @test !e.upper_valid
+        @test e.upper_fcn_limit
+        @test !e.upper_par_limit
+        # a genuine at-limit termination (probe converged below the aim at the
+        # bound) is still reported as a valid at-limit side with the bound distance
+        m2 = Minuit(x -> x[1]^2 + x[2]^2, [0.0, 0.0]; errors = [0.1, 0.1],
+                    name = ["p0", "p1"], limit_p0 = (nothing, 0.5))
+        migrad!(m2); hesse(m2); minos!(m2, 1)
+        e2 = m2.minos_errors[1]
+        @test e2.upper_valid && e2.upper_par_limit && !e2.upper_fcn_limit
+        @test e2.upper ≈ 0.5 - e2.min_par_value atol = 1e-9
+    end
+
+    @testset "inner-MIGRAD seed covariance is the conditional (squeezed) covariance" begin
+        # Fixing parameters `idxs` leaves the inverse of the reduced Hessian,
+        # not the minor of the covariance (which is the marginal one).
+        V = inv(_mp_H)
+        err = NativeMinuit.MinimumError(V, 0.0)
+        for idxs in ((1,), (3,), (2, 4), (1, 2))
+            keep = [j for j in 1:4 if !(j in idxs)]
+            expected = inv(_mp_H[keep, keep])
+            got = NativeMinuit._conditional_prior_cov(err, idxs)
+            @test got ≈ expected rtol = 1e-12
+            @test !(got ≈ V[keep, keep])          # the marginal minor is different
         end
     end
 end
@@ -255,24 +349,34 @@ end
         @test e_def.upper == e_exp.upper && e_def.lower == e_exp.lower
         @test e_def.nfcn == e_exp.nfcn
     end
-    # Rosenbrock: HESSE strategies differ measurably, so the default must
-    # follow m.strategy = 2 and not a fixed Strategy(1)/Strategy(0)
+    # HESSE's FCN call count on a 2-parameter fit is 6 at Strategy(0) and 10
+    # at Strategy(1)/(2) (one fewer Hessian-gradient cycle), so counting the
+    # calls of `hesse(m)` under m.strategy = 0 and 2 pins the default to the
+    # stored strategy; a regression to a fixed Strategy(1) would give 10 in
+    # both cases and fail the first assertion below.
+    function hesse_calls(s; explicit = nothing)
+        g, _, _, ncalls = _mp_counted(_mp_rosen)
+        m = Minuit(g, [-1.2, 1.0]; name = ["x", "y"], errors = [0.1, 0.1],
+                   strategy = s, tol = 0.1)
+        migrad!(m)
+        c0 = ncalls[]
+        explicit === nothing ? hesse(m) : hesse(m; strategy = Strategy(explicit))
+        return ncalls[] - c0
+    end
+    c0_def, c2_def = hesse_calls(0), hesse_calls(2)
+    c0_exp, c1_exp, c2_exp = hesse_calls(0; explicit = 0), hesse_calls(0; explicit = 1), hesse_calls(0; explicit = 2)
+    @test c0_exp != c2_exp                        # the observable discriminates
+    @test c0_def == c0_exp && c2_def == c2_exp    # default == m.strategy
+    @test c0_def != c1_exp                        # and not a fixed Strategy(1)
+    # MINOS: the inner MIGRADs run at m.strategy − 1; Rosenbrock's y search
+    # iterates, so Strategy(0) and Strategy(2) differ measurably
     function fresh_rosen(s)
         m = Minuit(_mp_rosen, [-1.2, 1.0]; name = ["x", "y"], errors = [0.1, 0.1],
                    strategy = s, tol = 0.1)
-        migrad!(m)
+        migrad!(m); hesse(m; strategy = Strategy(1))
         return m
     end
-    m_def = fresh_rosen(2); hesse(m_def)
-    m_s2 = fresh_rosen(2); hesse(m_s2; strategy = Strategy(2))
-    m_s1 = fresh_rosen(2); hesse(m_s1; strategy = Strategy(1))
-    m_s0 = fresh_rosen(2); hesse(m_s0; strategy = Strategy(0))
-    @test m_def.covariance == m_s2.covariance
-    @test m_s1.covariance == m_s2.covariance || m_def.covariance != m_s1.covariance
-    @test m_s0.covariance == m_s2.covariance || m_def.covariance != m_s0.covariance
-    # HESSE early-exits to the same covariance at every strategy on these
-    # converged minima; the discriminating observable is the MINOS search on
-    # Rosenbrock's y, whose inner MIGRADs run at strategy − 1 and iterate.
+    m_def = fresh_rosen(2); m_s2 = fresh_rosen(2); m_s0 = fresh_rosen(2)
     minos!(m_def, 2); minos!(m_s2, 2; strategy = Strategy(2)); minos!(m_s0, 2; strategy = Strategy(0))
     e_def, e_s2, e_s0 = m_def.minos_errors[2], m_s2.minos_errors[2], m_s0.minos_errors[2]
     @test e_def.nfcn == e_s2.nfcn && e_def.upper == e_s2.upper && e_def.lower == e_s2.lower

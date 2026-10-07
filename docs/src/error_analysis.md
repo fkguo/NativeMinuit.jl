@@ -104,15 +104,20 @@ The crossing search is the Minuit2 `MnFunctionCross` algorithm: starting at
 the HESSE ±1σ point it re-minimises the other parameters, then iterates a
 quadratic / linear / parabolic model of the profile until the predicted
 crossing is within `0.01` of the probed step multiplier *and* the probed value
-is within `0.01·up` of the aim, reporting the model prediction. On smooth fits
-the end points satisfy `FCN_profile − FCN_min = up` to about `1e-4·up` (the
-inner-MIGRAD tolerance, `0.5·tol`), as in Minuit2 / iminuit. `minos!` uses the
-stored `m.strategy` (inner MIGRADs run one level lower, as in Minuit2) and
-`m.tol` unless overridden per call, its FCN calls are added to `m.nfcn`, and
-each `m.minos_errors[i].nfcn` records the calls spent on that parameter.
-NativeMinuit's inner MIGRADs restart from the previous probe's state, so a
-MINOS run usually costs fewer calls than Minuit2 for the same sequence of
-probes.
+is within `0.01·up` of the aim, reporting the model prediction (and, like
+Minuit2, returning at once from the quadratic model when the first probe is
+already within that tolerance). The termination is Minuit2's, so the end
+points agree with it: on smooth fits they satisfy `FCN_profile − FCN_min =
+up` to about `1e-4·up` (the inner-MIGRAD tolerance, `0.5·tol`), while a
+strongly non-quadratic profile can leave a larger deviation within the
+`0.01·up` tolerance. `minos!` uses the stored `m.strategy` (inner MIGRADs run
+one level lower, as in Minuit2) and `m.tol` unless overridden per call;
+`maxcall` is the budget of each inner MIGRAD as in Minuit2; its FCN calls are
+added to `m.nfcn`, and each `m.minos_errors[i].nfcn` records the calls spent
+on that parameter. NativeMinuit's inner MIGRADs restart from the previous
+probe's state, so an unbounded MINOS run costs fewer calls than Minuit2 for
+the same sequence of probes; a limited parameter's search re-seeds each probe
+and costs about the same.
 
 ### Derived quantities — `extremize(m, f)` / `profile_band(m, f, xs)`
 
