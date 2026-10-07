@@ -326,8 +326,8 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
     nfcn += nf
     if print_level >= 2
         _trace_info(print_level, "MnFunctionCross",
-                    @sprintf("probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
-                              ipt + 1, 0.0, fval(min0), min0.is_valid, nf))
+                    @sprintf("probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d  innerup=%.4g",
+                              ipt + 1, 0.0, fval(min0), min0.is_valid, nf, min0.up))
     end
     v = _cross_probe_verdict(min0, fmin_val, tlf, aim, limset, nfcn, state_fallback)
     v === nothing || return v
@@ -356,8 +356,8 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
     nfcn += nf
     if print_level >= 2
         _trace_info(print_level, "MnFunctionCross",
-                    @sprintf("probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
-                              ipt + 1, aopt, fval(min1), min1.is_valid, nf))
+                    @sprintf("probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d  innerup=%.4g",
+                              ipt + 1, aopt, fval(min1), min1.is_valid, nf, min1.up))
     end
     v = _cross_probe_verdict(min1, fmin_val, tlf, aim, limset, nfcn, state_fallback)
     v === nothing || return v
@@ -386,8 +386,8 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
             nfcn += nf
             if print_level >= 2
                 _trace_info(print_level, "MnFunctionCross",
-                            @sprintf("L300 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
-                                      ipt + 1, aopt, fval(min1), min1.is_valid, nf))
+                            @sprintf("L300 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d  innerup=%.4g",
+                                      ipt + 1, aopt, fval(min1), min1.is_valid, nf, min1.up))
             end
             v = _cross_probe_verdict(min1, fmin_val, tlf, aim, limset, nfcn, state_fallback)
             v === nothing || return v
@@ -433,8 +433,8 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
     nfcn += nf
     if print_level >= 2
         _trace_info(print_level, "MnFunctionCross",
-                    @sprintf("L460 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
-                              ipt + 1, aopt, fval(min2), min2.is_valid, nf))
+                    @sprintf("L460 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d  innerup=%.4g",
+                              ipt + 1, aopt, fval(min2), min2.is_valid, nf, min2.up))
     end
     v = _cross_probe_verdict(min2, fmin_val, tlf, aim, limset, nfcn, state_fallback)
     v === nothing || return v
@@ -519,8 +519,8 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
         nfcn += nf
         if print_level >= 2
             _trace_info(print_level, "MnFunctionCross",
-                        @sprintf("L500 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
-                                  ipt + 1, aopt, fval(min2), min2.is_valid, nf))
+                        @sprintf("L500 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d  innerup=%.4g",
+                                  ipt + 1, aopt, fval(min2), min2.is_valid, nf, min2.up))
         end
         v = _cross_probe_verdict(min2, fmin_val, tlf, aim, limset, nfcn, state_fallback)
         v === nothing || return v
