@@ -842,6 +842,10 @@ function _migrad_with_multi_fixed(
     scratch::Union{Nothing,MigradScratch} = nothing,
     threaded_gradient::Bool = false,
     print_level::Integer = 0,
+    # Conditional covariance of the free parameters with `par_idxs` fixed,
+    # when the caller already holds it (a contour driver fixes the same two
+    # parameters at every point); computed here otherwise.
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
 )
     n = length(state.parameters)
     is_fixed = falses(n)
@@ -934,7 +938,9 @@ function _migrad_with_multi_fixed(
     # C++ MnContours.cxx:125-131 (`upar.Fix(px); upar.Fix(py)`): the inner
     # MIGRAD of every ray search is seeded with the outer covariance
     # squeezed at all the fixed parameters (conditional covariance).
-    inner_prior_cov = _conditional_prior_cov(state.error, par_idxs; prec = prec)
+    inner_prior_cov = prior_cov === nothing ?
+                      _conditional_prior_cov(state.error, par_idxs; prec = prec) :
+                      prior_cov
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec,
@@ -966,6 +972,8 @@ function _conditional_prior_cov(err::MinimumError, idxs;
         e = squeeze_error(e, i; prec = prec)
         e.status == MnInvertFailed && return nothing
     end
+    # Materialise the full symmetric matrix (the `Symmetric` wrapper only
+    # carries the upper triangle, which `seed_state`'s symmetry check rejects).
     return Matrix(e.inv_hessian)
 end
 
@@ -983,6 +991,7 @@ function function_cross_multi(
     threaded_gradient::Bool = false,
     sigma::Real = 1.0,
     print_level::Integer = 0,
+    prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -1049,7 +1058,8 @@ function function_cross_multi(
                 warm_state = warm_state_ref[],
                 scratch = scratch_holder[],
                 threaded_gradient = threaded_gradient,
-                print_level = print_level)
+                print_level = print_level,
+                prior_cov = prior_cov)
             # On successful inner-MIGRAD, update the warm state for the
             # next probe. On failure keep the previous valid warm state
             # (or `nothing` for the cold first probe).
