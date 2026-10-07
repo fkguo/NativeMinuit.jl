@@ -603,12 +603,18 @@ function _migrad_loop(
     # P6: early-return helper values — the seed IS the final state on
     # these paths, so the non-finite verdict applies to the seed fval.
     seed_nonfinite = !isfinite(seed.parameters.fval)
+    # The state published by an early exit carries the calls made so far
+    # (the thread-safety verification above spends FCN calls after the seed
+    # was built), so `nfcn(fmin)` and `m.nfcn` stay exact on every path.
+    seed_now = nfcn(seed) == ncalls(cf) ? seed :
+               MinimumState(seed.parameters, seed.error, seed.gradient,
+                            seed.edm, ncalls(cf))
 
     # Pre-loop call-limit check (matches C++ ModularFunctionMinimizer.cxx:182-187:
     # "Stop before iterating - call limit already exceeded").
     if ncalls(cf) >= maxfcn
         return FunctionMinimum(
-            seed, seed, cf.up;
+            seed_now, seed, cf.up;
             is_valid = false,
             reached_call_limit = true,
             nonfinite_fval = seed_nonfinite,
@@ -618,7 +624,7 @@ function _migrad_loop(
     end
 
     if n == 0
-        return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+        return FunctionMinimum(seed_now, seed, cf.up; is_valid = false,
                                 nonfinite_fval = seed_nonfinite,
                                 n_nonfinite_calls = nonfinite_calls(cf) - nf_base,
                                 states = history,
@@ -646,14 +652,14 @@ function _migrad_loop(
     # `sym_invert!`, `make_posdef`, and the EDM estimator will catch a
     # genuinely-singular V via their own error paths.
     if !is_valid(seed.parameters) || !is_valid(seed.gradient) || !is_available(seed.error)
-        return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+        return FunctionMinimum(seed_now, seed, cf.up; is_valid = false,
                                 nonfinite_fval = seed_nonfinite,
                                 n_nonfinite_calls = nonfinite_calls(cf) - nf_base,
                                 states = history,
                                 storage_level = Int(storage_level))
     end
     if seed.edm < 0
-        return FunctionMinimum(seed, seed, cf.up; is_valid = false,
+        return FunctionMinimum(seed_now, seed, cf.up; is_valid = false,
                                 nonfinite_fval = seed_nonfinite,
                                 n_nonfinite_calls = nonfinite_calls(cf) - nf_base,
                                 states = history,

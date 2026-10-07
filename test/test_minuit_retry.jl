@@ -471,6 +471,17 @@ using ForwardDiff
         reset(m); c0 = cnt[]
         scan(m, 1; maxsteps = 5)
         @test m.nfcn == cnt[] - c0
+        # The pre-loop call-limit exit after the thread-safety verification
+        # (which itself spends calls) must publish the calls made, not the
+        # seed's count: with maxfcn = 1 the run exits there.
+        acnt = Threads.Atomic{Int}(0)
+        mt = Minuit(x -> (Threads.atomic_add!(acnt, 1); sum(abs2, x)), [0.1, 0.2];
+                    errors = [0.1, 0.1], strategy = 1, threaded_gradient = true)
+        migrad!(mt; iterate = 1, maxfcn = 1)
+        @test !mt.valid
+        @test mt.nfcn == acnt[]
+        hesse(mt)
+        @test mt.nfcn == acnt[]
     end
 
     @testset "analytical-gradient fit: a stalled first pass is retried at Strategy(2)" begin

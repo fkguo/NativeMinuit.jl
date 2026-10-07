@@ -337,6 +337,29 @@ end
             q = (fc(pt) - fval(fm)) / (1.0 * 0.01^2)
             @test abs(q - 1) <= 5e-4
         end
+        # (d) The inner minimisations carry the σ²-scaled errordef itself —
+        # not merely a σ²-scaled tolerance, which would leave the numerical
+        # gradient / HESSE step sizes (C++ reads Up there) at the original
+        # errordef while reproducing the EDM goal. Observed on the inner
+        # minima's own `up`, which only the errordef route sets.
+        cf4 = CostFunction(_mp_quad4, 1.0)
+        fm4 = migrad(cf4, [1.0, 1.0, 1.0, 1.0], fill(0.1, 4); strategy = Strategy(1))
+        st = fm4.state
+        inner1, _ = NativeMinuit._migrad_with_fixed(cf4, st, 1, st.parameters.x[1] + 0.3;
+                                                    tol = 0.05, maxcalls = 1000,
+                                                    prec = MachinePrecision(), up_inner = 4.0)
+        @test inner1.up == 4.0
+        innerm, _ = NativeMinuit._migrad_with_multi_fixed(cf4, st, [1, 2],
+                                                          st.parameters.x[1:2] .+ 0.2;
+                                                          tol = 0.05, maxcalls = 1000,
+                                                          prec = MachinePrecision(), up_inner = 0.25)
+        @test innerm.up == 0.25
+        @test NativeMinuit._with_errordef(cf4, 4.0).up == 4.0
+        @test NativeMinuit._with_errordef(cf4, 1.0) === cf4
+        cfg = NativeMinuit.CostFunctionWithGradient(_mp_quad4, x -> _mp_H * x, 1.0)
+        @test NativeMinuit._with_errordef(cfg, 4.0).up == 4.0
+        @test NativeMinuit._fix_one_param(cf4, 1, 0.5, 4; up = 2.5).up == 2.5
+        @test NativeMinuit._fix_multi_params(cf4, [1, 2], [0.5, 0.5], 4; up = 2.5).up == 2.5
     end
 
     @testset "a bound-touching search that fails keeps its failure (C++ MnCross flags)" begin
