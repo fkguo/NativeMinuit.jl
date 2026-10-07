@@ -540,61 +540,49 @@ end
 
 """
     migrad!(m::Minuit; strategy=m.strategy, tol=m.tol, maxfcn=nothing,
-                       iterate=5, use_simplex=false,
+                       iterate=5, use_simplex=true, multistart=false,
                        threaded_gradient=m.threaded_gradient,
                        verify_threading=m.verify_threading,
                        print_level=m.print_level) -> Minuit
 
-Run MIGRAD on `m`: a single MIGRAD pass at `strategy`, and — modelled on
-iminuit's `_robust_low_level_fit` retry — if a pass fails to validate
-(no-improvement / above-max-EDM exit, see C++ `VariableMetricBuilder.cxx:278`)
-and the call limit hasn't been reached, re-run MIGRAD from the last converged
-point, up to `iterate-1` more times. C++ Minuit2 itself has no retry; the loop
-is iminuit's addition. The re-seed lets a stalled fit escape (IAM cold start:
-S=0 613 → ~383, S=1 330 → ~326; the exact basin reached differs from iminuit's
-on this ill-conditioned problem, see docs/dev/IAM_CONVERGENCE_GAP.md §
-Fidelity).
+Run MIGRAD on `m`. Drop-in equivalent of iminuit's `m.migrad(ncall, iterate,
+use_simplex)`: one MIGRAD pass at `strategy`, then iminuit's
+`_robust_low_level_fit` retry — if a pass fails to validate (no-improvement /
+above-max-EDM exit, see C++ `VariableMetricBuilder.cxx:278`) and the call
+limit has not been reached, retry up to `iterate-1` more times, **every retry
+pass at `Strategy(2)`** (iminuit: "increasing the strategy to 2 in this case
+was found to be beneficial"). With `use_simplex=true` (the default, as in
+iminuit) each retry first runs a plain Nelder–Mead Simplex from the failed
+state (initial simplex size = that state's parameter errors), and MIGRAD then
+starts from the Simplex point without a covariance, so its Strategy(2) seed
+computes a full numerical Hessian. With `use_simplex=false` MIGRAD restarts
+directly from the failed state and keeps its inverse Hessian (iminuit's
+`MnMigrad(fcn, fm.state, MnStrategy(2))`). C++ Minuit2 itself has no retry;
+the loop is iminuit's addition.
 
-**How the default retry differs from iminuit 2.31.3.** NativeMinuit's default
-(`use_simplex=false`) re-runs MIGRAD **at the same strategy** from a fresh
-re-seed (the possibly-degraded DFP inverse-Hessian is discarded). iminuit's
-`_robust_low_level_fit` instead escalates every retry pass to `MnStrategy(2)`
-and, with its own default `use_simplex=True`, runs a plain `MnSimplex` from the
-failed state before each retry MIGRAD. The two only differ when the first pass
-is invalid; the first pass itself is identical. NativeMinuit's opt-in
-`use_simplex=true` below is a *different* algorithm from iminuit's
-`use_simplex` (a perturbed multistart, not a plain Simplex pass), so neither
-kwarg value reproduces iminuit's retry exactly — this is a deliberate,
-documented divergence of the retry layer, not of MIGRAD.
+Two NativeMinuit additions on top of the iminuit loop, both documented
+divergences: a fixed-point (cycle) detector stops the loop when a pass
+re-converges to an already-visited `(x, fval)` (iminuit would repeat identical
+passes until `iterate` is exhausted), and the published result is chosen
+across passes — a valid pass is always preferred over an invalid one, and
+among passes of equal validity the lowest finite `fval` wins (iminuit returns
+the last pass). `m.n_passes` records how many MIGRAD passes ran.
 
-**`use_simplex=true` (opt-in, NOT the default) enables a structured Simplex
-multistart that is NOT part of C++ Minuit2 or iminuit** — a NativeMinuit extension
-for genuinely multi-minimum landscapes (e.g. the X(3872) `J/ψρ + DD̄*`
-multi-dip fit). Each retry pass takes a Nelder-Mead Simplex hop with a
-geometrically-growing seed step (×1, ×2, ×4, … from the parameter error scale,
-capped at the physical range) before re-MIGRAD at `Strategy(2)` for numerical
-FCNs (the AD path keeps the user strategy). It is this opt-in path's
-`Strategy(2)` escalation that walks the IAM x_jm WARM start to χ²=322 (PR #10);
-at the faithful default, x_jm converges to iminuit's 325.8 and 322 is reached
-the C++/iminuit way — by passing `strategy=2`.
-
-Both paths keep a fixed-point (cycle) detector — re-convergence to an
-already-visited `(x, fval)` basin stops the loop (recovering wasted passes on
-single-basin fits) — and the safety invariant: `iterate=N` never yields a worse
-fval than `iterate=1` (`best_bfm`, the lowest-fval pass, is published).
-
-(The opt-in `use_simplex=true` multistart's multi-scale escape — for genuine
-multiple local minima in multi-parameter HEP amplitude / phase-shift / LEC
-fits — does NOT prove the global minimum was found; global optimization is
-undecidable. The defensible statement: it searches perturbation scales up to
-re-convergence on a known basin or the physical parameter range.)
+**`multistart=true` (opt-in; a NativeMinuit extension absent from C++ Minuit2
+and iminuit)** replaces the plain Simplex by a perturbed multistart for
+genuinely multi-minimum landscapes (e.g. the X(3872) `J/ψρ + DD̄*` multi-dip
+fit): each retry takes a Simplex hop with a geometrically growing seed step
+(×1, ×2, ×4, … from the parameter error scale, capped at the physical range)
+before the Strategy(2) MIGRAD, and stops once the perturbation spans every
+free parameter's physical range. It does not prove the global minimum was
+found (global optimization is undecidable); the defensible statement is that
+it samples increasing perturbation scales up to re-convergence on a known
+basin or the physical range. Through v0.7.3 this multistart was selected by
+`use_simplex=true`, and the default retry re-ran MIGRAD at the user's strategy
+without Simplex — see the 0.8.0 CHANGELOG entry.
 
 `iterate=1` disables the retry loop and reproduces single-shot
-C++-faithful behavior. The **safety invariant** is guaranteed by
-construction: `iterate=N` never yields a worse `fval` than `iterate=1`
-(the lowest-fval pass is published, tie → the valid one). The number of
-MIGRAD passes the call executed is recorded in `m.n_passes` (1 = no
-retry).
+C++-faithful behavior.
 
 Updates `m.fmin`. Returns `m` for chaining. If the constructor was
 given `grad=...`, dispatches into the analytical-gradient path on
@@ -616,7 +604,8 @@ function migrad!(m::Minuit;
                   tol::Real = m.tol,
                   maxfcn::Union{Integer,Nothing} = nothing,
                   iterate::Integer = 5,
-                  use_simplex::Bool = false,
+                  use_simplex::Bool = true,
+                  multistart::Bool = false,
                   threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                   verify_threading::Bool = m.verify_threading,
                   print_level::Integer = m.print_level)
@@ -670,42 +659,35 @@ function migrad!(m::Minuit;
                          print_level = print_level)
 
     # ── Robust retry loop ───────────────────────────────────────────────
-    # Default (`use_simplex=false`): a faithful reproduction of iminuit's
-    # `_robust_low_level_fit` — re-run MIGRAD from the last converged point
-    # at the SAME strategy (a fresh re-seed; the degraded DFP inverse-Hessian
-    # is discarded), up to `iterate` passes, stopping when the fit validates.
-    # C++ Minuit2 has no retry; iminuit adds exactly this loop, so `migrad!(m)`
-    # is drop-in-equivalent to iminuit's `m.migrad()`. The re-seed is what lets
-    # a stalled fit escape (IAM cold start: S=0 613 → ~383, S=1 330 → ~326 — via
-    # iminuit's retry *mechanism*; the exact basin differs from iminuit's on the
-    # ill-conditioned IAM, see docs/dev/IAM_CONVERGENCE_GAP.md § Fidelity).
+    # iminuit 2.31.3 `_robust_low_level_fit`: after an invalid pass (and no
+    # call-limit exit) every retry runs at MnStrategy(2); with `use_simplex`
+    # (iminuit's default True) a plain MnSimplex is run first from the failed
+    # state and the retry MIGRAD starts from the Simplex point — the Simplex
+    # minimum carries no covariance, so the Strategy(2) seed computes a full
+    # numerical Hessian (MnSeedGenerator.cxx:88). Without Simplex, MIGRAD
+    # restarts from the failed state keeping its covariance
+    # (`MnMigrad(fcn, fm.state, MnStrategy(2))` → `st.HasCovariance()` seed).
     #
-    # Opt-in (`use_simplex=true`): a structured Simplex multistart that is NOT
-    # part of C++ Minuit2 or iminuit — a NativeMinuit EXTENSION for genuinely
-    # multi-minimum landscapes (e.g. the X(3872) `J/ψρ + DD̄*` multi-dip fit).
-    # Each pass takes a Nelder-Mead Simplex hop with a geometrically-growing
-    # seed step (`_retry_perturb_factor`, ×2 per pass, capped at the physical
-    # range) before re-MIGRAD at `retry_strategy` (Strategy(2) for numerical
-    # FCNs — the heavier level; the AD path keeps the user strategy since its
-    # seed supports all levels). It is this opt-in path's Strategy(2)
-    # escalation that walks the IAM x_jm WARM start to χ²=322 (PR #10); at the
-    # faithful default x_jm converges to iminuit's 325.8, and 322 is reached
-    # the C++/iminuit way — by passing `strategy=2`.
+    # NativeMinuit additions (documented divergences, see the docstring):
+    # (a) fixed-point (cycle) detection — a pass that re-converges to an
+    #     already-visited (x, fval) stops the loop (iminuit would repeat the
+    #     identical pass until `iterate` is exhausted);
+    # (b) the published result is the best pass: valid before invalid, then
+    #     the lowest finite fval (iminuit publishes the last pass);
+    # (c) `multistart=true` — the opt-in perturbed Simplex multistart
+    #     (growing seed step ×1, ×2, ×4, … via `_retry_scaled_params`), which
+    #     also stops when the perturbation saturates every free parameter's
+    #     physical range. Not part of C++ Minuit2 or iminuit.
     #
-    # Both paths share: (a) fixed-point (cycle) detection — if a pass
-    # re-converges to an already-visited (x, fval) basin (parameter-error-
-    # relative tolerance) the loop stops, recovering the wasted passes on
-    # single-basin fits like IAM; (b) the safety invariant (PR #8) —
-    # `iterate=N` never yields a worse fval than `iterate=1`, guaranteed by
-    # construction: `best_bfm` tracks the lowest-fval pass (tie → the valid
-    # one) and is what lands in `m.fmin`. The opt-in path additionally stops
-    # when the perturbation saturates every free parameter's physical range.
+    # Through v0.7.3 the default retry re-ran MIGRAD at the user's strategy
+    # without Simplex, and the multistart was selected by `use_simplex=true`.
+    # On stalled first passes (numerically noisy likelihoods) that default
+    # re-produced the same stall and gave up; the iminuit flow recovers a
+    # valid fit in most such cases (see the 0.8.0 CHANGELOG entry).
     #
     # We do NOT claim the global minimum is found (global optimization is
-    # undecidable). Defensible statements: the default matches iminuit; the
-    # opt-in samples increasing perturbation scales up to re-convergence or
-    # the physical range.
-    retry_strategy = m.cfwg === nothing ? Strategy(2) : strategy
+    # undecidable).
+    retry_strategy = Strategy(2)
     best_bfm = bfm
     npass = 1
     # P6: aggregate non-finite FCN returns across ALL passes for the
@@ -726,29 +708,51 @@ function migrad!(m::Minuit;
     for _pass in 2:Int(iterate)
         _retry_stop_early(bfm) && break
 
-        params_next = _build_resume_params(m, bfm)
         prior_cov = nothing
         factor = 1.0
-        pass_strategy = strategy          # faithful default: same strategy, no bump
-        if use_simplex
-            # Opt-in NativeMinuit multistart EXTENSION (NOT in C++ Minuit2 or
-            # iminuit): a Nelder-Mead Simplex hop with a geometrically-growing
-            # seed step, then re-MIGRAD at `retry_strategy`. The post-Simplex
-            # state has no usable inverse Hessian (MinimumError is the I
-            # placeholder), so we carry only its ext_values forward and let the
-            # next MIGRAD cold-seed (prior_cov stays nothing).
-            pass_strategy = retry_strategy
+        if multistart
+            # Opt-in NativeMinuit multistart EXTENSION: a Nelder-Mead Simplex
+            # hop with a geometrically-growing seed step, then re-MIGRAD at
+            # Strategy(2). The post-Simplex state has no usable inverse
+            # Hessian, so only its ext_values are carried forward and the
+            # next MIGRAD cold-seeds (prior_cov stays nothing).
             factor = _retry_perturb_factor(_pass)
-            params_pert = _retry_scaled_params(m, params_next, factor, base_errs)
+            params_pert = _retry_scaled_params(m, _build_resume_params(m, bfm),
+                                               factor, base_errs)
             # P6: inner probe — never warns (the migrad! retry loop emits
             # ONE aggregate warning at the end, like the migrad passes).
             sx = simplex(m.fcn, params_pert; maxfcn = maxfcn, prec = m.prec,
                           warn_nonfinite = false)
             params_next = _build_resume_params(m, sx)
+        elseif use_simplex
+            # iminuit default: plain Simplex from the failed state — its
+            # values and its errors as they are (`MnSimplex(fcn, fm.state, 2)`
+            # builds the simplex from the state's errors) — then MIGRAD from
+            # the Simplex minimum. C++ builds the user state of a Simplex
+            # minimum (no valid error matrix) with the final simplex extents
+            # as errors (MnUserParameterState.cxx:141-153, `Dirin()`), which
+            # is what NativeMinuit's Simplex result reports as `ext_errors`;
+            # the retry MIGRAD seeds from them unfloored, as iminuit does.
+            # iminuit hands its `tol` to the Simplex; C++ turns it into the
+            # EDM goal `toler · up` floored at machine precision
+            # (ModularFunctionMinimizer.cxx:175-180).
+            failed = _build_resume_params(m, bfm; floor_errors = false)
+            sx = simplex(m.fcn, failed; maxfcn = maxfcn, prec = m.prec,
+                          minedm = max(Float64(tol) * m.fcn.up, m.prec.eps2),
+                          warn_nonfinite = false)
+            params_next = _build_resume_params(m, sx; floor_errors = false)
+        else
+            # iminuit `use_simplex=False`: MIGRAD at Strategy(2) directly from
+            # the failed state, keeping its inverse Hessian as the seed
+            # covariance (C++ `fState = min.UserState()` → HasCovariance).
+            params_next = _build_resume_params(m, bfm; floor_errors = false)
+            err_prev = bfm.internal.state.error
+            prior_cov = (is_available(err_prev) && is_valid(err_prev)) ?
+                        Matrix(err_prev.inv_hessian) : nothing
         end
 
         bfm = _erased_call(_migrad_into!, m, params_next;
-                             strategy = pass_strategy, tol = tol,
+                             strategy = retry_strategy, tol = tol,
                              maxfcn = maxfcn,
                              threaded_gradient = _tg,
                              verify_threading = _vt,
@@ -762,9 +766,9 @@ function migrad!(m::Minuit;
         _retry_is_fixed_point(bfm, visited, base_errs) && break
         push!(visited, _visited_entry(bfm))
 
-        # Opt-in path: stop once the perturbation spans every free parameter's
+        # Multistart: stop once the perturbation spans every free parameter's
         # physical range (no larger meaningful hop remains).
-        use_simplex && _retry_perturb_saturated(m, factor, base_errs) && break
+        multistart && _retry_perturb_saturated(m, factor, base_errs) && break
     end
 
     _publish_fmin!(m, best_bfm)
@@ -955,8 +959,13 @@ function _retry_select_better(cand::BoundedFunctionMinimum,
     fb = fval(best)
     isfinite(fc) || return best   # NaN/Inf candidate never wins
     isfinite(fb) || return cand   # any finite candidate beats a non-finite incumbent
+    # A valid minimum (usable covariance, EDM below goal) is always preferred
+    # over an invalid one, whatever their fvals: an invalid pass with a lower
+    # fval has no trustworthy curvature and is not a usable fit result.
+    vc = is_valid(cand)
+    vb = is_valid(best)
+    vc != vb && return vc ? cand : best
     fc < fb && return cand
-    (fc == fb && is_valid(cand) && !is_valid(best)) && return cand
     return best
 end
 
@@ -2270,7 +2279,7 @@ end
 """
     migrad(m::Minuit; ncall=nothing, resume=true, precision=nothing,
                        strategy=m.strategy, tol=m.tol,
-                       iterate=5, use_simplex=false) -> Minuit
+                       iterate=5, use_simplex=true, multistart=false) -> Minuit
 
 IMinuit.jl-compatible alias for [`migrad!`](@ref). Mutates `m.fmin`
 and returns `m`. The `ncall` / `resume` / `precision` kwargs are
@@ -2290,13 +2299,10 @@ C++ Minuit2's `MnStrategy()` — for both numerical and analytical/AD
 (`grad=`) FCNs. Override per call with `strategy=...`, or set
 `m.strategy = ...` once before the first migrad.
 
-`iterate` and `use_simplex` are threaded through to [`migrad!`](@ref)
-unchanged. By default (`use_simplex=false`) the retry is iminuit's
-`_robust_low_level_fit` — re-run at the user's strategy, no Simplex, no
-strategy bump — so this is drop-in-equivalent to iminuit's `m.migrad()`.
-The opt-in `use_simplex=true` enables NativeMinuit's Simplex multistart (which
-*does* bump numerical FCNs to `Strategy(2)`); that is a documented extension
-beyond C++ Minuit2 / iminuit — see the [`migrad!`](@ref) docstring.
+`iterate`, `use_simplex` and `multistart` are threaded through to
+[`migrad!`](@ref) unchanged: by default (`use_simplex=true`) the retry is
+iminuit's — every retry pass at `Strategy(2)`, preceded by a plain Simplex —
+and `multistart=true` selects NativeMinuit's perturbed-multistart extension.
 """
 function migrad(m::Minuit;
                  ncall::Union{Integer,Nothing} = nothing,
@@ -2305,7 +2311,8 @@ function migrad(m::Minuit;
                  strategy::Union{Strategy,Integer} = m.strategy,
                  tol::Real = m.tol,
                  iterate::Integer = 5,
-                 use_simplex::Bool = false)
+                 use_simplex::Bool = true,
+                 multistart::Bool = false)
     if !resume
         # Equivalent to IMinuit.jl `reset(m)`: drop any prior fmin/minos.
         m.fmin = nothing
@@ -2315,7 +2322,8 @@ function migrad(m::Minuit;
         m.prec = MachinePrecision(Float64(precision))
     end
     return migrad!(m; strategy = strategy, tol = tol, maxfcn = ncall,
-                       iterate = iterate, use_simplex = use_simplex)
+                       iterate = iterate, use_simplex = use_simplex,
+                       multistart = multistart)
 end
 
 """

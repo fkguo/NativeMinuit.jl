@@ -160,13 +160,13 @@
         @test m5.fval ≈ fval1 atol = 1e-10    # idempotent
         @test m5.fval ≤ fval1 + 1e-10         # safety invariant
 
-        # OPT-IN Simplex multistart (use_simplex=true — NativeMinuit extension
+        # OPT-IN Simplex multistart (multistart=true — NativeMinuit extension
         # beyond C++/iminuit): on an already-converged fit it must stay valid
         # at the deep minimum and never worsen the result (safety invariant).
         m5s = Minuit(fcn, [-5.0, 5.0];
                       names = ["a", "b"], errors = [0.5, 0.5],
                       strategy = Strategy(0))
-        migrad!(m5s; iterate = 5, use_simplex = true, tol = 1e-6, maxfcn = 2000)
+        migrad!(m5s; iterate = 5, multistart = true, tol = 1e-6, maxfcn = 2000)
         # On an ALREADY-CONVERGED fit the retry loop is correctly a no-op
         # (gated on `!is_valid`): with the Strategy(1) default + §14 eps=4ε,
         # pass 1 reaches the deep minimum, so `n_passes == 1` and we do NOT
@@ -267,24 +267,21 @@
     end
 
     @testset "AD-gradient FCN survives retry path (codex BLOCKING regression)" begin
-        # The retry loop keeps the user's strategy on the AD path rather
-        # than bumping to Strategy(2) (the numerical-path multistart
-        # heuristic): `retry_strategy = m.cfwg === nothing ? Strategy(2) :
-        # strategy`. The AD `seed_state` now supports all strategy levels,
-        # so this is a deliberate choice, not a constraint. We exercise both
-        # the faithful default (`use_simplex=false` — plain re-seed at the
-        # user strategy) and the opt-in `use_simplex=true` Simplex multistart.
+        # Every retry pass runs at Strategy(2) on the AD path too (iminuit
+        # uses MnStrategy(2) regardless of the gradient; the AD `seed_state`
+        # supports all strategy levels). We exercise the iminuit default
+        # (`use_simplex=true`), the no-Simplex variant and the multistart.
         # Pass 1 validates on this convex FCN (at the Strategy(1) default), so
         # the retry loop never enters; the guard here is that the whole AD
         # retry path — strategy selection + seed + (skipped) loop — runs
         # without error under both settings.
         f_ad = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
         g_ad = x -> [2.0 * (x[1] - 1.0), 2.0 * (x[2] - 2.0)]
-        for us in (true, false)
+        for (us, ms) in ((true, false), (false, false), (true, true))
             m_ad = Minuit(f_ad, [0.0, 0.0];
                            names = ["x", "y"], errors = [0.1, 0.1],
                            grad = g_ad)
-            migrad!(m_ad; iterate = 5, use_simplex = us)
+            migrad!(m_ad; iterate = 5, use_simplex = us, multistart = ms)
             @test m_ad.valid
             @test m_ad.fval < 1e-8
             @test m_ad.values[1] ≈ 1.0 atol = 1e-4
@@ -363,8 +360,8 @@
         # Simplex multistart's growing hop escapes to it — the X(3872)-shaped
         # "the deeper solution is only reached by perturbing out of the
         # stall" outcome. This basin jump is the job of the multistart
-        # (use_simplex=true, a NativeMinuit extension beyond C++/iminuit), not the
-        # faithful plain-re-seed default.
+        # (multistart=true, a NativeMinuit extension beyond C++/iminuit), not
+        # the iminuit-faithful default.
         m1 = Minuit(fcn_rugged, [0.0, 0.0]; names = ["x", "y"], errors = [0.02, 0.02])
         migrad!(m1; iterate = 1, tol = 1e-6, maxfcn = 4000)
         @test !m1.valid          # pass 1 stuck in the shallow noisy bowl
@@ -372,7 +369,7 @@
         @test m1.n_passes == 1
 
         m5 = Minuit(fcn_rugged, [0.0, 0.0]; names = ["x", "y"], errors = [0.02, 0.02])
-        migrad!(m5; iterate = 5, use_simplex = true, tol = 1e-6, maxfcn = 4000)
+        migrad!(m5; iterate = 5, multistart = true, tol = 1e-6, maxfcn = 4000)
         @test m5.n_passes >= 2          # retry layer ran
         # NB: pre-§5 the escape "stopped early" (n_passes < 5). Under the
         # C++-faithful Simplex (audit §5: minedm = 0.1·up, looser than the old
@@ -385,6 +382,53 @@
         @test m5.fval < m1.fval - 1.0   # strictly, substantially deeper
         # Safety invariant holds across the escape too.
         @test m5.fval <= m1.fval + 1e-10
+    end
+
+    @testset "iminuit retry flow recovers a stalled noisy likelihood" begin
+        # A 3-parameter Gaussian-likelihood-like function with a deterministic
+        # relative "noise" of 1e-6: at Strategy(0), tol=1e-4 the first MIGRAD
+        # pass stalls (EDM above goal, no improvement in the line search)
+        # WITHOUT reaching the call budget. Through v0.7.3 the default retry
+        # re-ran MIGRAD at the same strategy, re-produced the stall and gave
+        # up invalid; the iminuit flow (Simplex, then Strategy(2) MIGRAD)
+        # recovers a valid fit. The same case is one of the 16 stalled cases
+        # of the 2026-10 retry study (CHANGELOG 0.8.0).
+        function noisy_gauss(p)
+            mu, sg, a = p[1], p[2], p[3]
+            sg <= 0 && return 1e30
+            s = 0.0
+            for i in 0:40
+                x = 0.1 * i - 2.0; d = (x - mu) / sg
+                s += 0.5 * d * d + log(sg) + a * a * 0.01
+            end
+            return s * (1 + 1e-6 * (sin(1e4 * mu) + sin(2e4 * sg) + sin(3e4 * a)))
+        end
+        mk() = Minuit(noisy_gauss, [0.5, 1.5, 0.3]; errors = fill(0.1, 3),
+                      strategy = 0, tol = 1e-4)
+        m1 = mk(); migrad!(m1; iterate = 1, maxfcn = 200000)
+        @test !m1.valid
+        @test !m1.fmin.internal.reached_call_limit
+        # iminuit default flow
+        md = mk(); migrad!(md; iterate = 5, maxfcn = 200000)
+        @test md.valid
+        @test md.n_passes >= 2
+        @test md.fval < 27.5
+        # explicit kwargs reproduce the default bit for bit
+        me = mk(); migrad!(me; iterate = 5, use_simplex = true, multistart = false, maxfcn = 200000)
+        @test me.valid && me.fval == md.fval && me.nfcn == md.nfcn
+        # the no-Simplex variant also escalates to Strategy(2) and runs
+        mn = mk(); migrad!(mn; iterate = 5, use_simplex = false, maxfcn = 200000)
+        @test mn.n_passes >= 2
+        # the multistart extension still works through its own keyword
+        mm = mk(); migrad!(mm; iterate = 5, multistart = true, maxfcn = 200000)
+        @test mm.n_passes >= 2
+        @test mm.valid
+        # published-pass rule: a valid pass beats an invalid one regardless of fval
+        @test NativeMinuit._retry_select_better(m1.fmin, md.fmin) === md.fmin
+        @test NativeMinuit._retry_select_better(md.fmin, m1.fmin) === md.fmin
+        # among valid passes the lower fval wins; among invalid ones too
+        @test NativeMinuit._retry_select_better(md.fmin, mm.fmin) ===
+              (md.fval < mm.fval ? md.fmin : mm.fmin)
     end
 
     @testset "retry policy helpers (unit)" begin

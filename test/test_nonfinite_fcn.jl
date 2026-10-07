@@ -318,7 +318,7 @@ end
         @test nonfinite_calls(m.fcn) == 0
     end
 
-    @testset "use_simplex multistart probe stays silent (ONE aggregate warning)" begin
+    @testset "multistart Simplex probe stays silent (ONE aggregate warning)" begin
         # Blocked-wall fit: every migrad pass ends invalid, so the opt-in
         # Simplex multistart probes run between passes. The probes must
         # not add warnings of their own — exactly one aggregate warning
@@ -326,7 +326,7 @@ end
         f = _wall_fcn(0.5, NaN; c1 = 1.0)
         m = Minuit(f, [0.0, 0.0]; error = 0.1, strategy = 1)
         @test_logs (:warn, r"non-finite") migrad!(m; maxfcn = 300,
-                                                   use_simplex = true)
+                                                   multistart = true)
         @test !m.valid
     end
 end
