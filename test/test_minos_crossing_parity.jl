@@ -389,6 +389,20 @@ end
         vc = innerups(() -> contour_exact(fm4, cf4, 1, 2; npoints = 6, sigma = 2.0,
                                           strategy = Strategy(1), print_level = 2))
         @test length(vc) >= 6 && all(==(4.0), vc)   # MINOS probes, axis points, rays
+        # (f) Two-parameter contours fix every parameter on each ray, so the
+        # ray probes are bare evaluations without an inner MIGRAD; their
+        # result must still carry the σ²-scaled errordef (C++ keeps the
+        # effective Up through the no-free-parameter builder). The
+        # four-parameter fixture above never reaches this branch.
+        cf2 = CostFunction(x -> x[1]^2 + x[2]^2, 1.0)
+        fm2 = migrad(cf2, [0.0, 0.0], [0.1, 0.1]; strategy = Strategy(1))
+        inner2, nf2 = NativeMinuit._migrad_with_multi_fixed(cf2, fm2.state, [1, 2], [0.3, 0.4];
+                                                            tol = 0.05, maxcalls = 1000,
+                                                            prec = MachinePrecision(), up_inner = 4.0)
+        @test nf2 == 1 && inner2.up == 4.0 && NativeMinuit.fval(inner2) ≈ 0.25
+        v2 = innerups(() -> contour_exact(fm2, cf2, 1, 2; npoints = 6, sigma = 2.0,
+                                          strategy = Strategy(1), print_level = 2))
+        @test length(v2) >= 6 && all(==(4.0), v2)   # all-fixed rays included
     end
 
     @testset "a bound-touching search that fails keeps its failure (C++ MnCross flags)" begin
