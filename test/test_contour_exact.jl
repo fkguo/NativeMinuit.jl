@@ -500,7 +500,10 @@ end
     @test length(c_tight.points) == 6
     @test c_tight.nfcn == c6.nfcn            # same work, same points
     @test c_tight.nfcn > c6.nfcn - 1
-    # A budget already exhausted by the axis points stops before any ray.
+    # A budget already exhausted by the axis points stops before any ray:
+    # exactly the calls of a 4-point (axis-only) contour, no ray attempted.
     c_none = contour_exact(fmin, cf, 1, 2; npoints = 6, strategy = Strategy(1), maxcalls = 1)
+    c4 = contour_exact(fmin, cf, 1, 2; npoints = 4, strategy = Strategy(1))
     @test length(c_none.points) == 4
+    @test c_none.nfcn == c4.nfcn
 end
