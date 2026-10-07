@@ -2465,9 +2465,10 @@ The `sigma` kwarg (confidence level in σ-units) is threaded through
 the MnFunctionCross `up · sigma²` scaling (P5 — see
 [`function_cross`](@ref) for details). At sigma=1 the behavior is
 C++-MnMinos-identical; at sigma=k the upper/lower errors correspond
-to the k-σ contour. `maxcall` (iminuit, singular) caps the FCN calls
-of each cross-search and `tol` / `toler` set the cross-search tolerance;
-both are forwarded to `function_cross` via `minos!`.
+to the k-σ contour. `maxcall` (iminuit, singular) is the call budget of
+each inner MIGRAD of the crossing search (Minuit2 passes it to every inner
+minimisation; `0` selects its default) and `tol` / `toler` set the
+inner-MIGRAD tolerance (`0.5·tol`); both are forwarded via `minos!`.
 """
 function minos(m::Minuit, var = nothing;
                 sigma::Real = 1, kwargs...)

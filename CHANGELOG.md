@@ -68,10 +68,21 @@ and [Semantic Versioning](https://semver.org/).
   minimisation); it was applied as a total over the whole search, which
   made small budgets fail where Minuit2 / iminuit succeed.
 - **`sigma ≠ 1` (`minos!(…; sigma=k)`, `mncontour` confidence levels) now
-  scales the inner-MIGRAD tolerance and the correlated starting
-  displacement of the other parameters with σ²**, as iminuit's temporary
-  errordef does for the whole MINOS run; only the crossing aim and
-  tolerance were scaled before.
+  runs every inner minimisation at the σ²-scaled errordef** (EDM goal,
+  numerical-gradient and HESSE step sizes, the contour axis points
+  included) **and scales the correlated starting displacement of the
+  other parameters with σ**, as iminuit's temporary errordef does for the
+  whole MINOS / contour run; only the crossing aim and tolerance were
+  scaled before. The HESSE step along the scanned parameter is unchanged.
+- **Contour ray searches get the full contour call budget**, and the
+  budget is checked before each attempt, as `MnContours` does: a ray that
+  finds its crossing while crossing the budget still contributes the point
+  (it was dropped, and later rays were given only the remaining budget).
+- **Call counts after a failed inner HESSE and after `scan`.** A MIGRAD run
+  whose end-of-run HESSE fails recorded the pre-HESSE call count; a `scan`
+  published the cost function's cumulative count and a following
+  `hesse(m)` dropped it. Both now report the calls actually made, so
+  `m.nfcn` stays exact on these paths.
 - **A MINOS side that touched its parameter bound and then failed** (call
   limit, new minimum, invalid inner MIGRAD) now reports that failure, as
   Minuit2 does; it was relabelled a valid at-limit side with the bound

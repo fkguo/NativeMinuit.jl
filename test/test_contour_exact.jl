@@ -478,3 +478,29 @@
         @test all(isfinite(p[1]) && isfinite(p[2]) for p in ce.points)
     end
 end
+
+@testset "contour call budget: C++ MnContours semantics" begin
+    # The budget is checked before each ray search, every ray receives the
+    # full contour budget, and a ray that finds its crossing while crossing
+    # the budget still contributes its point (MnContours.cxx:158-196). With
+    # the budget set one call below a 6-point contour's total, the sixth
+    # ray starts below the budget and its point is kept; the old scheme
+    # (remaining budget per ray, point dropped when over budget) gave 5.
+    # (A correlated 3-parameter function: the 2-d Rosenbrock's ray searches
+    # find no points beyond the four axis points with this low-level API,
+    # on this branch as on v0.7.3, so it cannot exercise the budget.)
+    fc(p) = (w = p[3] - 0.1 * p[1] - 0.6 * p[2];
+             p[1]^2 + 2 * p[2]^2 + 0.5 * p[1] * p[2] + w^2 + 0.1 * w^4)
+    cf = CostFunction(fc, 1.0)
+    fmin = migrad(cf, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1]; strategy = Strategy(1))
+    c6 = contour_exact(fmin, cf, 1, 2; npoints = 6, strategy = Strategy(1))
+    @test c6.valid && length(c6.points) == 6
+    c_tight = contour_exact(fmin, cf, 1, 2; npoints = 6, strategy = Strategy(1),
+                            maxcalls = c6.nfcn - 1)
+    @test length(c_tight.points) == 6
+    @test c_tight.nfcn == c6.nfcn            # same work, same points
+    @test c_tight.nfcn > c6.nfcn - 1
+    # A budget already exhausted by the axis points stops before any ray.
+    c_none = contour_exact(fmin, cf, 1, 2; npoints = 6, strategy = Strategy(1), maxcalls = 1)
+    @test length(c_none.points) == 4
+end

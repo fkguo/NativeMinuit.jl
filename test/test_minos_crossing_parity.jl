@@ -286,6 +286,59 @@ end
         end
     end
 
+    @testset "sigma reaches the inner minimisations (discriminating)" begin
+        # (a) At sigma = 0.05 the crossing aim is fmin + 0.0025·up. Minuit2 /
+        # iminuit run the inner MIGRADs at the σ²-scaled errordef, so their EDM
+        # goal is 0.002·tol·up·σ²; with the unscaled goal the inner minima are
+        # only good to ~1e-4·up, i.e. ~4% of the aim, and the end points of
+        # the correlated quadratic (exact: ±σ·√(2·up·V_ii)) miss by that much.
+        V = inv(_mp_H)
+        g, _, _, _ = _mp_counted(_mp_quad4)
+        m = _mp_build(g, [1.0, 1.0, 1.0, 1.0], fill(0.1, 4), 1.0, Int[]; strategy = 1, tol = 0.1,
+                      names = ["p0", "p1", "p2", "p3"])
+        migrad!(m); hesse(m)
+        for i in 1:4
+            minos!(m, i; sigma = 0.05)
+            e = m.minos_errors[i]
+            ex = 0.05 * sqrt(2 * V[i, i])
+            @test e.upper_valid && e.lower_valid
+            @test abs(e.upper - ex) <= 2e-4 * ex
+            @test abs(-e.lower - ex) <= 2e-4 * ex
+        end
+        # (b) The correlated starting displacement of the OTHER parameters at
+        # the first probe (C++ MnMinos.cxx:140-146, xunit = √(up_eff/m_ii))
+        # scales with σ; the scanned parameter's own step (the HESSE error)
+        # does not. Observed through the first FCN evaluation of the search.
+        first_x = Ref(Float64[]); arm = Ref(false)
+        gq = x -> (arm[] && (first_x[] = collect(Float64, x); arm[] = false); _mp_quad4(x))
+        m2 = _mp_build(gq, [1.0, 1.0, 1.0, 1.0], fill(0.1, 4), 1.0, Int[]; strategy = 1, tol = 0.1,
+                       names = ["p0", "p1", "p2", "p3"])
+        migrad!(m2); hesse(m2)
+        xh = collect(Float64, m2.values)
+        arm[] = true; minos!(m2, 1; sigma = 1.0); d1 = first_x[] .- xh
+        arm[] = true; minos!(m2, 1; sigma = 2.0); d2 = first_x[] .- xh
+        @test d1[1] ≈ sqrt(2 * V[1, 1]) rtol = 1e-6         # the HESSE step
+        @test d2[1] ≈ d1[1] rtol = 1e-12                    # unchanged at σ = 2
+        for k in 2:4
+            @test abs(d1[k]) > 0.05                         # a genuine displacement …
+            @test d2[k] ≈ 2 * d1[k] rtol = 1e-9             # … that doubles with σ
+        end
+        # (c) A contour at sigma = 0.01: the axis points come from an inner
+        # minimisation of their own; unscaled, their profiled value misses the
+        # aim by a few percent of it (and the ray points similarly), scaled
+        # they lie on the contour to ~1e-4.
+        fc(p) = (w = p[3] - 0.1 * p[1] - 0.6 * p[2];
+                 p[1]^2 + 2 * p[2]^2 + 0.5 * p[1] * p[2] + w^2 + 0.1 * w^4)
+        cf = CostFunction(fc, 1.0)
+        fm = migrad(cf, [0.0, 0.0, 0.0], [0.1, 0.1, 0.1]; strategy = Strategy(1))
+        c = contour_exact(fm, cf, 1, 2; npoints = 8, sigma = 0.01, strategy = Strategy(1))
+        @test c.valid && length(c.points) == 8
+        for pt in c.full_points
+            q = (fc(pt) - fval(fm)) / (1.0 * 0.01^2)
+            @test abs(q - 1) <= 5e-4
+        end
+    end
+
     @testset "a bound-touching search that fails keeps its failure (C++ MnCross flags)" begin
         # Upper bound at 0.5 truncates the HESSE step, so the first probe sits
         # at the bound; with a one-call budget it exits on the call limit.

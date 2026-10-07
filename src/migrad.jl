@@ -1055,6 +1055,14 @@ function _migrad_loop(
 
     # ── Determine final status
     final = s0
+    # The recorded call count is what this run actually spent, whatever exit
+    # led here: a failed inner HESSE keeps the pre-HESSE state (and C++
+    # `FunctionMinimum::NFcn()` would report that state's count), but the
+    # HESSE calls were made, and `m.nfcn` is accounted from this number.
+    if nfcn(final) != ncalls(cf)
+        final = MinimumState(final.parameters, final.error, final.gradient,
+                             final.edm, ncalls(cf))
+    end
     # C++ VariableMetricBuilder.cxx:350 marks reached-call-limit UNCONDITIONALLY
     # when nfcn ≥ maxfcn — even if EDM happens to be at convergence. Drop the
     # v1 AND-gate with edm_corrected > edmval (parallel-review #2 E5).

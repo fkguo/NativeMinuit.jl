@@ -559,9 +559,10 @@ call alloc; Phase 1.x can ship a workspace-passing variant.
 """
 function _fix_one_param(cf::CostFunction, i::Integer, v::Float64, n::Integer,
                          template::AbstractVector{Float64} =
-                             Vector{Float64}(undef, Int(n)))
+                             Vector{Float64}(undef, Int(n));
+                         up::Real = cf.up)
     f = cf.f
-    up = cf.up
+    up = Float64(up)
     i_ = Int(i)
     n_ = Int(n)
     # Per-thread splice-buffer pool (Phase G).
@@ -632,10 +633,11 @@ threaded MnFunctionCross / MINOS / MnContours.
 function _fix_one_param(cf::CostFunctionWithGradient, i::Integer, v::Float64,
                          n::Integer,
                          template::AbstractVector{Float64} =
-                             Vector{Float64}(undef, Int(n)))
+                             Vector{Float64}(undef, Int(n));
+                         up::Real = cf.up)
     f = cf.f
     g = cf.g
-    up = cf.up
+    up = Float64(up)
     # Counters are FRESH (not shared with outer cf) — symmetric with the
     # numerical `_fix_one_param(::CostFunction, ...)` overload above.
     # `inner_min.nfcn` and `ContoursError.nfcn` carry the inner delta if
@@ -715,13 +717,14 @@ function _fix_multi_params(
     par_idxs::AbstractVector{<:Integer},
     v::AbstractVector{<:Real},
     n::Integer,
-    template::AbstractVector{Float64} = Vector{Float64}(undef, Int(n)),
+    template::AbstractVector{Float64} = Vector{Float64}(undef, Int(n));
+    up::Real = cf.up,
 )
     length(par_idxs) == length(v) ||
         throw(DimensionMismatch("par_idxs / v length mismatch"))
     f = cf.f
     g = cf.g
-    up = cf.up
+    up = Float64(up)
     # Counters are fresh — same rationale as `_fix_one_param` above.
     n_ = Int(n)
     is_fixed = falses(n_)
@@ -793,12 +796,13 @@ function _fix_multi_params(
     par_idxs::AbstractVector{<:Integer},
     v::AbstractVector{<:Real},
     n::Integer,
-    template::AbstractVector{Float64} = Vector{Float64}(undef, Int(n)),
+    template::AbstractVector{Float64} = Vector{Float64}(undef, Int(n));
+    up::Real = cf.up,
 )
     length(par_idxs) == length(v) ||
         throw(DimensionMismatch("par_idxs / v length mismatch"))
     f = cf.f
-    up = cf.up
+    up = Float64(up)
     n_ = Int(n)
     is_fixed = falses(n_)
     fixed_value = zeros(Float64, n_)
@@ -849,6 +853,12 @@ function _migrad_with_multi_fixed(
     # when the caller already holds it (a contour driver fixes the same two
     # parameters at every point); computed here otherwise.
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
+    # ErrorDef of the inner minimisation. A `sigma = k` cross search runs
+    # under iminuit's temporary errordef `up·k²`, which C++ reads everywhere
+    # inside the inner MIGRAD (EDM goal, numerical-gradient and HESSE steps);
+    # the seed errors below still use the outer `cf.up` (C++ takes them from
+    # the minimum's user state, built at the original errordef).
+    up_inner::Real = cf.up,
 )
     n = length(state.parameters)
     is_fixed = falses(n)
@@ -890,7 +900,7 @@ function _migrad_with_multi_fixed(
     # Template = the outer state's own coordinate vector, so the spliced
     # full-length buffer handed to the user's FCN keeps its container on the
     # LOW-LEVEL path too (the high-level path wraps `cf` and is unaffected).
-    cf_fixed = _fix_multi_params(cf, par_idxs, v, n, state.parameters.x)
+    cf_fixed = _fix_multi_params(cf, par_idxs, v, n, state.parameters.x; up = up_inner)
     inner_strategy = Strategy(max(0, strategy.level - 1))
 
     # WARM-START PATH: when `warm_state` is supplied (the previous
@@ -953,6 +963,16 @@ function _migrad_with_multi_fixed(
                         prior_cov = inner_prior_cov)
     return inner_min, ncalls(cf_fixed)
 end
+
+# The same objective at another ErrorDef (iminuit's temporary errordef for a
+# `sigma = k` MINOS / contour run). Fresh FCN counter — every consumer wraps
+# or counts per run — while `ngrad` and the non-finite tally stay shared.
+_with_errordef(cf::CostFunction, up::Real) =
+    Float64(up) == cf.up ? cf : CostFunction(cf.f, Float64(up))
+_with_errordef(cf::CostFunctionWithGradient, up::Real) =
+    Float64(up) == cf.up ? cf :
+    CostFunctionWithGradient(cf.f, cf.g, Float64(up), Ref(0), cf.ngrad, cf.n_nonfinite;
+                             check_gradient = cf.check_gradient)
 
 """
     _conditional_prior_cov(err, idxs; prec) -> Union{Nothing,Matrix{Float64}}
@@ -1056,10 +1076,12 @@ function function_cross_multi(
             end
             inner_min, nf = _migrad_with_multi_fixed(
                 cf, state, par_idxs, v_probe;
-                # `0.5·tlr` is C++ `mgr_tlr`; the EDM goal it yields is
-                # `0.002·tol·up`, and under iminuit's `_TemporaryErrordef`
-                # that `up` is the σ²-scaled one, so scale `tol` by σ² here.
-                tol = 0.5 * tlr * Float64(sigma)^2, maxcalls = budget,
+                # `0.5·tlr` is C++ `mgr_tlr`. Under iminuit's
+                # `_TemporaryErrordef` every inner MIGRAD runs at the
+                # σ²-scaled errordef (EDM goal, gradient and HESSE steps),
+                # so the inner cost function carries `up·σ²`.
+                tol = 0.5 * tlr, maxcalls = budget,
+                up_inner = up * Float64(sigma)^2,
                 prec = prec, strategy = strategy,
                 warm_state = warm_state_ref[],
                 scratch = scratch_holder[],
@@ -1096,11 +1118,13 @@ function _migrad_with_fixed(
     threaded_gradient::Bool = false,
     print_level::Integer = 0,
     other_param_seed::Union{Nothing,AbstractVector{<:Real}} = nothing,
+    # ErrorDef of the inner minimisation — see `_migrad_with_multi_fixed`.
+    up_inner::Real = cf.up,
 )
     n = length(state.parameters)
     # Template = the outer state's coordinate vector — see the matching
     # comment in `_migrad_with_multi_fixed`.
-    cf_fixed = _fix_one_param(cf, i, v, n, state.parameters.x)
+    cf_fixed = _fix_one_param(cf, i, v, n, state.parameters.x; up = up_inner)
     # Thread strategy (parallel-review #4 A5 — previously silently
     # defaulted to Strategy(0) regardless of outer arg). Inner uses
     # the outer level minus 1 per C++ MnFunctionCross.cxx:106.
@@ -1378,9 +1402,10 @@ function function_cross(
             # (MnMinos.cxx:118-131 → `xmid = val`, `xdir = err`).
             v = x_pivot + step * (1.0 + aopt)
             _get_scratch!(scratch_holder, n - 1)
-            # σ² on `tol`: see the matching comment in `function_cross_multi`.
+            # σ²-scaled errordef: see the matching comment in `function_cross_multi`.
             inner_min, nf = _migrad_with_fixed(cf, state, par_idx, v;
-                                tol = 0.5 * tlr * Float64(sigma)^2, maxcalls = budget,
+                                tol = 0.5 * tlr, maxcalls = budget,
+                                up_inner = up * Float64(sigma)^2,
                                 prec = prec, strategy = strategy,
                                 warm_state = warm_state_ref[],
                                 scratch = scratch_holder[],
@@ -1535,6 +1560,9 @@ function function_cross_external(
     fmin_val = fval(bfm)
     up = cf.up
     inner_strategy = Strategy(max(0, strategy.level - 1))
+    # Inner minimisations run at the σ²-scaled errordef (iminuit's temporary
+    # errordef): see the matching comment in `function_cross_multi`.
+    cf_inner = _with_errordef(cf, up * Float64(sigma)^2)
 
     # `aulim`: the largest α (measured from `val_trial`, the C++ `pmid`)
     # that keeps the scanned parameter inside its bound — C++
@@ -1625,7 +1653,7 @@ function function_cross_external(
     # hoisted view is identical to a fresh `params.pars` read.
     let par_idx = Int(par_idx), step_ext = step_ext, val_trial = val_trial,
         ext_min = ext_min, par = par, params = params,
-        prior_cov_ref = prior_cov_ref,
+        prior_cov_ref = prior_cov_ref, cf_inner = cf_inner,
         all_pars = params.pars,
         aulim = aulim, limset = limset,
         last_ext_state = last_ext_state,
@@ -1698,9 +1726,8 @@ function function_cross_external(
             # with `similar(values)`, and they are what the user's objective
             # and gradient are called with.
             inner_params = Parameters(inner_pars, params)
-            # σ² on `tol`: see the matching comment in `function_cross_multi`.
-            inner_bfm = migrad(cf, inner_params;
-                                tol = 0.5 * tlr * Float64(sigma)^2, maxfcn = Int(budget),
+            inner_bfm = migrad(cf_inner, inner_params;
+                                tol = 0.5 * tlr, maxfcn = Int(budget),
                                 strategy = inner_strategy, prec = prec,
                                 threaded_gradient = threaded_gradient,
                                 print_level = print_level,

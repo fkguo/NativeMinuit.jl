@@ -277,6 +277,10 @@ function contour_exact(
     # and every ray cross-search (`function_cross_multi` aims at
     # `fmin + up·sigma²`).
     sigma::Real = 1.0,
+    # Total FCN call budget of the contour (C++ `MnContours::Contour(…,
+    # maxcalls)`); `nothing` selects the C++ default `100·(npoints+5)·(n+1)`.
+    # Checked before each ray search, which receives the full budget.
+    maxcalls::Union{Integer,Nothing} = nothing,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -325,12 +329,15 @@ function contour_exact(
     # the n−1 re-minimized free coords); captured for `full_points` at
     # NO extra cost (the inner re-minimization already ran).
     function _axis_point(par_fix::Int, v_fix::Float64, par_other::Int)
+        # At the σ²-scaled errordef, like every inner minimisation of a
+        # `sigma = k` contour (iminuit's temporary errordef).
         m_axis, nf_axis = _migrad_with_multi_fixed(
             cf, state, [par_fix], [v_fix];
             tol = 0.5 * tlr, maxcalls = 1000,
             prec = prec, strategy = strategy,
             scratch = scratch_nm1,
-            threaded_gradient = threaded_gradient)
+            threaded_gradient = threaded_gradient,
+            up_inner = cf.up * Float64(sigma)^2)
         if !m_axis.is_valid
             return nothing, Float64[], nf_axis
         end
@@ -367,7 +374,7 @@ function contour_exact(
     scaly = 1.0 / (mey.upper - mey.lower)
 
     # Step 2: for each new point, find longest gap, compute perpendicular ray.
-    maxcalls = 100 * (npoints + 5) * (n + 1)
+    maxcalls = maxcalls === nothing ? 100 * (npoints + 5) * (n + 1) : Int(maxcalls)
     for _ in 5:npoints
         # Find longest chord
         nn = length(points)
@@ -409,6 +416,11 @@ function contour_exact(
         # so well-behaved contours are unchanged.
         found = false
         for sca in (1.0, -1.0)
+            # C++ MnContours.cxx:158-160 checks the budget BEFORE each attempt
+            # (including the reversed-ray retry) and passes the full contour
+            # budget to the cross search; a ray that finds its crossing while
+            # exceeding the budget still contributes that point.
+            nfcn > maxcalls && break
             scalfac = sca * basefac
             xdircr = xdir / scalfac
             ydircr = ydir / scalfac
@@ -418,16 +430,13 @@ function contour_exact(
             # pars simultaneously (inner_dim = n - 2).
             cross = function_cross_multi(
                 fmin, cf, par_idxs, [xmid, ymid], [xdircr, ydircr];
-                tlr = tlr, maxcalls = max(maxcalls - nfcn, 100),
+                tlr = tlr, maxcalls = maxcalls,
                 strategy = strategy, prec = prec,
                 scratch = scratch_nm2,
                 threaded_gradient = threaded_gradient,
                 sigma = sigma,
                 prior_cov = cov_nm2)
             nfcn += cross.nfcn
-
-            # Genuine call-limit exit (C++ re-checks nfcn>maxcalls at L300).
-            nfcn > maxcalls && break
             if cross.valid
                 aopt = cross.aopt
                 new_x = xmid + aopt * xdircr

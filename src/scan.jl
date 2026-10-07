@@ -169,17 +169,21 @@ end
 # error matrix is flagged `available = false`, so `m.matrix` / `eigenvalues` /
 # `global_cc` correctly return `nothing` (a scan produces no inverse Hessian).
 function _point_function_minimum(cf::CostFunction, params::Parameters,
-                                  fval::Real)
+                                  fval::Real; nfcn::Integer = ncalls(cf))
     n = n_free(params)
     int_vals = initial_int_values(params)
     int_errs = initial_int_errors(params)
     cf_internal = _wrap_fcn_internal_to_external(cf, params)
+    # The published count is the scan's own calls (`nfcn`, the caller's
+    # operation-local count), and the stored internal wrapper starts from it
+    # so a later `hesse(m)` on this result reports scan + HESSE calls.
+    cf_internal.nfcn[] = Int(nfcn)
 
     par_state = MinimumParameters(int_vals, int_errs, Float64(fval))
     err_state = MinimumError(Symmetric(Matrix{Float64}(I, n, n), :U),
                               1.0, MnHesseFailed, false)
     grad_state = FunctionGradient(zeros(n), zeros(n), zeros(n))
-    state = MinimumState(par_state, err_state, grad_state, 0.0, ncalls(cf))
+    state = MinimumState(par_state, err_state, grad_state, 0.0, Int(nfcn))
     # `is_valid = true`: a scan always "succeeds" (it just evaluates the
     # grid), matching iminuit `m.scan()` which leaves `m.valid == true`. The
     # `available = false` flag on `state.error` is the authoritative
