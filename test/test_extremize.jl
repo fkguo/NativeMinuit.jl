@@ -545,8 +545,17 @@ end
     # (`naccepted == 0`) — that is the opposite of a silent bias — so we assert
     # no THROW (the safety contract), not no-warning. A deterministic failure
     # pattern keyed on θ keeps it stable. Logs are muted to keep the suite quiet.
+    #
+    # The key rounds θ to 1e-3, not finer: the penalty-MIGRAD probe
+    # coordinates differ between platforms (BLAS, libm) at the ~1e-7 level,
+    # so a 1e-6 key drew a *different* pseudo-random pattern on Linux CI than
+    # on macOS, and one such draw collapsed both sides (every seed rejected).
+    # Scanning 20 salted patterns on both the current and the previous retry
+    # flow, the 1e-6 key fell below the 30% criterion for 1 of 20 patterns on
+    # each, the 1e-3 key for none, and a 1e-2 key (contiguous rejected cells)
+    # for 4 of 20. The ~30% rejection rate is the same at every resolution.
     bad(θ) = (isapprox(θ, that; atol = 1e-9) ? f15(θ) :
-              (hash(round.(θ; digits = 6)) % 10 < 3 ? NaN : f15(θ)))
+              (hash(round.(θ; digits = 3)) % 10 < 3 ? NaN : f15(θ)))
     local r = nothing
     @test Logging.with_logger(Logging.NullLogger()) do
         try; r = extremize(m, bad); true; catch; false; end
