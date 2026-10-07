@@ -17,12 +17,16 @@
 # each α is over all OTHER parameters with x_i FIXED.
 #
 # The algorithm is a parabolic root-find with up to 15 inner-MIGRAD
-# iterations:
+# iterations, with α measured from the HESSE ±1σ point as in C++:
 #
-#   1. Initial MIGRAD with x_i = x_min_i + step_i (α = 1).
-#   2. Quadratic estimate of α at aim: `√(up/(f - fmin)) - 1`.
-#   3. Iterate: MIGRAD at new α, parabolic update, until either
-#      (a) `|f - aim| < tlf AND |Δα| < tla` → converged,
+#   1. Inner MIGRAD at the ±1σ point (α = 0); if its value is already
+#      within `tlf = 0.01·up` of the aim, return the quadratic-model
+#      estimate `√(up/(f - fmin)) - 1` (exact for a parabolic profile).
+#   2. Otherwise probe there, extend outward while the slope is negative,
+#      extrapolate linearly, then iterate a parabola through the three
+#      most recent points until either
+#      (a) the predicted α is within `tla = 0.01` of the best probed α
+#          AND that probe's value is within `tlf` of the aim → converged,
 #      (b) iteration cap or call cap hit,
 #      (c) new lower minimum discovered.
 #
@@ -44,7 +48,11 @@ Result of `function_cross`. Mirrors C++ `MnCross`
 - `state::MinimumState` — the state at the crossing (or current best
   if invalid).
 - `aopt::Float64` — the step multiplier at the crossing; `NaN` if
-  invalid.
+  invalid. From [`function_cross`](@ref) / [`function_cross_external`](@ref)
+  it multiplies the HESSE ±1σ step **from the minimum** (so
+  `aopt · σ` is the MINOS error, ≈ 1 for a parabolic profile); from
+  [`function_cross_multi`](@ref) it multiplies `pdir` from `pmid`, which
+  is the C++ `MnCross::Value()` convention.
 - `nfcn::Int` — cumulative FCN calls made by `function_cross`.
 - `valid::Bool` — `true` if a crossing was found within tolerance.
 - `new_min::Bool` — `true` if a lower minimum was discovered during the
@@ -84,6 +92,14 @@ MnCross(state::MinimumState, aopt::Real, nfcn::Integer; valid=true,
          ext_state::Union{Nothing,AbstractVector{Float64}} = nothing) =
     MnCross(state, Float64(aopt), Int(nfcn), valid, new_min,
             fcn_limit, par_limit, ext_state)
+
+# Same result with `aopt` shifted by `delta`. The single-parameter MINOS
+# wrappers use it to turn the C++ `MnCross::Value()` (measured from the
+# HESSE ±1σ point) into the multiplier of that step from the minimum.
+_shift_aopt(cr::MnCross, delta::Real) =
+    MnCross(cr.state, cr.aopt + Float64(delta), cr.nfcn;
+            valid = cr.valid, new_min = cr.new_min, fcn_limit = cr.fcn_limit,
+            par_limit = cr.par_limit, ext_state = cr.ext_state)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Parabola helpers — Phase 1.x A3/A4 (parallel-review #4 A3/A4).
@@ -215,19 +231,48 @@ loop). Indices are 1-based.
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Shared cross-search core — Phase 1.x A3/A4.
+# Shared cross-search core — a line-by-line port of C++
+# `MnFunctionCross::operator()` (reference/Minuit2_cpp/src/MnFunctionCross.cxx
+# :25-508).
 #
-# Implements the C++ MnFunctionCross.cxx:117-507 algorithm with the
-# `_probe` closure providing the inner-MIGRAD evaluation at a given
-# α. Both `function_cross` (single-param) and `function_cross_multi`
-# (multi-param) reduce to this core after their probe-closure
-# construction.
+# The `_probe` closure runs the inner MIGRAD with the scanned parameter(s)
+# held at `pmid + α·pdir` and returns `(FunctionMinimum, nfcn_increment)`.
+# As in C++, α is measured FROM `pmid` (for MINOS: the HESSE ±1σ point,
+# truncated against a bound), so α = 0 is the first probe and α = −1 is
+# the minimum. The returned `MnCross.aopt` is the C++ `MnCross::Value()`;
+# the single-parameter wrappers (`function_cross`, `function_cross_external`)
+# publish `1 + aopt` so that `aopt · step` stays the error from the
+# minimum, while `function_cross_multi` (contours) passes it through.
 #
-# The closure signature is:
-#     _probe(aopt::Float64, max_budget::Integer) -> (FunctionMinimum, nfcn_inc)
-#
-# Returns an `MnCross` describing the crossing search outcome.
+# History: through v0.7.3 this core skipped the α = 0 inner MIGRAD and
+# substituted the fictitious point (α=0 at the minimum, f = fmin + 0.1·up)
+# into the slope and parabola fits, and it had no quadratic early exit.
+# That biased every crossing by up to the 0.01·up crossing tolerance
+# (|ΔF/up| ≈ 1e-2 at the reported MINOS end points, where C++ Minuit2
+# reaches 1e-4), and changed the number of inner minimisations per side.
+# See CHANGELOG [Unreleased].
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Classify the result of an inner MIGRAD probe exactly as the C++ does
+# after every `migrad(maxcalls, mgr_tlr)` call (MnFunctionCross.cxx:125-136
+# and the identical blocks after each later probe). Returns `nothing`
+# when the search may continue, otherwise the `MnCross` to return.
+@inline function _cross_probe_verdict(m::FunctionMinimum, fmin_val::Float64,
+                                      tlf::Float64, aim::Float64,
+                                      limset::Bool, nfcn::Int,
+                                      state_fallback::MinimumState)
+    fval(m) < fmin_val - tlf &&
+        return MnCross(m.state, NaN, nfcn; valid = false, new_min = true)
+    m.reached_call_limit &&
+        return MnCross(m.state, NaN, nfcn; valid = false, fcn_limit = true)
+    m.is_valid || return MnCross(state_fallback, NaN, nfcn; valid = false)
+    # C++ `MnCross(state, nfcn, CrossParLimit())` is *valid* with the
+    # limit flag raised; NativeMinuit keeps `valid = false, par_limit =
+    # true` at this level (the user-facing `MinosError` lifts it).
+    (limset && fval(m) < aim) &&
+        return MnCross(m.state, NaN, nfcn; valid = false, par_limit = true)
+    return nothing
+end
 
 function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
                      state_fallback::MinimumState;
@@ -235,250 +280,262 @@ function _cross_core(_probe::F, fmin_val::Float64, up::Float64,
                      maxcalls::Integer = 1000,
                      prec::MachinePrecision = MachinePrecision(),
                      up_scale::Float64 = 1.0,
-                     print_level::Integer = 0) where {F<:Function}
+                     print_level::Integer = 0,
+                     aulim::Float64 = 100.0) where {F<:Function}
     # P5: `up_scale` (= sigma² for the MnMinos `sigma=k` API) scales the
     # effective ErrorDef so the crossing aim becomes `fmin + up · sigma²`.
-    # Mirrors iminuit's `_TemporaryUp(self._fcn, factor=sigma²)` wrapper
-    # around MnMinos: all subsequent references to `up` inside the search
-    # see `up · sigma²`. Tolerances (`tlf`, `f[1]`-seed) scale together so
-    # the algorithm's relative convergence behavior is preserved.
+    # Mirrors iminuit's `_TemporaryErrordef(self._fcn, factor)` wrapper
+    # around MnMinos: everything the C++ reads through `fFCN.Up()` sees
+    # `up · sigma²` (the aim, `tlf`, the `0.1·up` floor), while the HESSE
+    # step handed in through `pdir` stays at the unscaled `up`.
     up_eff = up * up_scale
     aim = fmin_val + up_eff
 
-    # gap M1: header. The C++ analog is `print.Info(...)` calls at
-    # MnFunctionCross.cxx:108-122. Print `up_eff` (post-sigma-scale)
-    # so the trace reflects what the algorithm actually uses.
-    # Outer-guarded so the @sprintf only runs at level ≥ 1 (this is
-    # called per MINOS direction; avoiding even one alloc per direction
-    # keeps level=0 a clean no-op).
     if print_level >= 1
         _trace_info(print_level, "MnFunctionCross",
-                    @sprintf("start: fmin=%.10g  up=%.4g  aim=%.10g  tlr=%.4g  maxcalls=%d",
-                              fmin_val, up_eff, aim, tlr, maxcalls))
+                    @sprintf("start: fmin=%.10g  up=%.4g  aim=%.10g  tlr=%.4g  maxcalls=%d  aulim=%.4g",
+                              fmin_val, up_eff, aim, tlr, maxcalls, aulim))
     end
 
-    # **Crossing convergence tolerances are HARDCODED 0.01** per C++
-    # MnFunctionCross.cxx:38-40 (the user-supplied `tlr` is repurposed
-    # only as the inner-MIGRAD tolerance via 0.5·tlr). Without this
-    # override the crossing test would be 10× looser than C++ at the
-    # default user `tlr = 0.1` (Opus review #5 BLOCKING #1).
-    tlf = 0.01 * up_eff    # crossing function-value tolerance
-    tla_base = 0.01        # crossing α-tolerance (scaled per iter)
-
-    maxitr = 15
+    # C++ lines 38-47. The caller's `tlr` is used ONLY as the inner-MIGRAD
+    # tolerance (`mgr_tlr = 0.5·tlr`, applied inside the probe closures);
+    # the crossing tolerances are hard-coded at 0.01: converged when F is
+    # within `tlf = 0.01·up` of the aim AND the next α prediction is within
+    # `tla = 0.01` (scaled by |α| beyond 1) of the best probed α.
+    tlr_c = 0.01
+    tlf = tlr_c * up_eff
+    tla = tlr_c
+    maxitr = 15          # 6.24.0 (the pinned reference); ROOT ≥ 6.30 uses 30
+    ipt = 0
+    aopt = 0.0
+    limset = false
     nfcn = 0
-    ipt = 1               # we treat the cached fmin as alsb[1] = 0, flsb[1] = fmin
-    a = Vector{Float64}(undef, 3)
-    f = Vector{Float64}(undef, 3)
-    a[1] = 0.0
-    # f[1] follows C++ line 141: max(min0.Fval(), aminsv + 0.1*up). Since
-    # we cache fmin (≡ min0.Fval()), this collapses to fmin + 0.1*up.
-    # We skip the α=0 MIGRAD entirely (perf win; documented deviation).
-    f[1] = fmin_val + 0.1 * up_eff
+    alsb = Vector{Float64}(undef, 3)
+    flsb = Vector{Float64}(undef, 3)
 
-    # ── Quadratic seed for α (C++ line 142) ──────────────────────────────
-    aopt_seed = sqrt(up_eff / (f[1] - fmin_val)) - 1.0
-    # Convergence at α=0 (extremely rare; only fires if user tlr ≥ 1)
-    if abs(f[1] - aim) < tlf
-        return MnCross(state_fallback, aopt_seed, nfcn; valid=true)
-    end
-    aopt_seed = clamp(aopt_seed, -0.5, 1.0)
-
-    # ── Probe 1: α = aopt_seed (C++ "min1" / our seed-1 MIGRAD) ────────
-    min1, nf1 = _probe(aopt_seed, maxcalls - nfcn)
-    nfcn += nf1
-    # gap M1: outer-guarded — without this the @sprintf fires per probe
-    # at level 0. MINOS triggers `function_cross` 2× per parameter
-    # which translates to 4-20+ probes for a typical fit.
-    if print_level >= 2
-        _trace_info(print_level, "MnFunctionCross",
-                    @sprintf("probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s",
-                              ipt + 1, aopt_seed, fval(min1), min1.is_valid))
-    end
-    fval(min1) < fmin_val - tlf &&
-        return MnCross(min1.state, NaN, nfcn; valid=false, new_min=true)
-    min1.reached_call_limit &&
-        return MnCross(min1.state, NaN, nfcn; valid=false, fcn_limit=true)
-    min1.is_valid || return MnCross(state_fallback, NaN, nfcn; valid=false)
-    ipt += 1
-    a[2] = aopt_seed
-    f[2] = fval(min1)
-    dfda = (f[2] - f[1]) / (a[2] - a[1])
-    last_min = min1
-    aopt = aopt_seed
-
-    # L300 inner-step counter — local to each L300 entry (NOT cumulative
-    # ipt). Opus review IMPORTANT #4: C++ uses `it = 0..maxlk` local on
-    # each `goto L300`, so step size resets to 0.2 on each redo entry.
-    l300_step_count = 0
-
-    @label l300_extend
-    # ── L300: while dfda < 0, extend outward ─────────────────────────────
-    while dfda < 0.0 && ipt < maxitr
-        a[1] = a[2]; f[1] = f[2]
-        # C++ line 199: aopt = alsb[0] + 0.2 * (it + 1). `it` starts at 0
-        # on each L300 re-entry.
-        l300_step_count += 1
-        aopt = a[1] + 0.2 * l300_step_count
-        m, nf = _probe(aopt, maxcalls - nfcn)
-        nfcn += nf
-        if print_level >= 2
-            _trace_info(print_level, "MnFunctionCross",
-                        @sprintf("L300 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s",
-                                  ipt + 1, aopt, fval(m), m.is_valid))
-        end
-        fval(m) < fmin_val - tlf &&
-            return MnCross(m.state, NaN, nfcn; valid=false, new_min=true)
-        m.reached_call_limit &&
-            return MnCross(m.state, NaN, nfcn; valid=false, fcn_limit=true)
-        m.is_valid || return MnCross(state_fallback, NaN, nfcn; valid=false)
-        ipt += 1
-        a[2] = aopt; f[2] = fval(m)
-        dfda = (f[2] - f[1]) / (a[2] - a[1])
-        last_min = m
-        dfda > 0.0 && break
-    end
-    if dfda <= 0.0
-        return MnCross(state_fallback, NaN, nfcn; valid=false)
+    # C++ line 103: already (within tla) at the limit before the first probe.
+    if aulim < aopt + tla
+        limset = true
     end
 
-    @label l460_extrapolate
-    # ── L460: linear extrapolation to seed point 3 ───────────────────────
-    aopt = a[2] + (aim - f[2]) / dfda
-    fdist = min(abs(aim - f[1]), abs(aim - f[2]))
-    adist = min(abs(aopt - a[1]), abs(aopt - a[2]))
-    tla_loop = abs(aopt) > 1.0 ? tla_base * abs(aopt) : tla_base
-    if adist < tla_loop && fdist < tlf
-        return MnCross(last_min.state, aopt, nfcn; valid=true)
-    end
-    if ipt >= maxitr
-        return MnCross(state_fallback, NaN, nfcn; valid=false)
-    end
-    bmin = min(a[1], a[2]) - 1.0
-    bmax = max(a[1], a[2]) + 1.0
-    aopt = clamp(aopt, bmin, bmax)
-
-    m, nf = _probe(aopt, maxcalls - nfcn)
+    # ── Probe at α = 0, i.e. at `pmid` (C++ `min0`, lines 119-136) ─────────
+    min0, nf = _probe(0.0, maxcalls - nfcn)
     nfcn += nf
     if print_level >= 2
         _trace_info(print_level, "MnFunctionCross",
-                    @sprintf("L460 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s",
-                              ipt + 1, aopt, fval(m), m.is_valid))
+                    @sprintf("probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
+                              ipt + 1, 0.0, fval(min0), min0.is_valid, nf))
     end
-    fval(m) < fmin_val - tlf &&
-        return MnCross(m.state, NaN, nfcn; valid=false, new_min=true)
-    m.reached_call_limit &&
-        return MnCross(m.state, NaN, nfcn; valid=false, fcn_limit=true)
-    m.is_valid || return MnCross(state_fallback, NaN, nfcn; valid=false)
+    v = _cross_probe_verdict(min0, fmin_val, tlf, aim, limset, nfcn, state_fallback)
+    v === nothing || return v
+
     ipt += 1
-    a[3] = aopt; f[3] = fval(m)
-    last_min = m
-
-    # ── 3-point classifier + dispatch (C++ lines 303-351) ────────────────
-    # Initial classifier biases `ibest` toward the THIRD point on ties
-    # (C++ initial: `ibest = 2; ecarmn = |flsb[2]-aim|`). This matters
-    # for the all-equal degenerate path (Opus review IMPORTANT #5).
-    ibest, iworst, ileft, iright, iout, noless, ecarmn, ecarmx =
-        _three_point_classify(a, f, aim; default_ibest = 3)
-
-    # Dispatch on noless (C++ lines 327-351):
-    if noless == 1 || noless == 2
-        @goto l500_enter
-    elseif noless == 0 && ibest != 3
-        # All three above aim; third probe not closest → invalid
-        return MnCross(state_fallback, NaN, nfcn; valid=false)
-    elseif noless == 3 && ibest != 3
-        # All three below aim; slope went negative again. Move 3rd
-        # point into [2] slot and re-extend outward (re-enter L300).
-        a[2] = a[3]; f[2] = f[3]
-        dfda = (f[2] - f[1]) / (a[2] - a[1])
-        l300_step_count = 0   # reset C++ `it` counter on goto L300
-        @goto l300_extend
-    else
-        # ELSE branch (C++ lines 343-351): the "new straight line thru
-        # first two points". Replace iworst with the 3rd probe, recompute
-        # dfda from the kept-two-points, re-enter L460. Covers
-        # noless ∈ {0, 3} with ibest == 3 (the third probe is best).
-        # Opus review BLOCKING #2 — without this branch the algorithm
-        # falls into L500 with all 3 points one-sided and returns invalid.
-        a[iworst] = a[3]
-        f[iworst] = f[3]
-        dfda = (f[2] - f[1]) / (a[2] - a[1])
-        @goto l460_extrapolate
+    alsb[1] = 0.0
+    # C++ line 141: floor the first value at fmin + 0.1·up so the quadratic
+    # model below cannot divide by ~0 when pmid sits in the flat bottom.
+    flsb[1] = max(fval(min0), fmin_val + 0.1 * up_eff)
+    # C++ line 142: quadratic model through the minimum, `F − fmin ∝ (1+α)²`
+    # (exact for a parabolic profile when pdir is the HESSE σ step).
+    aopt = sqrt(up_eff / (flsb[1] - fmin_val)) - 1.0
+    if abs(flsb[1] - aim) < tlf
+        return MnCross(min0.state, aopt, nfcn; valid = true)
+    end
+    aopt > 1.0 && (aopt = 1.0)
+    aopt < -0.5 && (aopt = -0.5)
+    limset = false
+    if aopt > aulim
+        aopt = aulim
+        limset = true
     end
 
-    @label l500_enter
-    # ── L500 loop: parabolic root-find with 3-point window ───────────────
-    while ipt < maxitr
-        A, B, C = _parabola_fit3(a, f)
+    # ── Probe 2 (C++ `min1`, lines 164-186) ──────────────────────────────
+    min1, nf = _probe(aopt, maxcalls - nfcn)
+    nfcn += nf
+    if print_level >= 2
+        _trace_info(print_level, "MnFunctionCross",
+                    @sprintf("probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
+                              ipt + 1, aopt, fval(min1), min1.is_valid, nf))
+    end
+    v = _cross_probe_verdict(min1, fmin_val, tlf, aim, limset, nfcn, state_fallback)
+    v === nothing || return v
+
+    ipt += 1
+    alsb[2] = aopt
+    flsb[2] = fval(min1)
+    dfda = (flsb[2] - flsb[1]) / (alsb[2] - alsb[1])
+    last_min = min1
+
+    @label L300
+    # ── L300 (C++ lines 188-242): slope of the wrong sign — step outward
+    #    by 0.2·it (it restarts at 1 on every re-entry) until dfda > 0.
+    if dfda < 0.0
+        maxlk = maxitr - ipt
+        for it in 1:maxlk
+            alsb[1] = alsb[2]
+            flsb[1] = flsb[2]
+            aopt = alsb[1] + 0.2 * it
+            limset = false
+            if aopt > aulim
+                aopt = aulim
+                limset = true
+            end
+            min1, nf = _probe(aopt, maxcalls - nfcn)
+            nfcn += nf
+            if print_level >= 2
+                _trace_info(print_level, "MnFunctionCross",
+                            @sprintf("L300 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
+                                      ipt + 1, aopt, fval(min1), min1.is_valid, nf))
+            end
+            v = _cross_probe_verdict(min1, fmin_val, tlf, aim, limset, nfcn, state_fallback)
+            v === nothing || return v
+            ipt += 1
+            alsb[2] = aopt
+            flsb[2] = fval(min1)
+            dfda = (flsb[2] - flsb[1]) / (alsb[2] - alsb[1])
+            last_min = min1
+            dfda > 0.0 && break
+        end
+        if ipt > maxitr
+            return MnCross(state_fallback, NaN, nfcn; valid = false)
+        end
+    end
+
+    @label L460
+    # ── L460 (C++ lines 244-299): two points with positive slope — linear
+    #    extrapolation to the aim, with the convergence test on it.
+    aopt = alsb[2] + (aim - flsb[2]) / dfda
+    fdist = min(abs(aim - flsb[1]), abs(aim - flsb[2]))
+    adist = min(abs(aopt - alsb[1]), abs(aopt - alsb[2]))
+    tla = tlr_c
+    if abs(aopt) > 1.0
+        tla = tlr_c * abs(aopt)
+    end
+    if adist < tla && fdist < tlf
+        return MnCross(last_min.state, aopt, nfcn; valid = true)
+    end
+    if ipt > maxitr
+        return MnCross(state_fallback, NaN, nfcn; valid = false)
+    end
+    bmin = min(alsb[1], alsb[2]) - 1.0
+    aopt < bmin && (aopt = bmin)
+    bmax = max(alsb[1], alsb[2]) + 1.0
+    aopt > bmax && (aopt = bmax)
+    limset = false
+    if aopt > aulim
+        aopt = aulim
+        limset = true
+    end
+
+    min2, nf = _probe(aopt, maxcalls - nfcn)
+    nfcn += nf
+    if print_level >= 2
+        _trace_info(print_level, "MnFunctionCross",
+                    @sprintf("L460 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
+                              ipt + 1, aopt, fval(min2), min2.is_valid, nf))
+    end
+    v = _cross_probe_verdict(min2, fmin_val, tlf, aim, limset, nfcn, state_fallback)
+    v === nothing || return v
+
+    ipt += 1
+    alsb[3] = aopt
+    flsb[3] = fval(min2)
+    last_min = min2
+
+    # ── Three points: how many below the aim? (C++ lines 301-351) ────────
+    # The initial classifier seeds `ibest` with the THIRD point.
+    ibest, iworst, _, _, _, noless, _, _ =
+        _three_point_classify(alsb, flsb, aim; default_ibest = 3)
+    if noless == 1 || noless == 2
+        @goto L500
+    elseif noless == 0 && ibest != 3
+        # all three above the aim and the newest is not the closest
+        return MnCross(state_fallback, NaN, nfcn; valid = false)
+    elseif noless == 3 && ibest != 3
+        # all three below and the slope went negative again — re-extend
+        alsb[2] = alsb[3]
+        flsb[2] = flsb[3]
+        @goto L300
+    end
+    # otherwise: new straight line through the two best points
+    flsb[iworst] = flsb[3]
+    alsb[iworst] = alsb[3]
+    dfda = (flsb[2] - flsb[1]) / (alsb[2] - alsb[1])
+    @goto L460
+
+    @label L500
+    # ── L500 (C++ lines 353-507): parabola through the three points,
+    #    take the root with positive slope, keep a point on each side.
+    while true
+        A, B, C = _parabola_fit3(alsb, flsb)
         sol = _parabola_solve_for_aim(A, B, C, aim, prec)
         sol === nothing &&
-            return MnCross(state_fallback, NaN, nfcn; valid=false)  # curvature wrong sign
-        aopt_new, slope = sol
+            return MnCross(state_fallback, NaN, nfcn; valid = false)  # determ < eps
+        aopt, slope = sol
 
-        # Convergence at ibest (C++ line 404)
-        tla_l500 = abs(aopt_new) > 1.0 ? tla_base * abs(aopt_new) : tla_base
-        if abs(aopt_new - a[ibest]) < tla_l500 && abs(f[ibest] - aim) < tlf
-            return MnCross(last_min.state, aopt_new, nfcn; valid=true)
+        tla = tlr_c
+        if abs(aopt) > 1.0
+            tla = tlr_c * abs(aopt)
+        end
+        if abs(aopt - alsb[ibest]) < tla && abs(flsb[ibest] - aim) < tlf
+            return MnCross(last_min.state, aopt, nfcn; valid = true)
         end
 
-        # Re-classify (L500 inner-loop classifier: C++ lines 412-443 use
-        # `ibest = 0, ecarmn = |aim - flsb[0]|` — i.e., default ibest=1
-        # in 1-based)
-        ibest, _, ileft, iright, iout, _, ecarmn, ecarmx =
-            _three_point_classify(a, f, aim; default_ibest = 1)
-
-        # Defensive: if either anchor missing or iout undefined (e.g. all
-        # three on one side of aim), give up. This should be rare after
-        # the noless-dispatch above filters out all-same-side cases.
+        # ileft / iright / iout / ibest (C++ lines 412-443; `ibest` seeded
+        # with the FIRST point here).
+        ibest, _, ileft, iright, iout, _, _, ecarmx =
+            _three_point_classify(alsb, flsb, aim; default_ibest = 1)
+        # With one point on each side of the aim all three are defined;
+        # bail defensively rather than index a sentinel.
         if ileft == 0 || iright == 0 || iout == 0
-            return MnCross(state_fallback, NaN, nfcn; valid=false)
+            return MnCross(state_fallback, NaN, nfcn; valid = false)
         end
 
-        # "Avoid keeping a bad point next time" — C++ line 449
-        if ecarmx > 10.0 * abs(f[iout] - aim)
-            aopt_new = 0.5 * (aopt_new + 0.5 * (a[iright] + a[ileft]))
+        # avoid keeping a bad point next time around (C++ line 449)
+        if ecarmx > 10.0 * abs(flsb[iout] - aim)
+            aopt = 0.5 * (aopt + 0.5 * (alsb[iright] + alsb[ileft]))
         end
 
-        # Acceptable window (C++ lines 452-465)
-        smalla = 0.1 * tla_l500
-        if abs(slope) > 0.0 && slope * smalla > tlf
+        # acceptable window between the left and right anchors (C++ 452-465)
+        smalla = 0.1 * tla
+        if slope * smalla > tlf
             smalla = tlf / slope
         end
-        aleft  = a[ileft]  + smalla
-        aright = a[iright] - smalla
-        aopt_new = clamp(aopt_new, aleft, aright)
-        if aleft > aright
-            aopt_new = 0.5 * (aleft + aright)
+        aleft = alsb[ileft] + smalla
+        aright = alsb[iright] - smalla
+        aopt < aleft && (aopt = aleft)
+        aopt > aright && (aopt = aright)
+        aleft > aright && (aopt = 0.5 * (aleft + aright))
+
+        limset = false
+        if aopt > aulim
+            aopt = aulim
+            limset = true
         end
 
-        # Probe at new aopt (C++ lines 481-487)
-        m, nf = _probe(aopt_new, maxcalls - nfcn)
+        min2, nf = _probe(aopt, maxcalls - nfcn)
         nfcn += nf
         if print_level >= 2
             _trace_info(print_level, "MnFunctionCross",
-                        @sprintf("L500 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s",
-                                  ipt + 1, aopt_new, fval(m), m.is_valid))
+                        @sprintf("L500 probe ipt=%d  aopt=%.6g  f=%.10g  valid=%s  nfcn=%d",
+                                  ipt + 1, aopt, fval(min2), min2.is_valid, nf))
         end
-        fval(m) < fmin_val - tlf &&
-            return MnCross(m.state, NaN, nfcn; valid=false, new_min=true)
-        m.reached_call_limit &&
-            return MnCross(m.state, NaN, nfcn; valid=false, fcn_limit=true)
-        m.is_valid || return MnCross(state_fallback, NaN, nfcn; valid=false)
+        v = _cross_probe_verdict(min2, fmin_val, tlf, aim, limset, nfcn, state_fallback)
+        v === nothing || return v
 
         ipt += 1
-        # Replace iout with new point (C++ lines 500-502)
-        a[iout] = aopt_new; f[iout] = fval(m)
+        # replace the redundant point with the new one, which is now `ibest`
+        alsb[iout] = aopt
+        flsb[iout] = fval(min2)
         ibest = iout
-        aopt = aopt_new
-        last_min = m
+        last_min = min2
+        ipt < maxitr || break
     end
 
     if print_level >= 1
         _trace_warn(print_level, "MnFunctionCross",
                     @sprintf("did not converge in %d iters", maxitr))
     end
-    return MnCross(state_fallback, NaN, nfcn; valid=false)
+    return MnCross(state_fallback, NaN, nfcn; valid = false)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -874,13 +931,42 @@ function _migrad_with_multi_fixed(
         j += 1
     end
 
+    # C++ MnContours.cxx:125-131 (`upar.Fix(px); upar.Fix(py)`): the inner
+    # MIGRAD of every ray search is seeded with the outer covariance
+    # squeezed at all the fixed parameters (conditional covariance).
+    inner_prior_cov = _conditional_prior_cov(state.error, par_idxs; prec = prec)
     inner_min = migrad(cf_fixed, y0, errs;
                         tol = tol, maxfcn = Int(maxcalls),
                         strategy = inner_strategy, prec = prec,
                         scratch = scratch,
                         threaded_gradient = threaded_gradient,
-                        print_level = print_level)
+                        print_level = print_level,
+                        prior_cov = inner_prior_cov)
     return inner_min, ncalls(cf_fixed)
+end
+
+"""
+    _conditional_prior_cov(err, idxs; prec) -> Union{Nothing,Matrix{Float64}}
+
+Covariance of the remaining parameters once those in `idxs` are held
+fixed: the outer inverse Hessian is inverted, the rows and columns in
+`idxs` removed, and the result inverted back — C++ `MnCovarianceSqueeze`,
+which `MnUserParameterState::Fix` applies for every parameter a cross
+search fixes, so that the inner MIGRAD seed (`MnSeedGenerator`,
+`HasCovariance()` branch) starts from the conditional covariance.
+Returns `nothing` when the outer error matrix is unavailable or a
+squeeze cannot invert, in which case the caller falls back to the
+diagonal seed.
+"""
+function _conditional_prior_cov(err::MinimumError, idxs;
+                                prec::MachinePrecision = MachinePrecision())
+    is_available(err) || return nothing
+    e = err
+    for i in sort!(Int[idxs...]; rev = true)
+        e = squeeze_error(e, i; prec = prec)
+        e.status == MnInvertFailed && return nothing
+    end
+    return Matrix(e.inv_hessian)
 end
 
 function function_cross_multi(
@@ -1097,26 +1183,23 @@ function _migrad_with_fixed(
         errs[k - 1] = sqrt(max(scale * V[k, k], prec.eps2))
     end
 
-    # Inner MIGRAD initial covariance: extract the (n-1)×(n-1) block
-    # of the outer V with row/col `i` removed, pass as `prior_cov` so
-    # the inner DFP starts with the OUTER's correlation structure
-    # rather than the diagonal-from-errs default. Mirrors C++ MnMigrad's
-    # single-instance pattern (MnFunctionCross.cxx:106) which constructs
-    # MnMigrad from the outer MnUserParameterState's full covariance and
-    # reuses it across all probes. Without this, the inner DFP must
-    # rebuild correlations from scratch in each probe → on strongly-
-    # correlated, non-convex profiles the inner MIGRAD can land in a
-    # side basin (X(3872) par[2] lower / par[3] lower pathology).
-    #
-    # The block-extracted V_outer[~i, ~i] is the MARGINAL covariance of
-    # the (n-1) free params; it equals the inverse of the SCHUR
-    # COMPLEMENT of the outer Hessian, NOT inv(H_oo). Near the minimum
-    # this is a strict upper bound on the constrained inv(H_oo) in PSD
-    # sense — conservative but informative; DFP refines from there.
-    inner_prior_cov = if state.error isa MinimumError && isa(V, AbstractMatrix)
-        _extract_minor_cov(V, i, n)
+    # Inner MIGRAD seed covariance (`prior_cov`, taken with `dcovar = 0`
+    # like C++ MnSeedGenerator's `st.HasCovariance()` branch). C++
+    # MnMinos.cxx:118/167 copies the outer `UserState()` and `Fix(par)`s
+    # it, which squeezes the covariance through MnCovarianceSqueeze
+    # (invert V, drop row/col `i`, invert back): the CONDITIONAL
+    # covariance of the other parameters with `i` held fixed. Through
+    # v0.7.3 the marginal minor `V[~i, ~i]` was passed instead; it
+    # over-estimates the conditional covariance by the correlation with
+    # `i`, so the inner DFP's first Newton step overshot on correlated
+    # fits. A cold fallback from the last warm position carries the
+    # previous probe's covariance, as the C++ single-MnMigrad instance
+    # does (`fState = min.UserState()`).
+    inner_prior_cov = if warm_state !== nothing && length(warm_state) == n - 1 &&
+                         is_available(warm_state.error)
+        Matrix(warm_state.error.inv_hessian)
     else
-        nothing
+        _conditional_prior_cov(state.error, (Int(i),); prec = prec)
     end
 
     inner_min = migrad(cf_fixed, y0, errs;
@@ -1175,8 +1258,11 @@ constrained-minimum (other params re-optimized) satisfies
 
 # Keyword arguments
 
-- `tlr::Real=0.1` — tolerance. Internal tolerances `tlf = tlr·up`
-  and `tla = tlr` mirror C++ MnFunctionCross.cxx:42-44.
+- `tlr::Real=0.1` — tolerance of the inner MIGRADs (`0.5·tlr`, C++
+  MnFunctionCross.cxx:38). The crossing tolerances themselves are fixed
+  at `tlf = 0.01·up` on the function value and `tla = 0.01` on α (C++
+  lines 40-46), and the returned α is the model prediction (quadratic,
+  linear or parabolic) at convergence, not the last probed α.
 - `maxcalls::Integer=1000` — call budget across all inner MIGRADs.
 - `strategy::Strategy=Strategy(0)` — passed to inner MIGRADs.
 - `prec::MachinePrecision`.
@@ -1270,7 +1356,9 @@ function function_cross(
         scratch_holder = scratch_holder, n = n,
         other_param_seed = other_param_seed
         probe = function (aopt::Float64, budget::Integer)
-            v = x_pivot + aopt * step
+            # C++ α-convention: α = 0 is the HESSE ±1σ point `x_pivot + step`
+            # (MnMinos.cxx:118-131 → `xmid = val`, `xdir = err`).
+            v = x_pivot + step * (1.0 + aopt)
             _get_scratch!(scratch_holder, n - 1)
             inner_min, nf = _migrad_with_fixed(cf, state, par_idx, v;
                                 tol = 0.5 * tlr, maxcalls = budget,
@@ -1285,11 +1373,14 @@ function function_cross(
             end
             return inner_min, nf
         end
-        return _cross_core(probe, fmin_val, up, state;
-                            tlr = Float64(tlr),
-                            maxcalls = maxcalls, prec = prec,
-                            up_scale = Float64(sigma)^2,
-                            print_level = print_level)
+        cr = _cross_core(probe, fmin_val, up, state;
+                          tlr = Float64(tlr),
+                          maxcalls = maxcalls, prec = prec,
+                          up_scale = Float64(sigma)^2,
+                          print_level = print_level)
+        # Publish the multiplier of the ±1σ step FROM THE MINIMUM
+        # (C++ `MinosError::Upper() = err · (1 + Value())`).
+        return cr.valid ? _shift_aopt(cr, 1.0) : cr
     end
 end
 
@@ -1426,20 +1517,32 @@ function function_cross_external(
     up = cf.up
     inner_strategy = Strategy(max(0, strategy.level - 1))
 
-    # aulim-style detection: the maximum alpha that keeps the trial
-    # value inside the bound. Mirrors C++ MnFunctionCross.cxx:64-104
-    # — when aopt exceeds aulim, the search hit the bound; this is a
-    # `par_limit` event, not a `fcn_limit` event. Tracked via Ref
-    # captured in the probe closure (Julia idiom for "mutable state
-    # observable across a closure call").
+    # `aulim`: the largest α (measured from `val_trial`, the C++ `pmid`)
+    # that keeps the scanned parameter inside its bound — C++
+    # MnFunctionCross.cxx:64-104, including the default of 100 when no
+    # bound lies in the search direction. `_cross_core` clamps every
+    # proposed α to it and raises `par_limit` when the search saturates
+    # there below the aim. `limset` records that the walk touched the
+    # bound at all, so a failed search can be relabelled below.
     aulim = if step_ext > 0 && has_upper_limit(par)
-        (par.upper - ext_min) / step_ext
+        min(100.0, (par.upper - val_trial) / step_ext)
     elseif step_ext < 0 && has_lower_limit(par)
-        (par.lower - ext_min) / step_ext
+        min(100.0, (par.lower - val_trial) / step_ext)
     else
-        Inf
+        100.0
     end
     limset = Ref(false)
+    # Inner-MIGRAD seed covariance, as C++ carries it in the single
+    # MnMigrad instance of MnFunctionCross: probe 1 starts from the outer
+    # fit's INTERNAL covariance squeezed at the scanned parameter
+    # (`MnUserParameterState::Fix` → MnCovarianceSqueeze: the conditional
+    # covariance of the others with it held fixed); later probes start
+    # from the previous probe's converged internal covariance
+    # (`MnApplication::operator()` → `fState = min.UserState()`).
+    ind_int_scan = params.int_of_ext[par_idx]
+    prior_cov_ref = Ref{Union{Nothing,Matrix{Float64}}}(
+        _conditional_prior_cov(bfm.internal.state.error, (ind_int_scan,);
+                               prec = prec))
     # M4: capture the inner-bounded-MIGRAD's converged EXTERNAL parameter
     # vector at the last successful probe so the caller can publish a
     # full ext snapshot via `MinosError.{upper,lower}_state`. `_cross_core`
@@ -1501,8 +1604,9 @@ function function_cross_external(
     # `params`, which is never mutated during the cross (each probe
     # builds a fresh `inner_params`), so every element read through the
     # hoisted view is identical to a fresh `params.pars` read.
-    let par_idx = Int(par_idx), step_ext = step_ext,
+    let par_idx = Int(par_idx), step_ext = step_ext, val_trial = val_trial,
         ext_min = ext_min, par = par, params = params,
+        prior_cov_ref = prior_cov_ref,
         all_pars = params.pars,
         aulim = aulim, limset = limset,
         last_ext_state = last_ext_state,
@@ -1511,14 +1615,16 @@ function function_cross_external(
         pre_seed_ext_ref = pre_seed_ext_ref,
         prev_probe_ext_ref = prev_probe_ext_ref
         probe = function (aopt::Float64, budget::Integer)
-            # aulim check: if alpha overshoots the bound, clamp and
-            # mark limset. Round-3 BLOCKING fix.
+            # `_cross_core` already clamps α to `aulim` (C++ `limset`);
+            # record that the walk touched the bound so a failed search
+            # can be relabelled `par_limit` below.
             clamped_aopt = aopt
-            if aopt > aulim
+            if aopt >= aulim
                 clamped_aopt = aulim
                 limset[] = true
             end
-            ext_val = ext_min + clamped_aopt * step_ext
+            # C++ α-convention: α = 0 is `val_trial` (the truncated ±1σ point).
+            ext_val = val_trial + clamped_aopt * step_ext
             # Defensive re-clamp: rounding might leave ext_val just past
             # the bound by 1 ulp.
             if has_upper_limit(par)
@@ -1577,12 +1683,17 @@ function function_cross_external(
                                 tol = 0.5 * tlr, maxfcn = Int(budget),
                                 strategy = inner_strategy, prec = prec,
                                 threaded_gradient = threaded_gradient,
-                                print_level = print_level)
-            # Capture this probe's converged ext for the NEXT probe's
-            # seed (priority-1 above). Only update on valid probes —
-            # an invalid converged x would propagate the bad state.
+                                print_level = print_level,
+                                prior_cov = prior_cov_ref[])
+            # Capture this probe's converged ext values and internal
+            # covariance for the NEXT probe's seed (priority-1 above).
+            # Only update on valid probes — an invalid converged x would
+            # propagate the bad state.
             if inner_bfm.internal.is_valid
                 prev_probe_ext_ref[] = copy(inner_bfm.ext_values)
+                err_in = inner_bfm.internal.state.error
+                prior_cov_ref[] = is_available(err_in) ?
+                                  Matrix(err_in.inv_hessian) : nothing
             end
             # M4: snapshot the converged ext values so the caller can
             # publish them on `MinosError.{upper,lower}_state`. Only
@@ -1601,28 +1712,15 @@ function function_cross_external(
                               tlr = Float64(tlr),
                               maxcalls = maxcalls, prec = prec,
                               up_scale = Float64(sigma)^2,
-                              print_level = print_level)
-        # Round-4 codex BLOCKING fix: the probe clamps ext_val when
-        # aopt > aulim, but `_cross_core` still records the UNCLAMPED
-        # aopt. If the inner-fval at the clamped bound happens to be
-        # close enough to aim, _cross_core can return valid=true with
-        # aopt > aulim — the published ext error would then exceed
-        # the physical distance to the bound (e.g., user with bound
-        # at +0.997σ sees an asymmetric error of +1.39σ). This is
-        # a silently wrong physics result.
-        #
-        # Mirroring C++ MnFunctionCross.cxx:494-496 (CrossParLimit
-        # raised when limset && Fval < aim): if the returned aopt
-        # exceeds aulim, the search effectively converged against the
-        # constant-f region past the bound. Snap aopt to aulim, mark
-        # par_limit, invalidate the side (the crossing wasn't found
-        # before hitting the bound).
-        if result.valid && aulim < Inf && result.aopt > aulim
-            result = MnCross(result.state, aulim, result.nfcn;
-                              valid = false, par_limit = true,
-                              new_min = result.new_min,
-                              fcn_limit = result.fcn_limit,
-                              ext_state = last_ext_state[])
+                              print_level = print_level,
+                              aulim = aulim)
+        # Publish the multiplier of the (truncated) ±1σ step FROM THE
+        # MINIMUM (C++ `MinosError::Upper() = err · (1 + Value())`). The
+        # core never returns a valid α beyond `aulim` — it clamps the
+        # proposal and reports `par_limit` when the search saturates at
+        # the bound below the aim (C++ MnFunctionCross.cxx:494-496).
+        if result.valid
+            result = _shift_aopt(result, 1.0)
         end
         # Round-3 partial-truncation fix: search exited invalid AND
         # we hit the bound during the walk → relabel as par_limit.
@@ -1633,14 +1731,12 @@ function function_cross_external(
                               fcn_limit = result.fcn_limit,
                               ext_state = last_ext_state[])
         end
-        # M4: attach the captured ext snapshot for the SUCCESS path
-        # too — the inner-MIGRAD's converged ext values at the crossing.
-        # `_cross_core` reconstructs MnCross internally without ext_state,
-        # so we rebuild here ONLY when the result is valid and we have a
-        # captured snapshot (we leave failure-mode results alone to keep
-        # ext_state==nothing as their semantic; bounded `par_limit` got
-        # the snapshot via the wraps above when relevant).
-        if result.valid && last_ext_state[] !== nothing &&
+        # M4: attach the captured ext snapshot — the inner-MIGRAD's
+        # converged ext values at the crossing, or at the bound for an
+        # at-limit side. `_cross_core` builds its MnCross without
+        # ext_state, so we rebuild here when a snapshot was captured
+        # (other failure modes keep `ext_state == nothing`).
+        if (result.valid || result.par_limit) && last_ext_state[] !== nothing &&
            result.ext_state === nothing
             result = MnCross(result.state, result.aopt, result.nfcn;
                               valid = result.valid,

@@ -28,6 +28,7 @@ using Test
     include("test_minos.jl")
     include("test_minos_oracle.jl")
     include("test_bounded_gauss_minos.jl")
+    include("test_minos_crossing_parity.jl")
     include("test_minos_limit_display.jl")
     include("test_contour_oracle.jl")
     include("test_hesse_oracle.jl")
