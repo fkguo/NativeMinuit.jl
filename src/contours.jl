@@ -299,6 +299,10 @@ function contour_exact(
     # probes per contour.
     scratch_nm1 = n >= 2 ? MigradScratch(n - 1) : nothing
     scratch_nm2 = n >= 3 ? MigradScratch(n - 2) : nothing
+    # C++ MnContours.cxx:125-131 — the outer covariance squeezed at both
+    # contour parameters seeds every ray search's inner MIGRAD; it is the
+    # same matrix for every point, so squeeze once here.
+    cov_nm2 = n >= 3 ? _conditional_prior_cov(state.error, par_idxs; prec = prec) : nothing
 
     # Step 1: MINOS on both axes (at the same `sigma` as the ray searches,
     # so the 4 axis points lie ON the kσ contour).
@@ -418,7 +422,8 @@ function contour_exact(
                 strategy = strategy, prec = prec,
                 scratch = scratch_nm2,
                 threaded_gradient = threaded_gradient,
-                sigma = sigma)
+                sigma = sigma,
+                prior_cov = cov_nm2)
             nfcn += cross.nfcn
 
             # Genuine call-limit exit (C++ re-checks nfcn>maxcalls at L300).
