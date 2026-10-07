@@ -360,6 +360,35 @@ end
         @test NativeMinuit._with_errordef(cfg, 4.0).up == 4.0
         @test NativeMinuit._fix_one_param(cf4, 1, 0.5, 4; up = 2.5).up == 2.5
         @test NativeMinuit._fix_multi_params(cf4, [1, 2], [0.5, 0.5], 4; up = 2.5).up == 2.5
+        # (e) … and on the production paths: the probe trace of a real
+        # `minos!` (unbounded and bounded) and of a real contour at sigma = 2
+        # reports the inner minimisations' errordef as 4, never 1.
+        innerups(f) = begin
+            logs, _ = Test.collect_test_logs(f)
+            vals = Float64[]
+            for l in logs
+                for mm in eachmatch(r"innerup=([0-9.eE+-]+)", string(l.message))
+                    push!(vals, parse(Float64, mm.captures[1]))
+                end
+            end
+            vals
+        end
+        mu = _mp_build(_mp_quad4, [1.0, 1.0, 1.0, 1.0], fill(0.1, 4), 1.0, Int[];
+                       strategy = 1, tol = 0.1, names = ["p0", "p1", "p2", "p3"])
+        migrad!(mu); hesse(mu)
+        v = innerups(() -> minos!(mu, 2; sigma = 2.0, print_level = 2))
+        @test length(v) >= 2 && all(==(4.0), v)
+        v1 = innerups(() -> minos!(mu, 2; sigma = 1.0, print_level = 2))
+        @test length(v1) >= 2 && all(==(1.0), v1)
+        mb = _mp_build(_mp_quad4, [1.0, 1.0, 1.0, 1.0], fill(0.1, 4), 1.0, Int[];
+                       strategy = 1, tol = 0.1, names = ["p0", "p1", "p2", "p3"])
+        set_limits!(mb, 1, -10.0, 10.0)            # bounded scanned parameter → bounded path
+        migrad!(mb); hesse(mb)
+        vb = innerups(() -> minos!(mb, 1; sigma = 2.0, print_level = 2))
+        @test length(vb) >= 2 && all(==(4.0), vb)
+        vc = innerups(() -> contour_exact(fm4, cf4, 1, 2; npoints = 6, sigma = 2.0,
+                                          strategy = Strategy(1), print_level = 2))
+        @test length(vc) >= 6 && all(==(4.0), vc)   # MINOS probes, axis points, rays
     end
 
     @testset "a bound-touching search that fails keeps its failure (C++ MnCross flags)" begin

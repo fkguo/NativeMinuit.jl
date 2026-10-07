@@ -281,6 +281,9 @@ function contour_exact(
     # maxcalls)`); `nothing` selects the C++ default `100·(npoints+5)·(n+1)`.
     # Checked before each ray search, which receives the full budget.
     maxcalls::Union{Integer,Nothing} = nothing,
+    # Tracing: ≥ 1 headers, ≥ 2 every inner probe / axis point (including the
+    # errordef the inner minimisation received, `innerup`).
+    print_level::Integer = 0,
 )
     sigma > 0 ||
         throw(ArgumentError("sigma must be positive, got $sigma"))
@@ -311,9 +314,11 @@ function contour_exact(
     # Step 1: MINOS on both axes (at the same `sigma` as the ray searches,
     # so the 4 axis points lie ON the kσ contour).
     mex = minos(fmin, cf, par_x; tlr=tlr, strategy=strategy, prec=prec,
+                  print_level=print_level,
                   scratch=scratch_nm1, threaded_gradient=threaded_gradient,
                   sigma=sigma)
     mey = minos(fmin, cf, par_y; tlr=tlr, strategy=strategy, prec=prec,
+                  print_level=print_level,
                   scratch=scratch_nm1, threaded_gradient=threaded_gradient,
                   sigma=sigma)
     nfcn = mex.nfcn + mey.nfcn
@@ -338,6 +343,11 @@ function contour_exact(
             scratch = scratch_nm1,
             threaded_gradient = threaded_gradient,
             up_inner = cf.up * Float64(sigma)^2)
+        if print_level >= 2
+            _trace_info(print_level, "MnContours",
+                        @sprintf("axis point par=%d at %.6g: valid=%s  nfcn=%d  innerup=%.4g",
+                                 par_fix, v_fix, m_axis.is_valid, nf_axis, m_axis.up))
+        end
         if !m_axis.is_valid
             return nothing, Float64[], nf_axis
         end
@@ -435,7 +445,8 @@ function contour_exact(
                 scratch = scratch_nm2,
                 threaded_gradient = threaded_gradient,
                 sigma = sigma,
-                prior_cov = cov_nm2)
+                prior_cov = cov_nm2,
+                print_level = print_level)
             nfcn += cross.nfcn
             if cross.valid
                 aopt = cross.aopt
