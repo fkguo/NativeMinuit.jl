@@ -7,6 +7,43 @@ and [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **MINOS crossing search is now the C++ `MnFunctionCross` algorithm line
+  by line.** The port measured the step multiplier from the minimum, skipped
+  the inner MIGRAD at the HESSE ±1σ point and fed a fictitious point
+  (α = 0, F = F_min + 0.1·up) into the slope and parabola fits, and had no
+  quadratic-model early exit. Every crossing was therefore biased by up to the
+  0.01·up crossing tolerance: re-minimising with the parameter fixed at the
+  reported end point gave `(F_profile − F_min)/up − 1` of ≈ 1e-2 on a
+  Gaussian likelihood, a Breit–Wigner least-squares fit and a 2-parameter
+  χ² (C++ Minuit2 / iminuit: ≤ 1e-4), and the number of inner minimisations
+  per side differed from Minuit2 (e.g. 42/144 vs 36/128 calls on 2-d
+  Rosenbrock, 2.2× more on a lower-limited width). The search now runs the
+  α = 0 probe at the (bound-truncated) ±1σ point, returns the quadratic /
+  linear / parabolic model prediction at convergence as C++ does, handles
+  the parameter-limit `aulim` inside the search, and seeds every inner
+  MIGRAD with the conditional (squeezed, `MnCovarianceSqueeze`) covariance
+  instead of the marginal minor — for MINOS (unbounded and bounded paths)
+  and for the `function_cross_multi` ray searches of `contour_exact`. On the
+  reference problems the probe sequences now coincide with Minuit2 point for
+  point, |q − 1| ≤ 1e-4, the Gaussian end points sit within 3e-5 of the
+  half-width from the exact profile-likelihood interval, and total MINOS
+  calls are at most the C++ count (fewer where NativeMinuit's warm restarts
+  skip a converged inner iteration). New `test_minos_crossing_parity.jl`
+  pins this against `test/reference_data/minos_parity_cpp.json`, generated
+  by the new `tools/minos_parity_trace.cxx` from the pinned Minuit2 6.24.0.
+  MIGRAD and HESSE are unchanged (they already agreed call for call).
+- **`hesse(m)` and `minos!(m, …)` default to the stored `m.strategy`** like
+  iminuit (`MnHesse(self.strategy)`, `MnMinos(…, self.strategy)`), instead of
+  a fixed `Strategy(1)` for HESSE and `Strategy(0)` (unbounded) /
+  `Strategy(1)` (bounded) for MINOS. With the constructor default
+  `strategy = 1` nothing changes; `m.strategy = 2` now also raises the HESSE
+  cycles and the inner MINOS MIGRADs to level 1. `minos!` likewise takes its
+  inner-MIGRAD tolerance from `m.tol` when no `tol` is passed.
+- **`m.nfcn` now accumulates MINOS calls** (`minos!`, `minos_upper`,
+  `minos_lower`), as iminuit's `nfcn` accumulates MIGRAD + HESSE + MINOS; it
+  restarts with a new `migrad!` / `simplex` result and is preserved by
+  `hesse(m)`. The per-parameter count remains in `m.minos_errors[i].nfcn`.
+
 - **FCN call counter is exact under `threaded_gradient = true`.** The
   threaded central-difference gradient loop evaluated the FCN through the
   counting call operator from every worker thread, and the plain
