@@ -3,6 +3,19 @@
 All notable changes to NativeMinuit.jl. Follows [Keep a Changelog](https://keepachangelog.com/)
 and [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Documentation
+
+- Clarified `m.covariance` versus `m.matrix`
+  ([#49](https://github.com/fkguo/NativeMinuit.jl/issues/49)): `m.covariance`
+  is the full `n_total × n_total` matrix with zero rows/columns for fixed
+  parameters, while the IMinuit.jl accessor `m.matrix` is the free-parameter
+  block (`n_free × n_free`); the two coincide when nothing is fixed. The
+  correlation matrix is `correlation(m)` / `matrix(m; correlation=true)`
+  (iminuit's `m.covariance.correlation()`), now listed in the `Minuit`
+  docstring and the README migration table.
+
 ## [0.7.4] — 2026-10-08
 
 ### Changed
