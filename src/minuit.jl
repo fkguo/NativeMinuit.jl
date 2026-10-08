@@ -582,7 +582,7 @@ found (global optimization is undecidable); the defensible statement is that
 it samples increasing perturbation scales up to re-convergence on a known
 basin or the physical range. Through v0.7.3 this multistart was selected by
 `use_simplex=true`, and the default retry re-ran MIGRAD at the user's strategy
-without Simplex — see the 0.8.0 CHANGELOG entry.
+without Simplex — see the 0.7.4 CHANGELOG entry.
 
 `iterate=1` disables the retry loop and reproduces single-shot
 C++-faithful behavior.
@@ -686,7 +686,7 @@ function migrad!(m::Minuit;
     # without Simplex, and the multistart was selected by `use_simplex=true`.
     # On stalled first passes (numerically noisy likelihoods) that default
     # re-produced the same stall and gave up; the iminuit flow recovers a
-    # valid fit in most such cases (see the 0.8.0 CHANGELOG entry).
+    # valid fit in most such cases (see the 0.7.4 CHANGELOG entry).
     #
     # We do NOT claim the global minimum is found (global optimization is
     # undecidable).

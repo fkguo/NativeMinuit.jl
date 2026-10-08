@@ -394,7 +394,7 @@ using ForwardDiff
         # re-ran MIGRAD at the same strategy, re-produced the stall and gave
         # up invalid; the iminuit flow (Simplex, then Strategy(2) MIGRAD)
         # recovers a valid fit. The same case is one of the 16 stalled cases
-        # of the 2026-10 retry study (CHANGELOG 0.8.0).
+        # of the 2026-10 retry study (CHANGELOG 0.7.4).
         function noisy_gauss(p)
             mu, sg, a = p[1], p[2], p[3]
             sg <= 0 && return 1e30
