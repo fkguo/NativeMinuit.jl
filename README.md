@@ -227,6 +227,7 @@ iminuit's `Minuit.scipy()`. Loads on `using Optim` (package extension).
 | `m.migrad()` / `migrad(m)` | `migrad!(m)` |
 | `m.hesse()` / `m.minos()` | `hesse!(m)` / `minos!(m)` |
 | `m.values`, `m.errors`, `m.covariance` | same |
+| `m.covariance.correlation()` / `matrix(f; correlation=true)` | `correlation(m)` or `matrix(m; correlation=true)` |
 | `m.mncontour(a, b)` | `mncontour(m, a, b)` |
 | IMinuit.jl `Fit`, `ArrayFit` | exported aliases of `Minuit` |
 | IMinuit.jl `chisq`, `Data` | exported, same signatures |

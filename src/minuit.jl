@@ -107,7 +107,14 @@ methods plus iminuit-style property access.
   evaluation spent on the current fit result — MIGRAD (with retries),
   HESSE and MINOS — like iminuit's `nfcn`; a new `migrad!` / `simplex`
   starts the count afresh.
-- `m.covariance` — full external covariance matrix or `nothing`.
+- `m.covariance` — full external covariance matrix (`n_total × n_total`,
+  zero rows and columns for fixed parameters) or `nothing`.
+- `m.matrix` — IMinuit.jl's accessor: the *free-parameter block* of the
+  same covariance (`n_free × n_free`). It coincides with `m.covariance`
+  when no parameter is fixed. See [`matrix`](@ref) for keyword forms.
+- The correlation matrix `C[i,j] = V[i,j]/√(V[i,i]·V[j,j])` is not a
+  property: use [`correlation`](@ref)`(m)` or `matrix(m; correlation=true)`
+  (iminuit's `m.covariance.correlation()`).
 - `m.params` — the `Parameters` (name/bounds/fixed structure). Once a
   fit is cached it reflects the FIT: `m.params.pars[i].value/.error`
   equal `m.values[i]`/`m.errors[i]` (iminuit parity, issue #38);

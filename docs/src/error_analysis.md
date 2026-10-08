@@ -87,7 +87,8 @@ factor-of-2 between `−ln L` and `−2 ln L` is exactly why the two carry diffe
 ### HESSE — `hesse(m)`
 Builds the covariance from the numerically-evaluated second-derivative (Hessian)
 matrix at the minimum and inverts it: `cov = 2·up·H⁻¹`. Symmetric errors land in
-`m.errors`, the full matrix in `m.covariance` / `matrix(m)`. This is the cheapest
+`m.errors`, the full matrix in `m.covariance` (`matrix(m)` gives the free-parameter
+block) and the correlation matrix in `correlation(m)`. This is the cheapest
 error and the right default whenever the fit is near-Gaussian. Watch the
 covariance status: a forced-positive-definite covariance (`m.accurate == false`)
 means the quadratic approximation was poor and the error is unreliable.
