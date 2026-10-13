@@ -302,26 +302,21 @@ end
 # them (which would overwrite the src dispatch + helpful-error fallback). The
 # only public surface from here is what those entry points call: `_scipy_optim`.
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Precompile the `optim(m)` bridge so the first `optim(m; method=:lbfgs)` after
-# `using Optim` doesn't cold-compile the whole Optim path (objective closure,
-# LBFGS, the seed-at-optimum write-back). Calls `_scipy_optim` DIRECTLY rather
-# than the `NativeMinuit.optim` entry point: during this extension's own
-# precompilation `Base.get_extension(NativeMinuit, :NativeMinuitOptimExt)` is not yet
-# resolvable, so `optim(m)` would take the "load Optim" fallback and compile
-# nothing. try/catch-wrapped so a workload hiccup never breaks precompilation.
-# ─────────────────────────────────────────────────────────────────────────────
+# Execute the same bounded operations during precompilation and focused tests.
+# Exceptions propagate so a failed operation cannot masquerade as completion.
 using PrecompileTools
 
+function _precompile_workload()
+    f = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
+    m = Minuit(f, [0.0, 0.0])
+    # During extension precompilation the parent loader cannot resolve this
+    # extension yet, so use its implementation directly.
+    return _scipy_optim(m, nothing; method=:lbfgs)
+end
+
 PrecompileTools.@setup_workload begin
-    _wl_f = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
     PrecompileTools.@compile_workload begin
-        try
-            _m = Minuit(_wl_f, [0.0, 0.0])
-            _scipy_optim(_m, nothing; method = :lbfgs)
-        catch
-            # Don't fail precompile on transient issues
-        end
+        _precompile_workload()
     end
 end
 

@@ -245,6 +245,7 @@ function analytical_gradient!(
 
     grad_vec = cf.g(par.x)
     cf.ngrad[] += 1
+    Base.require_one_based_indexing(grad_vec)
     length(grad_vec) == n ||
         throw(DimensionMismatch("gradient function returned length $(length(grad_vec)), expected $n"))
 
@@ -361,6 +362,7 @@ function seed_state(
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
     has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
+    Base.require_one_based_indexing(x0, errs)
     n = length(x0)
     _validate_bound_flags(has_limits, n)
     length(errs) == n ||

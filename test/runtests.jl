@@ -80,4 +80,8 @@ using Test
     # (`test_iminuit_compat_data.jl` checks that `optim(m)` errors helpfully
     # when the Optim extension has not been loaded).
     include("test_structured_parameters.jl")
+    # These checks load extension triggers, so keep them after absence tests.
+    include("test_interface_boundaries.jl")
+    include("test_coordinate_conversions.jl")
+    include("test_extension_workloads.jl")
 end

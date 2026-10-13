@@ -1,147 +1,76 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-#
-# Phase 0 benchmark suite — drives the §3.4 evidence gate.
-#
-# Defines `JULIA_PERF_BENCHMARKS` per the julia-perf skill contract
-# (.claude/skills/julia-perf/templates/bench-suite-template.jl).
-# Each entry is a (name => zero-arg function) pair; `scripts/run_perf.jl`
-# wraps with BenchmarkTools, captures medians + allocations, emits
-# artifacts under `.julia-perf/runs/<timestamp>/`.
-#
-# The §3.3 ROADMAP corpus:
-#
-# | Name                       | n free | Status     |
-# |----------------------------|--------|------------|
-# | Rosenbrock-2               | 2      | blocking   |
-# | Rosenbrock-10              | 10     | blocking   |
-# | Quad4F                     | 4      | blocking   |
-# | Gauss-LL-2 × 100           | 2      | blocking   |
-# | Gauss-LL-10 × 1000         | 10     | blocking   |
-# | Gauss-LL-40 × 1000         | 40     | diagnostic |
-# | Cheap-FCN long fit         | 4      | diagnostic |
-#
-# Phase 0 first cut benchmarks only MIGRAD wall time (Criterion 2).
-# The C++ comparison driver is `benchmark/compare_cpp.jl` (separate).
+using NativeMinuit, BenchmarkTools, JSON3
 
-using NativeMinuit
-using Random
-
-# Lock RNG so the Gauss-LL benchmarks are reproducible across runs
-Random.seed!(0xCAFE_F00D)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FCN definitions
-# ─────────────────────────────────────────────────────────────────────────────
+const INPUT_PATH = joinpath(@__DIR__, "fixtures", "migrad_inputs.json")
+const INPUTS = JSON3.read(read(INPUT_PATH, String), Dict{String,Any})
+const SETTINGS = INPUTS["settings"]
 
 rosenbrock_2(x) = (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2
-
 quad_nd(x) = sum(abs2, x)
-
 function rosenbrock_nd(x)
     s = 0.0
-    @inbounds for i in 1:(length(x) - 1)
+    for i in 1:(length(x) - 1)
         s += 100 * (x[i + 1] - x[i]^2)^2 + (1 - x[i])^2
     end
     return s
 end
-
-# Gaussian negative log-likelihood: given data drawn from N(μ, σ²),
-# fit μ and σ. f(μ, σ) = sum( log(σ) + (x_i − μ)² / (2σ²) ).
-function make_gauss_nll(n_events::Integer, true_mu::Float64, true_sigma::Float64)
-    data = true_mu .+ true_sigma .* randn(n_events)
-    return function (par)
-        μ, σ = par[1], par[2]
-        if σ <= 0
-            return 1e30  # Phase 0 has no bounds; soft-rejection
-        end
+function gauss_nll(data)
+    return function (p)
+        mu, sigma = p
+        sigma <= 0 && return 1e30
         s = 0.0
-        @inbounds for x in data
-            d = x - μ
-            s += log(σ) + 0.5 * (d * d) / (σ * σ)
+        for x in data
+            d = x - mu
+            s += log(sigma) + 0.5 * (d * d) / (sigma * sigma)
         end
-        return s
+        s
+    end
+end
+function gauss_nll_nd(data)
+    return function (p)
+        s = 0.0
+        for i in eachindex(data), x in data[i]
+            d = x - p[i]
+            s += 0.5 * d * d
+        end
+        s
     end
 end
 
-# n-dim Gaussian product NLL: n parameters, all independent.
-function make_gauss_nll_nd(n_pars::Integer, n_events::Integer)
-    n_data_per = max(1, n_events ÷ n_pars)
-    truths = randn(n_pars)
-    data = [truths[i] .+ randn(n_data_per) for i in 1:n_pars]
-    return function (par)
-        s = 0.0
-        @inbounds for i in 1:n_pars
-            μ = par[i]
-            for x in data[i]
-                d = x - μ
-                s += 0.5 * d * d
-            end
-        end
-        return s
-    end
+function build_cases()
+    inputs = [
+        (name="rosenbrock_2d", f=rosenbrock_2, x=[-1.2, 1.0], errors=fill(0.1, 2), up=1.0),
+        (name="rosenbrock_10d", f=rosenbrock_nd, x=repeat([-1.2, 1.0], 5), errors=fill(0.1, 10), up=1.0),
+        (name="quad_4d", f=quad_nd, x=ones(4), errors=fill(0.1, 4), up=1.0),
+        (name="gauss_ll_2_100", f=gauss_nll(Float64.(INPUTS["gauss_2_100"])), x=[1.0, 2.0], errors=fill(0.1, 2), up=0.5),
+        (name="gauss_ll_10_1000", f=gauss_nll_nd([Float64.(v) for v in INPUTS["gauss_10_1000"]]), x=zeros(10), errors=fill(0.1, 10), up=0.5),
+    ]
+    [merge(c, (name=c.name * (s == 0 ? "" : "_s1"), strategy=Int(s)))
+     for c in inputs for s in SETTINGS["strategies"]]
 end
+const CASES = build_cases()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Benchmark suite (julia-perf contract)
-# ─────────────────────────────────────────────────────────────────────────────
+# Includes fresh CostFunction and all solver/result work; excludes immutable data
+# preparation. The returned minimum includes its covariance and validity flags.
+function run_fit(c)
+    cf = CostFunction(c.f, c.up)
+    migrad(cf, c.x, c.errors; strategy=Strategy(c.strategy),
+           tol=SETTINGS["tol"], maxfcn=SETTINGS["maxfcn"],
+           storage_level=SETTINGS["storage_level"])
+end
+const JULIA_PERF_BENCHMARKS = [c.name => @benchmarkable(run_fit($c), evals=1) for c in CASES]
 
-const JULIA_PERF_BENCHMARKS = [
-    "rosenbrock_2d" => (() -> begin
-        cf = CostFunction(rosenbrock_2)
-        migrad(cf, [-1.2, 1.0], [0.1, 0.1])
-    end),
-
-    "rosenbrock_10d" => (() -> begin
-        cf = CostFunction(rosenbrock_nd)
-        x0 = [(-1.2, 1.0)[1 + (i & 1)] for i in 0:9]
-        errs = fill(0.1, 10)
-        migrad(cf, x0, errs)
-    end),
-
-    "quad_4d" => (() -> begin
-        cf = CostFunction(quad_nd)
-        migrad(cf, [1.0, 1.0, 1.0, 1.0], [0.1, 0.1, 0.1, 0.1])
-    end),
-
-    "gauss_ll_2_100" => (() -> begin
-        cf = CostFunction(make_gauss_nll(100, 2.0, 1.0), 0.5)
-        migrad(cf, [1.0, 2.0], [0.1, 0.1])
-    end),
-
-    "gauss_ll_10_1000" => (() -> begin
-        cf = CostFunction(make_gauss_nll_nd(10, 1000), 0.5)
-        migrad(cf, zeros(10), fill(0.1, 10))
-    end),
-
-    # ── Strategy(1) variants — Phase 1 完成判据 #6 ─────────────────────
-    # Strategy(1) is iminuit's default; the MIGRAD outer loop runs an
-    # inner HESSE when Dcovar > 0.05. Adds ~20-40% nfcn overhead vs
-    # Strategy(0) but produces a more accurate final covariance.
-
-    "rosenbrock_2d_s1" => (() -> begin
-        cf = CostFunction(rosenbrock_2)
-        migrad(cf, [-1.2, 1.0], [0.1, 0.1]; strategy = Strategy(1))
-    end),
-
-    "rosenbrock_10d_s1" => (() -> begin
-        cf = CostFunction(rosenbrock_nd)
-        x0 = [(-1.2, 1.0)[1 + (i & 1)] for i in 0:9]
-        migrad(cf, x0, fill(0.1, 10); strategy = Strategy(1))
-    end),
-
-    "quad_4d_s1" => (() -> begin
-        cf = CostFunction(quad_nd)
-        migrad(cf, [1.0, 1.0, 1.0, 1.0], [0.1, 0.1, 0.1, 0.1];
-                strategy = Strategy(1))
-    end),
-
-    "gauss_ll_2_100_s1" => (() -> begin
-        cf = CostFunction(make_gauss_nll(100, 2.0, 1.0), 0.5)
-        migrad(cf, [1.0, 2.0], [0.1, 0.1]; strategy = Strategy(1))
-    end),
-
-    "gauss_ll_10_1000_s1" => (() -> begin
-        cf = CostFunction(make_gauss_nll_nd(10, 1000), 0.5)
-        migrad(cf, zeros(10), fill(0.1, 10); strategy = Strategy(1))
-    end),
-]
+function julia_perf_validate()
+    outputs = Dict{String,Any}()
+    for c in CASES
+        result = run_fit(c)
+        is_valid(result) || error("invalid benchmark minimum: $(c.name)")
+        isfinite(fval(result)) || error("nonfinite benchmark minimum: $(c.name)")
+        outputs[c.name] = Dict("result" => NativeMinuit.to_dict(result),
+            "config" => Dict("strategy"=>c.strategy, "tol"=>SETTINGS["tol"],
+                "maxfcn"=>SETTINGS["maxfcn"], "storage_level"=>SETTINGS["storage_level"],
+                "x0"=>c.x, "errors"=>c.errors, "errordef"=>c.up),
+            "operation" => "fresh CostFunction + full MIGRAD + materialized minimum")
+    end
+    outputs
+end

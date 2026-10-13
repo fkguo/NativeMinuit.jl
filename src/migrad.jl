@@ -255,10 +255,13 @@ end
                     strategy=Strategy(0), prec=MachinePrecision()) -> Bool
 
 Standalone helper: test whether a user FCN gives the same numerical
-gradient sequentially vs. threaded at `x0`. Returns `true` if safe,
-`false` otherwise. Does NOT throw — for the throw version, see the
-auto-check triggered by `migrad(..., threaded_gradient=true,
-verify_threading=true)` (the default for high-level callers).
+gradient sequentially vs. threaded at `x0`. Returns `true` when the
+probe completes without a detected mismatch and `false` on a
+`ThreadSafetyError`. Other exceptions propagate, including errors from
+the objective. On single-thread Julia it returns `true` without a probe.
+A seed-point comparison does not prove safety at other inputs or task
+interleavings. The entry check in `migrad(..., threaded_gradient=true,
+verify_threading=true)` raises `ThreadSafetyError` on a detected mismatch.
 
 Use this to probe a new FCN before committing to `threaded_gradient=true`:
 

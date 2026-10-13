@@ -74,23 +74,18 @@ function NativeMinuit._dbscan_labels(Z::Matrix{Float64}, radius::Float64,
     return out
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Precompile the DBSCAN backend on a tiny already-whitened matrix (two obvious
-# clusters), so the first `find_solution_modes(...; method=:dbscan)` after
-# `using Clustering` skips cold-compiling Clustering.dbscan + the label re-pack.
-# Cheap (a 2×6 matrix). try/catch-wrapped so a hiccup never breaks precompile.
-# ─────────────────────────────────────────────────────────────────────────────
+# Execute the same bounded operations during precompilation and focused tests.
+# Exceptions propagate so a failed operation cannot masquerade as completion.
 using PrecompileTools
 
+function _precompile_workload()
+    Z = [0.0 0.1 0.2 5.0 5.1 5.2; 0.0 0.1 0.0 5.0 4.9 5.1]
+    return NativeMinuit._dbscan_labels(Z, 1.0, 1, 1)
+end
+
 PrecompileTools.@setup_workload begin
-    _Z = [0.0 0.1 0.2 5.0 5.1 5.2;
-          0.0 0.1 0.0 5.0 4.9 5.1]
     PrecompileTools.@compile_workload begin
-        try
-            NativeMinuit._dbscan_labels(_Z, 1.0, 1, 1)
-        catch
-            # Don't fail precompile on transient issues
-        end
+        _precompile_workload()
     end
 end
 

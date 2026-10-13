@@ -693,14 +693,13 @@ On expensive FCNs either pass the per-sample χ² you already have
   mode is DEEPER than the global best (the main fit missed the better basin).
 - `refine_iterate::Integer=5` — `iterate` passed to each re-fit `migrad!`
   (max MIGRAD attempts per mode).
-- `refine_maxfcn::Union{Nothing,Integer}=nothing` — FCN call cap **per MIGRAD
-  attempt** of a re-fit. Reaching the cap also stops the retry loop, so a
-  budgeted mode costs ≈ `1.3 × refine_maxfcn` calls in practice (an attempt
-  may extend its own budget by ×1.3 — the C++ second-pass bump — and the cap
-  is checked once per MIGRAD iteration, so it can overshoot by one
-  iteration's evaluations); `refine_maxfcn × refine_iterate` is a hard upper
-  bound. `nothing` = Minuit's default budget `200 + 100·n + 5·n²` per
-  attempt — effectively uncapped; SET THIS on expensive FCNs.
+- `refine_maxfcn::Union{Nothing,Integer}=nothing` — low-level FCN stopping
+  threshold supplied to each refinement attempt. Seed and complete
+  gradient/HESSE probes can exceed it; Simplex and retry passes can spend
+  additional calls. Consequently `refine_maxfcn * refine_iterate` is not a
+  hard bound on total work. `nothing` selects the finite default budget
+  `200 + 100*n + 5*n²` per low-level minimization. Inspect `refined_nfcn`
+  for the total calls actually spent on each mode.
 - `refine_strategy::Union{Nothing,Strategy,Integer}=nothing` — MIGRAD strategy
   for the re-fits (`nothing` inherits the parent fit's; `0` = fastest, for
   triage on slow FCNs).

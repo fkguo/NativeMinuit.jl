@@ -98,29 +98,26 @@ function NativeMinuit.contour_df_samples(m::NativeMinuit.Minuit; kwargs...)
     df = DataFrame(res.samples, Symbol.(res.free_names); makeunique = true)
     # Per-sample true Δχ² (χ²-equivalent FCN delta). `makeunique` above
     # guards parameter-name collisions; guard the diagnostic column too.
-    dcol = :delta_chisq in propertynames(df) ? :delta_chisq_ : :delta_chisq
+    dcol = :delta_chisq
+    while dcol in propertynames(df)
+        dcol = Symbol(dcol, "_")
+    end
     df[!, dcol] = res.delta_chisq_values
     return df
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Precompile the `Data(::DataFrame)` IMinuit.jl-compat constructor — the path
-# notebooks hit when they pass a DataFrame straight to a fit. A tiny 3-column
-# frame compiles the column-extraction + Data construction. The result→DataFrame
-# converters and `contour_df_samples` are left out on purpose: they would need a
-# full BootstrapResult / sampling run to exercise (not cheap). try/catch-wrapped.
-# ─────────────────────────────────────────────────────────────────────────────
+# Execute the same bounded operations during precompilation and focused tests.
+# Exceptions propagate so a failed operation cannot masquerade as completion.
 using PrecompileTools
+
+function _precompile_workload()
+    df = DataFrame(x=[0.0, 1.0, 2.0], y=[1.0, 2.0, 3.0], e=[0.1, 0.1, 0.1])
+    return df, NativeMinuit.Data(df)
+end
 
 PrecompileTools.@setup_workload begin
     PrecompileTools.@compile_workload begin
-        try
-            _df = DataFrame(x = [0.0, 1.0, 2.0], y = [1.0, 2.0, 3.0],
-                            e = [0.1, 0.1, 0.1])
-            NativeMinuit.Data(_df)
-        catch
-            # Don't fail precompile on transient issues
-        end
+        _precompile_workload()
     end
 end
 

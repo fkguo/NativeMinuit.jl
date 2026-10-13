@@ -68,6 +68,7 @@ function initial_gradient!(
     prec::MachinePrecision = MachinePrecision();
     has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
+    Base.require_one_based_indexing(errs)
     n = length(par)
     length(out) == n ||
         throw(DimensionMismatch("FunctionGradient length $(length(out)) != par length $n"))
@@ -192,6 +193,7 @@ function numerical_gradient!(
     threaded::Bool = false,
     has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
+    Base.require_one_based_indexing(x_work)
     n = length(par)
     length(out) == n ||
         throw(DimensionMismatch("out length $(length(out)) != par length $n"))

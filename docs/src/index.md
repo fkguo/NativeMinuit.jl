@@ -9,16 +9,17 @@ physics for χ² and likelihood fits.
 [iminuit](https://github.com/scikit-hep/iminuit) (Python) wraps the upstream C++
 Minuit2 library, and [IMinuit.jl](https://github.com/fkguo/IMinuit.jl) (Julia, by
 the same lead author) in turn wraps `iminuit` through PyCall — so it carries both
-a Python and a C++ dependency. **NativeMinuit.jl is a clean-room Julia port** of the
+a Python and a C++ dependency. **NativeMinuit.jl is a Julia port** of the
 same algorithms, with **no C++ or Python dependency and no PyCall / FFI** — plus
 full access to Julia tooling (ForwardDiff, threads, broadcasted FCN evaluation).
-On the benchmark corpus it runs in the **0.15–0.89× C++ wall-time** range, i.e.
-comparable to or faster than C++ Minuit2 — see
-[`benchmark/`](https://github.com/fkguo/NativeMinuit.jl/tree/main/benchmark).
+Performance depends on the objective, gradient and execution environment.
+The [benchmark sources](https://github.com/fkguo/NativeMinuit.jl/tree/main/benchmark)
+and [historical physics-fit comparisons](https://github.com/fkguo/NativeMinuit.jl/blob/main/BenchmarkExamples/RESULTS.md)
+describe specific workloads rather than a universal speed guarantee.
 
 ## Quick example
 
-```julia
+```@example index_quadratic
 using NativeMinuit
 
 # χ² with a 4-parameter quadratic
@@ -27,22 +28,9 @@ cf = CostFunction(x -> sum(abs2, x .- [1.0, 2.0, 3.0, 4.0]))
 # Initial parameter values + step sizes
 fm = migrad(cf, [0.0, 0.0, 0.0, 0.0], [0.1, 0.1, 0.1, 0.1])   # a FunctionMinimum
 
+@assert is_valid(fm) && fval(fm) <= 1e-15 # hide
+@assert maximum(abs.(collect(values(fm)) .- [1, 2, 3, 4])) < 1e-7 # hide
 show(stdout, MIME"text/plain"(), fm)
-```
-
-```
-┌───────────────────────────────────────────────────────────────────────┐
-│                                Migrad                                 │
-├───────────────────────────────────┬───────────────────────────────────┤
-│ FCN = 2.257e-18                   │             Nfcn = 26             │
-│ EDM = 2.257e-18 (Goal: 0.002)     │                                   │
-├───────────────────────────────────┼───────────────────────────────────┤
-│           Valid Minimum           │  Below EDM threshold (goal x 10)  │
-├───────────────────────────────────┼───────────────────────────────────┤
-│      No parameters at limit       │         Below call limit          │
-├───────────────────────────────────┼───────────────────────────────────┤
-│             Hesse OK              │        Covariance accurate        │
-└───────────────────────────────────┴───────────────────────────────────┘
 ```
 
 Or the iminuit / IMinuit.jl-style front end, with named parameters, limits,

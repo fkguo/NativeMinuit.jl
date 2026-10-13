@@ -331,7 +331,9 @@ FCN or a best fit sitting on a parameter limit.
 ### Enabling NUTS
 
 `sampler = :nuts` is provided by a package **extension**, loaded when the required
-packages are present:
+packages are installed and loaded. Install them with
+`Pkg.add(["AdvancedHMC", "LogDensityProblems", "LogDensityProblemsAD",
+"TransformVariables", "ForwardDiff"])`, then:
 
 ```julia
 using NativeMinuit

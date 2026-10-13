@@ -12,8 +12,8 @@ function-minimization library — the workhorse of every HEP fit. NativeMinuit i
 drop-in replacement for [IMinuit.jl](https://github.com/fkguo/IMinuit.jl) (the
 Julia wrapper of the Python [iminuit](https://github.com/scikit-hep/iminuit)),
 with an iminuit-style
-API, **C++-comparable (often better) performance**, and error-analysis tools that
-go well beyond either — exact confidence contours, Monte-Carlo Δχ² regions, a
+API and error-analysis tools that
+go well beyond either — profile-likelihood confidence contours, Monte-Carlo Δχ² regions, a
 likelihood-ensemble MCMC, **Bayesian posterior analysis** (priors & credible
 intervals, three samplers), bootstrap / jackknife, and multi-modal detection.
 
@@ -27,7 +27,21 @@ using Pkg
 Pkg.add("NativeMinuit")
 ```
 
-NativeMinuit needs no compiled dependencies — it is pure Julia.
+NativeMinuit requires **Julia 1.11 or later**. The minimizer is implemented in
+Julia and does not require a Python or C++ Minuit2 installation.
+Optional integrations are installed separately and activate when loaded:
+
+| Capability | Install and load |
+|---|---|
+| AD factory | `ForwardDiff` |
+| Alternative minimizers | `Optim` |
+| Plots / drawing helpers | `Plots` |
+| DataFrame output | `DataFrames` |
+| NUTS posterior sampler | `AdvancedHMC`, `LogDensityProblems`, `LogDensityProblemsAD`, `TransformVariables`, `ForwardDiff` (all five) |
+
+For example, run `Pkg.add("ForwardDiff")` and then
+`using NativeMinuit, ForwardDiff` to enable `CostFunctionAD`. Loading it does
+not automatically change a `Minuit` fit to AD; supply `grad=` or use the factory.
 
 ## Quick start
 
@@ -40,7 +54,8 @@ m = Minuit(x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2,
            names  = ["a", "b"],
            errors = [0.1, 0.1],
            limits = [(-5.0, 5.0), nothing])
-migrad!(m)
+migrad!(m; tol = 1e-6)    # explicit EDM tolerance for this quadratic example
+hesse!(m)
 minos!(m)
 
 println(m.values)        # ≈ [1.0, 2.0]
@@ -76,7 +91,11 @@ Each is detailed in the sections below.
 
 ## Performance
 
-Wall time for a full **MIGRAD** minimization vs C++ Minuit2 on five standard
+**Historical measurements.** The table below preserves an earlier comparison.
+Its package version and measurement date were not recorded with the table;
+these values do not establish the current release’s speed.
+
+Recorded wall time for a full **MIGRAD** minimization vs C++ Minuit2 on five standard
 test objectives — the FCN being minimized, *not* a Minuit operation (Apple M3 /
 Julia 1.12 / OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides):
 
@@ -99,11 +118,12 @@ optimization test problems, not Minuit operations) are:
   `<npar>` free parameters over `<ndata>` data points (a realistic
   maximum-likelihood fit; e.g. `gauss_ll_10_1000` = 10 parameters, 1000 points).
 
-**Why Julia wins**: a parametric `CostFunction{F}` devirtualizes the FCN call
-site at compile time, whereas C++ Minuit2 pays for `shared_ptr` ref-counting and
-`ABObj` expression-template dispatch. Reproduce: build the C++ side
-(`cmake --build benchmark/cpp/build`), generate the Julia baseline
-(`scripts/run_gate.sh --save-baseline`), then `julia benchmark/compare_cpp.jl`.
+The parametric Julia cost function can specialize objective calls. The table
+alone does not isolate this mechanism or establish the cause of a timing
+difference. Benchmarking requires the same objective, requested outputs,
+strategy, limits, dependencies and machine, with numerical agreement checked
+separately. The sources live in [`benchmark/`](benchmark/) and
+[`scripts/`](scripts/).
 
 (Real-world HEP-fit benchmarks vs `iminuit` are further down, under
 [Real-world physics fits](#real-world-physics-fits).)
@@ -113,12 +133,12 @@ site at compile time, whereas C++ Minuit2 pays for `shared_ptr` ref-counting and
 ### Minuit2 algorithms (audited against C++ Minuit2)
 
 - **MIGRAD** — Variable-Metric (DFP) with a central-difference numerical
-  gradient. Faster than C++ Minuit2 on every benchmark in the test corpus.
+  gradient, with optional user-supplied or AD gradients.
 - **HESSE** — full numerical Hessian + Bunch–Kaufman inversion +
   positive-definite enforcement.
 - **MINOS** — asymmetric ±σ errors via `MnFunctionCross` parabolic root-find
   with inner re-minimization.
-- **MnContours** — exact multi-parameter confidence contours (not just the
+- **MnContours** — profiled two-parameter confidence contours (not just the
   HESSE ellipse), plus `profile` / `mnprofile`.
 - **Simplex** and **Scan** minimizers.
 - **Bounds, fixed parameters, and Strategy levels 0/1/2** — the same sin/√
@@ -146,10 +166,10 @@ common in coupled-channel / amplitude fits), NativeMinuit adds:
 
 - **Derived-quantity intervals & profile bands** (`extremize`, `profile_band`)
   — MINOS for an arbitrary scalar `f(θ)` (a peak position, an amplitude ratio,
-  a model curve at one energy): the exact `[min, max]` of `f` over the
+  a model curve at one energy): a numerical search for `[min, max]` of `f` over the
   `Δχ² ≤ delta_chisq(cl, 1)` region, and the pointwise error band of a whole
   curve family. `mode = :directional` adds a fast linear-Gaussian boundary
-  crossing (≈ `n_free + 15` evaluations, ~50× cheaper) for expensive FCNs;
+  crossing for expensive FCNs; cost and applicability depend on the objective;
   `:full` handles non-linear / multi-corridor regions. The first leg of the
   profile-extremization ↔ ensemble-quantiles ↔ MINOS triangulation.
 - **Monte-Carlo Δχ² regions** (`get_contours_samples`) — sample the true
@@ -194,10 +214,10 @@ common in coupled-channel / amplitude fits), NativeMinuit adds:
   minimum before quoting errors.
 
 **On multi-basin surfaces** (ill-conditioned coupled-channel fits), do two things
-in order. **(1) Find the true minimum** — a single MIGRAD only reaches the basin
+in order. **(1) Search for deeper valid minima** — a single MIGRAD only reaches the basin
 its start drains into, so use `find_deeper_minimum`, or multi-start +
 `find_solution_modes(…; refine=true)` (whose `new_min` flag marks a re-fit
-*deeper* than the current best). **(2) At that minimum, trust the _local_ error
+*deeper* than the current best). **(2) At the selected valid minimum, inspect the _local_ error
 methods** (HESSE / MINOS / `get_contours_samples`). Naive bootstrap/jackknife are
 **unreliable** here — each resample re-fits into a possibly-different basin, so
 the spread measures the distance *between* basins, not the 1σ error, and there is
@@ -238,11 +258,11 @@ The API mirrors iminuit where it makes sense and leans on Julia's strengths
 
 ## Julia-only gradient options (AD & threading)
 
-Two capabilities flow directly from Julia's generic-function dispatch and
-lightweight threading — useful when the FCN is expensive or contains
-complex-valued intermediates (amplitudes, propagators). C++ Minuit2's
-`MnFcn::operator()` is a **virtual** function locked to `double`, so neither
-generic AD nor zero-copy threading is possible there.
+Generic Julia objectives can carry ForwardDiff dual numbers and run on Julia
+tasks, which is useful for expensive objectives or complex-valued intermediates.
+C++ Minuit2 also supports user-supplied gradients through `FCNGradientBase`;
+its `double`-valued objective interface is different from ForwardDiff’s direct
+evaluation of a Julia objective on dual-number parameters.
 
 ### 1. AD gradients via the ForwardDiff extension
 
@@ -283,11 +303,10 @@ per-coordinate gradient loop runs in parallel. Works on **any thread-safe FCN**.
 |-------|-----------|
 | `false` *(default)* | serial numerical gradient without a parallel safety probe. |
 | `true` | force the threaded gradient; with verification enabled, compare serial and threaded gradients at the entry seed and raise `ThreadSafetyError` on a detected mismatch. |
-| `:auto` | probe **once** at the seed (memoized on the fit); use the threaded gradient if the probe passes, otherwise warn and fall back to serial. Objective exceptions still propagate. Neither mode proves safety at every input or task interleaving. On single-thread Julia (`-t 1`) no probe runs; AD (`grad=`) fits do not parallelize the gradient. |
+| `:auto` | probe at the seed until a result is obtained, then reuse that result (memoized on the fit); use the threaded gradient if the probe passes, otherwise warn and fall back to serial. Exceptions other than `ThreadSafetyError` propagate. Neither mode proves safety at every input or task interleaving. On single-thread Julia (`-t 1`) no probe runs; AD (`grad=`) fits do not parallelize the gradient. |
 
 The default stays `false` because threading only pays off for expensive
-FCNs at higher `n`; `:auto` is the opt-in "thread it safely without me
-checking" switch.
+FCNs at higher `n`; `:auto` enables threading when the seed probe passes.
 
 ```julia
 m = Minuit(my_chi2, x0; error = errs, threaded_gradient = true)
@@ -324,22 +343,20 @@ and does not prove safety at every input or task interleaving.
 
 ### When to choose which
 
-```
-                          per-FCN cost
-                ┌────────────┬───────────────┬───────────────┐
-                │ < ~500 ns  │ ~1-50 μs      │ ≥ ~50 μs      │
-   ─────────────┼────────────┼───────────────┼───────────────┤
-   n ≤ 5        │ numerical  │ AD            │ AD            │
-   5 < n ≤ 30   │ numerical  │ AD            │ AD or 8T-num  │
-   n > 30       │ numerical  │ 8T-num or AD  │ **8T-num**    │
-   ─────────────┴────────────┴───────────────┴───────────────┘
-   AD needs the FCN generic on element type.
-   8T = threaded_gradient=true under julia -t 8 (any thread-safe FCN).
-```
+Use serial numerical gradients as the default. Try ForwardDiff when the
+objective is generic over its parameter element type; use threaded numerical
+gradients when calls are expensive and simultaneous objective evaluations own
+their mutable scratch. Measure both compilation and repeated execution costs
+for the objective you actually use; neither parameter count nor call cost alone
+fixes the best choice.
 
 ## Real-world physics fits
 
-On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
+The X(3872) and IAM comparisons below are historical measurements from
+2026-05-31 at source commit `41226f5`, on macOS / Julia 1.12,
+`julia -t 8` and single-threaded BLAS. Stage medians use three rounds after warmup
+(see [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)).
+They do not establish the current release’s speed or universal agreement.
 
 - **X(3872) dip line shape** (3 params, J/ψρ + DD̄* coupled channels;
   [arXiv:2404.12003](https://arxiv.org/abs/2404.12003),
@@ -358,27 +375,20 @@ On actual HEP fits (vs `iminuit` via PyCall; `julia -t 8` except where noted):
   chaotic surface. Here NativeMinuit happens to converge to a *valid* minimum at its
   default (and runs MINOS/contours, which iminuit refuses on its invalid one)
   (details in [`BenchmarkExamples/RESULTS.md`](BenchmarkExamples/RESULTS.md)).
-- **Large coupled-channel amplitude fit** — 57 free parameters, from a
-  vector-charmonium coupled-channel analysis now available as
-  [arXiv:2606.06180](https://arxiv.org/abs/2606.06180) (single-threaded; a heavy,
-  multi-second-per-call FCN). The FCN is the **same Julia code** for both
-  backends, so it cancels from the comparison — only the optimizer differs. By
-  the metric that reflects that, NativeMinuit lands on the **same minimum**
-  (Δχ² ≈ 2×10⁻⁵; 55 of 57 free parameters agree to <1%, the rest
-  weakly-constrained flat directions) in **nearly the same number of MIGRAD
-  evaluations** (7562 vs 7446 — a 1.6% difference): its MIGRAD is about as
-  call-efficient as C++ Minuit2's, which is what matters when each
-  evaluation is expensive. Wall time is then just `nfcn × (shared FCN cost)` — the optimizer's
-  own per-call overhead is negligible against a multi-second FCN, so here the FCN,
-  not the optimizer, sets the clock. (The cheap-FCN benchmarks above are where
-  that optimizer overhead — and NativeMinuit's call-site advantage — actually shows.)
+Large, expensive amplitude fits should be compared by both objective-call
+count and completed wall time, using the same objective and termination
+criteria. The cost of a multi-second objective can dominate optimizer overhead.
+This is a workload consideration, not a measured current-version speed claim.
 
 ## Reliability
 
-- **Full test suite passes** (4,400+ tests) — including Aqua project-quality
-  checks (piracy, compat bounds, stale deps) and `@inferred` type-stability
-  assertions on every public entry point. Run
+- **Package and numerical tests** include Aqua quality checks, selected
+  `@inferred` signatures and regression/oracle cases. Test coverage is specific
+  to those inputs and is not a proof for every public argument combination. Run
   `julia --project=. -e 'using Pkg; Pkg.test()'`.
+- **Compiler diagnostics** run separately in a compatible pinned JET environment;
+  an unavailable JET check is not a passing diagnostic. See
+  [JET diagnostics](docs/dev/JET.md).
 - **C++ JSON oracle parity** — reference cases generated by a C++ Minuit2
   harness are asserted in `test/test_cpp_oracle.jl`: unbounded Rosenbrock/Quad,
   bounded sin/upper/lower transforms, fixed parameters.
@@ -410,8 +420,8 @@ functions, bounds and fixed parameters, AD & threaded gradients, and the
 error-analysis tools (`mncontour`, `get_contours_samples`, `mcmc_sample` /
 `quantile_band`, `bayesian` / `posterior_sample`, `bootstrap` / `jackknife`,
 `find_deeper_minimum`, …).
-With it installed, an agent writes **correct fits and error analysis** instead of
-guessing the API or falling back to Python-`iminuit` / `IMinuit.jl` syntax. The
+The skill supplies API examples and conventions for fitting and error analysis.
+Its use does not replace checking the objective, fit validity or statistical assumptions. The
 skill is a concise quick-reference; its authoritative source is the package's own
 docstrings and [`docs/`](docs/), which it points to for depth.
 
@@ -420,23 +430,23 @@ coding agent that can read a skill ([Claude Code](https://claude.com/claude-code
 OpenAI Codex, Gemini CLI, …). It lives at
 [`skills/nativeminuit-usage/SKILL.md`](skills/nativeminuit-usage/SKILL.md).
 
-- **Working inside this repository:** nothing to do for Claude Code — it
-  auto-discovers the project skill.
-- **Using NativeMinuit from your own projects:** symlink it once into your agent's
-  skills directory, so a later `git pull` keeps it current:
+To use the skill with Codex, create a symlink in its documented user skill
+directory. Run this from the NativeMinuit repository root:
 
-  ```bash
-  ln -s "$PWD/skills/nativeminuit-usage" ~/.claude/skills/nativeminuit-usage   # Claude Code
-  ln -s "$PWD/skills/nativeminuit-usage" ~/.codex/skills/nativeminuit-usage    # OpenAI Codex
-  ln -s "$PWD/skills/nativeminuit-usage" ~/.gemini/skills/nativeminuit-usage   # Gemini CLI
-  ```
+```sh
+skill_source="$PWD/skills/nativeminuit-usage"
+skill_target="$HOME/.agents/skills/nativeminuit-usage"
+if [ -f "$skill_source/SKILL.md" ] && [ ! -e "$skill_target" ] && [ ! -L "$skill_target" ]; then
+    mkdir -p "$HOME/.agents/skills" && ln -s "$skill_source" "$skill_target"
+fi
+```
 
-  Claude Code then auto-discovers it; Codex / Gemini have no skill auto-load, so
-  reference the file from `~/.codex/AGENTS.md` / `~/.gemini/GEMINI.md`.
-
-The agent then picks it up automatically whenever a task involves fitting with
-NativeMinuit (writing a χ²/likelihood fit, running MIGRAD/MINOS, computing contours
-or resampling errors, or porting iminuit / IMinuit.jl code).
+If that destination already exists, the commands leave it unchanged; inspect
+it before replacing an installed skill. Codex can select discovered skills when
+the task matches their description, or you can request `$nativeminuit-usage`
+explicitly. See [Codex skill discovery and invocation](https://learn.chatgpt.com/docs/build-skills).
+For other agents, use their documented skill installation mechanism or explicitly
+ask them to read `skills/nativeminuit-usage/SKILL.md`.
 
 ## Citation
 
@@ -446,7 +456,7 @@ upstream Minuit algorithms it ports. NativeMinuit.jl ships a
 for APA / BibTeX, or:
 
 > F.-K. Guo, *NativeMinuit.jl: a native-Julia port of Minuit2*,
-> https://github.com/fkguo/NativeMinuit.jl (2026).
+> [NativeMinuit.jl](https://github.com/fkguo/NativeMinuit.jl) (2026).
 >
 > F. James and M. Roos, "MINUIT: A system for function minimization and analysis
 > of the parameter errors and correlations", Comput. Phys. Commun. **10** (1975)

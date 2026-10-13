@@ -1,11 +1,14 @@
 # Named parameter containers
 
+Install `ComponentArrays` with `Pkg.add("ComponentArrays")` for the examples below.
+NativeMinuit does not install it automatically.
+
 A fit with more than a handful of parameters is easier to read — and much
 harder to mis-index — when the parameters carry names inside the objective
 itself:
 
-```julia
-using ComponentArrays, NativeMinuit
+```@example named_parameters
+using ComponentArrays, NativeMinuit, LinearAlgebra
 
 # A three-parameter line-plus-offset fit, written against names rather than
 # positions. Runnable as-is.
@@ -26,6 +29,14 @@ minos!(m)
 
 m.fmin.ext_values.slope     # fitted slope, by name
 m.fmin.ext_errors.slope     # its parabolic error
+@assert m.valid # hide
+X = hcat(xdata, ones(length(xdata)), xdata.^2) # hide
+reference_values = X \ ydata # hide
+reference_covariance = inv(X' * X) * σ[1]^2 # hide
+@assert isapprox(collect(m.values), reference_values; atol=1e-4, rtol=0) # hide
+@assert isapprox(m.covariance, reference_covariance; atol=1e-6, rtol=1e-6) # hide
+@assert isapprox(m.fmin.ext_values.slope, args(m).slope; atol=0, rtol=0) # hide
+(; slope=m.fmin.ext_values.slope, error=m.fmin.ext_errors.slope)
 ```
 
 NativeMinuit has no dependency on ComponentArrays and no extension for it.
@@ -75,12 +86,19 @@ In either case the internal workspace is a plain `Vector{Float64}`. It would
 be worse than useless to label a transformed coordinate `mass`: reading
 `.mass` off it would hand you a number that looks physical and is not.
 
-```julia
-mb = Minuit(chi2, start; error = errs, limits = [(3.8, 3.9), nothing, nothing])
+```@example named_parameters
+errs = [0.1, 0.1, 0.01]
+mb = Minuit(chi2, start; error = errs, limits = [(0.0, 4.0), nothing, nothing], tol = 1e-6)
 migrad!(mb)
+hesse!(mb)
 
 mb.fmin.internal.state.parameters.x    # Vector{Float64} — transformed coords
-mb.fmin.ext_values.mass                # the physical fitted mass
+mb.fmin.ext_values.slope               # the physical fitted slope
+@assert mb.valid && 0 <= mb.fmin.ext_values.slope <= 4 # hide
+@assert isapprox(collect(mb.values), reference_values; atol=1e-4, rtol=0) # hide
+@assert isapprox(mb.covariance, reference_covariance; atol=1e-6, rtol=1e-6) # hide
+@assert mb.fmin.internal.state.parameters.x isa Vector{Float64} # hide
+(; slope=mb.fmin.ext_values.slope)
 ```
 
 Only when the internal and external spaces coincide — every parameter free

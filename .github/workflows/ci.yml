@@ -51,6 +51,16 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         env:
           JULIA_NUM_THREADS: '4'
+      - name: Check isolated consumers and extension load orders
+        run: julia --startup-file=no scripts/check_extension_loading.jl
+      - name: Prepare local benchmark-tool environment
+        run: julia --startup-file=no --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
+      - name: Check measurement records and failure controls
+        run: |
+          julia --startup-file=no --threads=2 --project=benchmark benchmark/test_runner.jl
+          julia --startup-file=no --threads=2 --project=benchmark benchmark/test_package_evidence.jl
+          julia --startup-file=no --threads=2 --project=benchmark benchmark/test_atomic_writes.jl
+          julia --startup-file=no --threads=2 --project=benchmark benchmark/test_blas_configuration.jl
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v5
         with:
@@ -92,6 +102,16 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         env:
           JULIA_NUM_THREADS: '4'
+      - name: Check isolated consumers and extension load orders
+        run: julia --startup-file=no scripts/check_extension_loading.jl
+      - name: Prepare local benchmark-tool environment
+        run: julia --startup-file=no --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
+      - name: Check measurement records and failure controls
+        run: |
+          julia --startup-file=no --threads=2 --project=benchmark benchmark/test_runner.jl
+          julia --startup-file=no --threads=2 --project=benchmark benchmark/test_package_evidence.jl
+          julia --startup-file=no --threads=2 --project=benchmark benchmark/test_atomic_writes.jl
+          julia --startup-file=no --threads=2 --project=benchmark benchmark/test_blas_configuration.jl
 
   jet-diagnostics:
     name: JET diagnostics - Julia 1.11.7 / JET 0.9.20

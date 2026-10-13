@@ -20,12 +20,37 @@ helpers.
 | [`ExtendedBinnedNLL`](@ref) | histogram fit, yield as a parameter | `0.5` |
 | [`CostSum`](@ref) | a joint fit of several costs (`+`) | mixed (rescaled) |
 
-Every cost is a callable `cost(params) -> Float64`, and `errordef(cost)` returns
-its `up` (1 for a χ² cost, 0.5 for a `−lnL` cost). The threaded numerical
-gradient works on every cost. AD (ForwardDiff) works on `LeastSquares`,
-`UnbinnedNLL`, and `ExtendedUnbinnedNLL` (their model/pdf is generic on the
-parameter vector); the **binned** costs (`BinnedNLL` / `ExtendedBinnedNLL`) push
-their CDF values through `Float64` buffers and are **not** currently AD-generic.
+Each cost is callable on a parameter vector and returns `Float64` for ordinary
+`Float64` parameters. During AD its result carries derivative information.
+`errordef(cost)` supplies `up` (1 for χ², 0.5 for $-\ln L$). All built-in
+cost types, including `BinnedNLL` and `ExtendedBinnedNLL`, support ForwardDiff
+when the user model, PDF or CDF is generic over the parameter element type.
+The binned CDF buffer promotes its type with the parameters. Threaded numerical
+gradients require thread-safe model callbacks.
+
+For example, the exponential CDF below differentiates through both binned costs:
+
+```jldoctest
+julia> using NativeMinuit, ForwardDiff
+
+julia> edges = collect(0.0:0.5:6.0); cdfexp(x, p) = 1 - exp(-p[1] * x);
+
+julia> probs = diff(cdfexp.(edges, Ref([0.8]))); counts = round.(2000 .* probs ./ sum(probs));
+
+julia> cb = BinnedNLL(counts, edges, cdfexp);
+
+julia> ce = ExtendedBinnedNLL(counts, edges, (x, p) -> p[2] * cdfexp(x, p));
+
+julia> function fdpart(f, p, k)
+           h = 1e-6 * max(1.0, abs(p[k])); xp, xm = copy(p), copy(p)
+           xp[k] += h; xm[k] -= h
+           (f(xp) - f(xm)) / (2h)
+       end;
+
+julia> all(isapprox(ForwardDiff.gradient(c, p)[k], fdpart(c, p, k); rtol=1e-5, atol=0)
+           for (c, p) in ((cb, [1.1]), (ce, [1.1, 1900.0])) for k in eachindex(p))
+true
+```
 
 ## Least squares
 

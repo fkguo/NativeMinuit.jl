@@ -91,3 +91,30 @@ The `_cross_core` in `function_cross.jl` ports C++
 Tolerances `tla = tlr = 0.01` and `tlf = 0.01·up` are hardcoded per C++
 (`MnFunctionCross.cxx:40`); the user's `tlr` controls only the inner-MIGRAD
 tolerance via `mgr_tlr = 0.5 · tlr`.
+
+## [Internal coordinate allocation](@id _internal_vector)
+
+`_internal_vector` allocates a coordinate-shaped workspace. It preserves the
+external container only when all parameters are free and unbounded; otherwise
+it allocates a plain vector in the reduced or transformed internal space.
+
+## [External MINOS offsets](@id _externalize_minos)
+
+`_externalize_minos` maps internal crossing endpoints back to external parameter
+coordinates and subtracts the minimum. It also maps side flags and exchanges
+upper/lower orientation when the transform reverses it.
+
+## [Deprecated ellipse name](@id contour)
+
+The qualified `NativeMinuit.contour` name is a deprecated alias for
+`contour_ellipse`, an ellipse approximation. Use `contour_grid` for an FCN grid
+slice, or `mncontour` for a profiled boundary search.
+
+## [Multi-parameter profile crossings](@id function_cross_multi)
+
+`function_cross_multi(fmin, cf, par_idxs, pmid, pdir)` searches along the ray
+`pmid + a*pdir` for the selected internal parameter coordinates while
+re-minimizing the other coordinates. It returns a `MnCross` with crossing
+status and the available endpoint state. Contour searches use this operation
+for their boundary points; internal coordinates must not be read as physical
+external parameter values when a transform or fixed-parameter projection is used.

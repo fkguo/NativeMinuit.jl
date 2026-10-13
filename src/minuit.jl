@@ -81,13 +81,15 @@ methods plus iminuit-style property access.
 - `prec::MachinePrecision`.
 - `threaded_gradient::Union{Bool,Symbol}=false` — parallelize the
   per-coordinate numerical gradient (needs `julia -t N`). `false` (default) =
-  serial; `true` = force threaded, raising `ThreadSafetyError` if the FCN is
-  not thread-safe; `:auto` = thread when `nthreads()>1` and the FCN probes
-  thread-safe, else warn once and fall back to serial (never throws). The
-  `:auto` probe runs at most once and is memoized on the fit. No-op for AD
-  (`grad=`) fits.
-- `verify_threading::Bool` — for `threaded_gradient=true`, verify thread safety
-  on the first gradient call (default `true` when forcing threading).
+  serial; `true` = force threaded, with the entry-seed comparison controlled
+  by `verify_threading`. A detected mismatch raises `ThreadSafetyError`.
+  `:auto` = thread when `nthreads()>1` and a seed probe passes, otherwise warn
+  and use serial gradients. A completed result is memoized on the fit; an
+  interrupted probe is not cached. The probe converts `ThreadSafetyError` to
+  `false`; other exceptions propagate. No-op for AD (`grad=`) fits.
+- `verify_threading::Bool` — for `threaded_gradient=true`, compare serial and
+  threaded numerical gradients at the entry seed (default `true`). A passed
+  seed probe does not prove safety for every input or task interleaving.
 
 # Methods
 
@@ -252,7 +254,8 @@ _check_threaded_gradient(tg) = throw(ArgumentError(
 #   :auto → true iff nthreads()>1, the fit is numerical (not AD), and the FCN
 #           probes thread-safe; else false. The is_thread_safe probe runs at
 #           most once (memoized on m._auto_threads); the unsafe->serial
-#           fallback emits a single @warn. Never throws.
+#           fallback emits a single @warn. Non-ThreadSafetyError exceptions
+#           propagate; a failed probe is not memoized as a passing result.
 # REVISIT: a future cost-aware :auto could thread by default based on per-FCN
 # cost x n; that needs benchmarks and is intentionally not implemented now (the
 # default stays false).
@@ -351,6 +354,10 @@ function Minuit(
     # kwargs in the IMinuit.jl style.
     kwargs...,
 )
+    Base.require_one_based_indexing(x0)
+    for input in (name, names, error, errors, fixed, limits)
+        input isa AbstractArray && Base.require_one_based_indexing(input)
+    end
     n = length(x0)
 
     # Resolve names: singular > plural > default
@@ -1510,7 +1517,10 @@ minos_upper(m::Minuit, par::Symbol; kwargs...) =
     minos_lower(m::Minuit, par; kwargs...) -> Float64
 
 The lower (≤ 0) side of the asymmetric MINOS error for parameter `par`
-(Integer index or String name) — a **pure query** that does not mutate `m`.
+(Integer index or String name). It does not store a MINOS result in `m`, but
+its objective evaluations increase `m.nfcn`. The returned scalar has no
+crossing/limit flags; use the stored [`MinosError`](@ref) from `minos!`
+for uncertainty reporting.
 See [`minos_upper`](@ref) for the full description, sign convention, and the
 shared control keyword arguments (`maxcall`, `tol`/`toler`, `sigma`, `strategy`,
 `print_level`).
@@ -2230,6 +2240,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function _bulk_set_values!(m::Minuit, vals::AbstractVector)
+    Base.require_one_based_indexing(vals)
     n = n_pars(_init_params(m))
     length(vals) == n ||
         throw(DimensionMismatch("expected $n values, got $(length(vals))"))
@@ -2242,6 +2253,7 @@ function _bulk_set_values!(m::Minuit, vals::AbstractVector)
 end
 
 function _bulk_set_errors!(m::Minuit, errs::AbstractVector)
+    Base.require_one_based_indexing(errs)
     n = n_pars(_init_params(m))
     length(errs) == n ||
         throw(DimensionMismatch("expected $n values, got $(length(errs))"))
@@ -2254,6 +2266,7 @@ function _bulk_set_errors!(m::Minuit, errs::AbstractVector)
 end
 
 function _bulk_set_fixed!(m::Minuit, fx::AbstractVector)
+    Base.require_one_based_indexing(fx)
     n = n_pars(_init_params(m))
     length(fx) == n ||
         throw(DimensionMismatch("expected $n fixed flags, got $(length(fx))"))
@@ -2266,6 +2279,7 @@ function _bulk_set_fixed!(m::Minuit, fx::AbstractVector)
 end
 
 function _bulk_set_limits!(m::Minuit, lim::AbstractVector)
+    Base.require_one_based_indexing(lim)
     n = n_pars(_init_params(m))
     length(lim) == n ||
         throw(DimensionMismatch("expected $n limit tuples, got $(length(lim))"))

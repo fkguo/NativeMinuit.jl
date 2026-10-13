@@ -6,6 +6,18 @@ NativeMinuit handles all of this through the [`Minuit`](@ref) object — bounds
 and fixed flags are set at construction or mutated afterward, exactly like
 iminuit.
 
+A minimal bounded fit with one fixed parameter:
+
+```jldoctest
+julia> using NativeMinuit
+
+julia> m = Minuit(x -> (x[1]-0.5)^2 + (x[2]-3.0)^2, [0.3, 3.0];
+                  limits=[(0.0, 1.0), nothing], fixed=[false, true]); migrad!(m);
+
+julia> m.valid && 0 <= m.values[1] <= 1 && isapprox(m.values[1], 0.5; atol=0.01, rtol=0) && m.values[2] == 3.0 && m.errors[2] == 0.0
+true
+```
+
 ## Adding bounds at construction
 
 Pass `limits` — one entry per parameter. Each entry is `nothing`

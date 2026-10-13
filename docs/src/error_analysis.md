@@ -65,7 +65,7 @@ boundary). It is the eighth method, detailed after the MCMC section below.
 
 | Method | Varies | Needs | Best when | Caveats |
 |---|---|---|---|---|
-| **HESSE** | parameters (analytic 2nd-derivative covariance at the minimum) | a converged fit with a positive-definite covariance | a fast, symmetric error on a near-Gaussian, near-linear fit; the default | wrong when the cost surface is non-parabolic (nonlinear model); requires a valid, pos-def covariance — a `made_pos_def` status (the covariance had to be *forced* positive-definite) ⇒ treat with suspicion |
+| **HESSE** | parameters (numerical Hessian and its inverse at the minimum) | a converged fit with a positive-definite covariance | a fast, symmetric error on a near-Gaussian, near-linear fit; the default | wrong when the cost surface is non-parabolic (nonlinear model); requires a valid, pos-def covariance — a `made_pos_def` status (the covariance had to be *forced* positive-definite) ⇒ treat with suspicion |
 | **MINOS** | parameters (profiles each one, re-minimising the rest) | a converged, valid fit (`fmin` = the fit-minimum result; must be valid) | reporting **asymmetric** errors under mild–moderate nonlinearity | fails / misleads on an invalid `fmin`, strong nonlinearity, or a multimodal surface; one inner-minimisation per scan point (costlier than HESSE) |
 | **extremize / profile_band** | parameters (constrained extremization of a derived `f(θ)` over the `Δχ²` region) | a converged, valid fit; seeds covering every low-χ² corridor | an interval on a **derived quantity** (a scalar `f(θ)` that is not a parameter), or the pointwise **error band** of a curve family — "MINOS for a function" | likelihood method (trusts the error model); `extremize` floors/ceils by the directional endpoints by default (fixes ill-conditioned single-seed under-coverage; `profile_band` does not — use its `mode=:directional` there), but a *disconnected multi-corridor* region still needs `seeds` — audit `.diagnostics` |
 | **MC-Δχ² region** | parameters (fixed data), using the **true** `Δχ²` not a quadratic | the `χ²`/`−2lnL` plus a proposal (the fit covariance, or an explicit parameter range) | mapping a **non-Gaussian** confidence region, or a **joint** N-D region, where MINOS' 1-D profile is not enough | the proposal must **over-cover** when the covariance is unreliable, or the region is clipped; still *trusts the error model* (it is a likelihood method) |
@@ -90,8 +90,10 @@ matrix at the minimum and inverts it: `cov = 2·up·H⁻¹`. Symmetric errors la
 `m.errors`, the full matrix in `m.covariance` (`matrix(m)` gives the free-parameter
 block) and the correlation matrix in `correlation(m)`. This is the cheapest
 error and the right default whenever the fit is near-Gaussian. Watch the
-covariance status: a forced-positive-definite covariance (`m.accurate == false`)
-means the quadratic approximation was poor and the error is unreliable.
+covariance status: forcing positive definiteness is a warning about curvature
+and numerical conditioning. `m.accurate == false` can also reflect an invalid
+minimum; it does not identify one unique cause. Even a valid covariance only
+supplies a local quadratic error estimate.
 
 ### MINOS — `minos!(m[, par])`
 Walks each parameter away from the minimum, re-minimising all the others, until
@@ -125,7 +127,7 @@ and costs about the same.
 MINOS answers "which values of **parameter** `θᵢ` are consistent with the
 data"; it has no notion of a **derived** scalar `f(θ)` — a peak position, a
 ratio of amplitudes, the model curve at one energy, a Legendre moment.
-[`extremize`](@ref NativeMinuit.extremize) is MINOS-for-a-function: the exact
+[`extremize`](@ref NativeMinuit.extremize) is MINOS-for-a-function: a numerically searched
 profile interval
 
 ```
@@ -223,10 +225,10 @@ the winning seed per side (`winner_* == 0` with `naccepted_* > 0` means the
 best fit is genuinely extremal; with `naccepted_* == 0` it means that side
 FAILED).
 
-Every reported endpoint is gate-certified: `FCN ≤ bound + accept_tol·up`
-always, and `FCN ≤ bound` exactly whenever the local boundary pull-back
-applies (the typical case) — the `fcn_*` diagnostics fields carry the
-values, so feasibility can be checked rather than trusted.
+Check endpoint feasibility in the `fcn_*` diagnostics against
+`FCN_min + up·delta` and the declared `accept_tol`. A feasible point need
+not be the global extremum; inspect per-seed acceptance and remaining
+disconnected regions before interpreting the interval.
 
 For a genuinely **joint** two-dimensional statement, such as tracing the
 support function of $(\mathrm{Re}(E_{\mathrm{pole}}), \mathrm{Im}(E_{\mathrm{pole}}))$,
@@ -237,8 +239,7 @@ override the threshold explicitly:
 runs `2 sides × seeds × ladder-stages × rounds` MIGRADs and can be hours per
 call — for the common **near-linear** case use `mode = :directional`, which
 walks the single projection direction `C·∇f`, secant-roots the *true* FCN to
-the `Δχ²` boundary on each side, and reports the *true* `f` there (≈ `n_free +
-~15` paired evaluations, ~50× cheaper, exact in the linear-Gaussian limit). The
+the `Δχ²` boundary on each side, and reports the *true* `f` there (its call count depends on the boundary search; it is exact in the linear-Gaussian limit). The
 recommended procedure is **directional first, `:full` only if you suspect
 non-linearity or the two disagree**. On the `:full` path, cut cost with
 `rounds = 1`, `iterate = 1`, `strategy = 0`, and a modest `maxfcn`. For a long
@@ -820,7 +821,8 @@ modes = find_solution_modes(samples, m; fvals = :lazy)
 # Or pass the per-sample χ² you already have (get_contours_samples keeps them).
 modes = find_solution_modes(samples, m; fvals = my_chi2s)
 
-# Budgeted, checkpointed refine: ≤ refine_maxfcn calls per MIGRAD attempt,
+# Budgeted refine: refine_maxfcn is the low-level call threshold per attempt,
+# not a hard cap on total calls; a completed probe and retries can exceed it.
 # triage strategy/tolerance, and a per-mode callback so a killed multi-hour
 # run loses at most the mode in flight (invocations are serialized — writing
 # to a file from the callback is safe).
