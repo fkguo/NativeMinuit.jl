@@ -92,3 +92,26 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         env:
           JULIA_NUM_THREADS: '4'
+
+  jet-diagnostics:
+    name: JET diagnostics - Julia 1.11.7 / JET 0.9.20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11.7'
+          arch: x64
+      - uses: julia-actions/cache@v2
+      - name: Resolve isolated diagnostic environment
+        run: julia --startup-file=no --project=scripts/jet -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
+      - name: Execute narrow diagnostics (unavailable is a failure)
+        run: julia --startup-file=no --project=scripts/jet scripts/jet/run.jl
+        env:
+          NATIVEMINUIT_JET_STATUS: jet-status.toml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jet-diagnostic-status
+          path: jet-status.toml
+          if-no-files-found: error

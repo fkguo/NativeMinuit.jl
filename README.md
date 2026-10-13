@@ -281,9 +281,9 @@ per-coordinate gradient loop runs in parallel. Works on **any thread-safe FCN**.
 
 | value | behaviour |
 |-------|-----------|
-| `false` *(default)* | serial gradient — always safe, zero overhead. |
-| `true` | force the threaded gradient; on the first call it auto-verifies thread-safety and raises `ThreadSafetyError` if the FCN is not thread-safe (see the contract below). |
-| `:auto` | probe thread-safety **once** at the seed (memoized on the fit); if the probe passes, use the threaded gradient, otherwise emit a single `@warn` and fall back to the serial gradient. Never throws. The probe is a best-effort single-point check — it reliably catches the common shared-buffer race, but a race that only manifests away from the seed can slip through (use `threaded_gradient=true` for the strict per-call check). On single-thread Julia (`-t 1`) it is silently serial (no probe); no-op for AD (`grad=`) fits. |
+| `false` *(default)* | serial numerical gradient without a parallel safety probe. |
+| `true` | force the threaded gradient; with verification enabled, compare serial and threaded gradients at the entry seed and raise `ThreadSafetyError` on a detected mismatch. |
+| `:auto` | probe **once** at the seed (memoized on the fit); use the threaded gradient if the probe passes, otherwise warn and fall back to serial. Objective exceptions still propagate. Neither mode proves safety at every input or task interleaving. On single-thread Julia (`-t 1`) no probe runs; AD (`grad=`) fits do not parallelize the gradient. |
 
 The default stays `false` because threading only pays off for expensive
 FCNs at higher `n`; `:auto` is the opt-in "thread it safely without me
@@ -295,44 +295,32 @@ migrad!(m)             # threading propagates through MINOS / contours too
 ```
 
 The win scales with FCN cost and parameter count: an expensive FCN at higher
-`n` benefits most, a sub-µs FCN not at all (threading overhead dominates), and a
-**thread-unsafe FCN is refused outright** (see the contract below).
+`n` can benefit from parallel evaluation. Measure the actual workload; a
+seed-point probe can detect a race but cannot establish universal thread safety.
 
 > **⚠ Thread-safety contract.** Your FCN must not share mutable state across
 > threads (module-level scratch buffers, RNG, file I/O). The classic HEP
 > anti-pattern is a `const T_BUF = zeros(ComplexF64, …)` mutated inside the FCN:
 > parallel calls race on it and MIGRAD silently converges to the **wrong**
-> minimum. NativeMinuit ships a safety net — `threaded_gradient=true` auto-verifies
-> the threaded gradient against the sequential one on the first call (raises
-> `ThreadSafetyError` with a diagnostic), and `NativeMinuit.is_thread_safe(cf, x0)`
-> probes it standalone. NativeMinuit's own buffers are all per-thread; the contract
-> is on your FCN. See the manual for the full treatment and the worked failure
+> minimum. With verification enabled, `threaded_gradient=true` compares
+> the threaded gradient against the sequential one at the entry seed (raises
+> `ThreadSafetyError` on a detected mismatch), and `NativeMinuit.is_thread_safe(cf, x0)`
+> probes it standalone. NativeMinuit's own scratch belongs to the work unit or invocation
+> using it; your FCN must also keep mutable scratch private. See the manual for the full treatment and the worked failure
 > case (`BenchmarkExamples/IAM_2Pformfactor/`).
 
-**Fixing a thread-unsafe FCN — give each thread its own buffer.** Yes: replacing
-a shared `const` scratch with one buffer per thread makes the FCN thread-safe.
-Indexing the pool by `Threads.threadid()` is sound here because NativeMinuit threads
-the gradient with `Threads.@threads :static`, which pins each iteration to a
-fixed thread — so `threadid()` is stable within a call (under the `:dynamic` /
-`@spawn` schedules it would *not* be). Size the pool with `maxthreadid()`, not
-`nthreads()` (Julia may hand out thread ids beyond `nthreads()`):
+**Fixing a thread-unsafe FCN — use private scratch throughout each call.**
+Allocate scratch inside the FCN, for example
+`Matrix{Complex{eltype(par)}}(undef, 3, 3)` to remain AD-generic. Reusable
+scratch must belong exclusively to the calling task or work unit. A pool
+indexed by `Threads.threadid()` is unsafe if the objective yields: another
+task can overwrite the same slot and tasks can migrate. NativeMinuit uses
+dynamic scheduling and supports worker and nested-thread entry.
 
-```julia
-# Was:  const c_00_4 = zeros(ComplexF64, 3, 3)        # shared → racy
-const C_POOL = [zeros(ComplexF64, 3, 3) for _ in 1:Threads.maxthreadid()]
-function St4_00!(par)
-    c = C_POOL[Threads.threadid()]                    # this thread's private buffer
-    # ... fill and use c ...
-end
-```
-
-Simpler and always correct (any schedule): **allocate the scratch per call**
-inside the FCN — `c = zeros(ComplexF64, 3, 3)`, or
-`Matrix{Complex{eltype(par)}}(undef, 3, 3)` to stay AD-generic (a hard-coded
-`ComplexF64` buffer can't hold the `Complex{Dual}` values ForwardDiff produces).
-For a millisecond-scale FCN that allocation is negligible.
-Either way, confirm the fix with `NativeMinuit.is_thread_safe(cf, x0)` (or just let
-`threaded_gradient=true` auto-verify on the first call).
+Use separate `CostFunction`/`Minuit` objects for concurrent fits. Confirm an
+objective with `NativeMinuit.is_thread_safe(cf, x0)` or the default
+`threaded_gradient=true` verification; the seed-point comparison is a diagnostic
+and does not prove safety at every input or task interleaving.
 
 ### When to choose which
 

@@ -182,7 +182,7 @@ function hesse(
                                        _zero_vector_like(x))
         x_refresh = similar(x)
         numerical_gradient!(refresh_out, x_refresh, state.parameters,
-                             state.gradient, cf_numeric, strategy, prec)
+                             state.gradient, cf_numeric, strategy, prec; has_limits = has_limits)
         copyto!(g2, refresh_out.g2)
         copyto!(gst, refresh_out.gstep)
         copyto!(dirin, refresh_out.gstep)

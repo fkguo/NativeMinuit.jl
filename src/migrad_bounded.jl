@@ -127,22 +127,18 @@ function _wrap_fcn_internal_to_external(cf::CostFunction, params::Parameters)
     f = cf.f
     up = cf.up
     p_ref = params
-    # Per-thread reusable ext buffer so the int→ext transform on the
-    # per-FCN-call hot path allocates nothing after warm-up. Count with
-    # `maxthreadid()` and index with `threadid()` — the canonical in-repo
-    # idiom (function_cross.jl:525-530, _fix_one_param). The threaded
-    # numerical gradient drives this closure from a `@threads :static`
-    # loop where `threadid()` is stable within an iteration, so distinct
-    # threads touch distinct buffers (no race). Single-threaded Julia →
-    # one buffer, zero overhead.
-    nbuf = max(1, Threads.maxthreadid())
-    ext_bufs = [similar(p_ref.values, Float64) for _ in 1:nbuf]
+    # A transform buffer belongs to one invocation. The user's objective may
+    # yield or recursively evaluate this wrapper without another task writing
+    # the vector it is still reading.
     # Skip the `collect(Float64, int_vec)` allocation; int_to_ext_vector!
     # accepts any AbstractVector<:Real (parallel-review #4 D6).
-    wrapped = let ext_bufs = ext_bufs, p_ref = p_ref, f = f
+    scratch = _OwnedBuffer(p_ref.values)
+    wrapped = let scratch = scratch, p_ref = p_ref, f = f
         function (int_vec::AbstractVector{<:Real})
-            ext_full = int_to_ext_vector!(ext_bufs[Threads.threadid()], p_ref, int_vec)
-            return f(ext_full)
+            return _with_owned_buffer(scratch) do ext_full
+                int_to_ext_vector!(ext_full, p_ref, int_vec)
+                f(ext_full)
+            end
         end
     end
     return CostFunction(wrapped, up)
@@ -164,32 +160,30 @@ function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
     up = cf.up
     p_ref = params
     n_active = n_free(params)
-    # Per-thread reusable ext buffers (see the ::CostFunction overload
-    # above for the threadid/maxthreadid rationale). wrapped_f and
-    # wrapped_g get independent pools so a function eval and a gradient
-    # eval never alias the same scratch. The g_int result stays freshly
-    # allocated — only the int→ext transform is buffered here (scope:
-    # this perf change is the ext-vector reuse alone).
-    nbuf = max(1, Threads.maxthreadid())
-    ext_bufs_f = [similar(p_ref.values, Float64) for _ in 1:nbuf]
-    ext_bufs_g = [similar(p_ref.values, Float64) for _ in 1:nbuf]
-    wrapped_f = let ext_bufs_f = ext_bufs_f, p_ref = p_ref, f = f
+    # Function and gradient calls each own their transform scratch.
+    scratch_f = _OwnedBuffer(p_ref.values)
+    scratch_g = _OwnedBuffer(p_ref.values)
+    wrapped_f = let scratch = scratch_f, p_ref = p_ref, f = f
         function (int_vec::AbstractVector{<:Real})
-            ext_full = int_to_ext_vector!(ext_bufs_f[Threads.threadid()], p_ref, int_vec)
-            return f(ext_full)
+            return _with_owned_buffer(scratch) do ext_full
+                int_to_ext_vector!(ext_full, p_ref, int_vec)
+                f(ext_full)
+            end
         end
     end
-    wrapped_g = let ext_bufs_g = ext_bufs_g, p_ref = p_ref, g = g, n_active = n_active
+    wrapped_g = let scratch = scratch_g, p_ref = p_ref, g = g, n_active = n_active
         function (int_vec::AbstractVector{<:Real})
-            ext_full = int_to_ext_vector!(ext_bufs_g[Threads.threadid()], p_ref, int_vec)
-            g_ext = g(ext_full)
-            g_int = Vector{Float64}(undef, n_active)
-            @inbounds for int_idx in 1:n_active
-                ext_idx = p_ref.ext_of_int[int_idx]
-                d = dint2ext_value(p_ref, int_idx, Float64(int_vec[int_idx]))
-                g_int[int_idx] = d * Float64(g_ext[ext_idx])
+            return _with_owned_buffer(scratch) do ext_full
+                int_to_ext_vector!(ext_full, p_ref, int_vec)
+                g_ext = g(ext_full)
+                g_int = Vector{Float64}(undef, n_active)
+                @inbounds for int_idx in 1:n_active
+                    ext_idx = p_ref.ext_of_int[int_idx]
+                    d = dint2ext_value(p_ref, int_idx, Float64(int_vec[int_idx]))
+                    g_int[int_idx] = d * Float64(g_ext[ext_idx])
+                end
+                return g_int
             end
-            return g_int
         end
     end
     # The FCN call counter is FRESH per wrapped run, exactly like the
@@ -210,8 +204,8 @@ function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper: per-internal(free)-parameter bound flags for the MnHesse step
-# clamp (MnHesse.cxx:160-167, 194-195). Entry `i` is `true` iff the i-th
+# Helper: per-internal(free)-parameter bound flags for gradient and HESSE
+# step clamps. Entry `i` is `true` iff the i-th
 # FREE parameter (internal index) maps to an externally-bounded parameter
 # — the NativeMinuit analogue of C++ `trafo.Parameter(i).HasLimits()`. The
 # bounded `migrad(cf, params)` / `hesse(m::Minuit)` paths pass the result

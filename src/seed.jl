@@ -106,8 +106,10 @@ function seed_state(
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision();
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     n = length(x0)
+    _validate_bound_flags(has_limits, n)
     length(errs) == n ||
         throw(DimensionMismatch("errs length $(length(errs)) != x0 length $n"))
     # Strategy ≥ 1 is supported via the inner-Hesse refinement in the
@@ -130,9 +132,9 @@ function seed_state(
     # Saves 3 vector allocations vs. the two-stage allocating wrapper.
     grad = FunctionGradient(_zero_vector_like(x), _zero_vector_like(x),
                             _zero_vector_like(x))
-    initial_gradient!(grad, par, dirin, cf.up, prec)
+    initial_gradient!(grad, par, dirin, cf.up, prec; has_limits = has_limits)
     x_work = similar(x, Float64)
-    numerical_gradient!(grad, x_work, par, grad, cf, strategy, prec)
+    numerical_gradient!(grad, x_work, par, grad, cf, strategy, prec; has_limits = has_limits)
 
     # M5: user-supplied covariance branch. Mirrors C++
     # MnSeedGenerator.cxx:63-67 — when the caller already has a
@@ -159,7 +161,7 @@ function seed_state(
 
     # Unconditional NegativeG2 check (Opus blocking #2).
     if has_negative_g2(grad, prec)
-        state = negative_g2_line_search(state, cf, strategy, prec)
+        state = negative_g2_line_search(state, cf, strategy, prec; has_limits = has_limits)
     end
 
     # Strategy(2): seed-time MnHesse bootstrap.
@@ -170,7 +172,7 @@ function seed_state(
     # short-circuits — Phase 1 follows that: skip the Hesse bootstrap
     # at Strategy(2) when a prior covariance was provided.
     if strategy.level == 2 && prior_cov === nothing
-        state = hesse(cf, state, strategy; prec = prec)
+        state = hesse(cf, state, strategy; prec = prec, has_limits = has_limits)
     end
 
     return state
@@ -259,8 +261,10 @@ function warm_restart_state(
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision(),
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     n = length(prev)
+    _validate_bound_flags(has_limits, n)
     n == 0 && return nothing
     is_valid(prev) || return nothing
     is_available(prev.error) || return nothing
@@ -302,7 +306,7 @@ function warm_restart_state(
                                 _zero_vector_like(x_warm))
     x_work = similar(x_warm, Float64)
     numerical_gradient!(grad_new, x_work, par_new, prev.gradient,
-                         new_cf, strategy, prec)
+                         new_cf, strategy, prec; has_limits = has_limits)
 
     # 4. Bail to cold seed if refined gradient produced any non-positive
     # g2[i]. The cold path's negative_g2_line_search would handle this,

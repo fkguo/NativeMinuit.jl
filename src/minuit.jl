@@ -966,13 +966,11 @@ function _retry_perturb_saturated(m::Minuit, factor::Float64,
     return true
 end
 
-# Best-of-passes selector enforcing the safety invariant: a strictly-lower
-# fval always wins; an exact tie goes to the valid result; a worse candidate
-# never replaces the incumbent. A non-finite (NaN/Inf) candidate never wins,
-# but a finite candidate DOES replace a non-finite incumbent — otherwise a
-# NaN pass-1 fval could never be improved (codex BLOCKING). Guarantees the
-# published fval is ≤ the pass-1 fval whenever any finite pass exists (so
-# `iterate=N` ≤ `iterate=1`).
+# Prefer a finite candidate, then a valid fit over an invalid one, then
+# the lower objective among candidates of equal validity. A non-finite
+# candidate never replaces a finite incumbent. Equal objective and validity
+# retain the incumbent. The no-worse objective guarantee applies within
+# equal validity; a valid fit can replace a lower but invalid candidate.
 function _retry_select_better(cand::BoundedFunctionMinimum,
                                best::BoundedFunctionMinimum)
     fc = fval(cand)

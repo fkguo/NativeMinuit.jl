@@ -44,3 +44,11 @@ add_custom_target(regen_reference
 # MINOS parity reference generator (see the header of minos_parity_trace.cxx).
 add_executable(minos_parity_trace minos_parity_trace.cxx)
 target_link_libraries(minos_parity_trace PUBLIC Minuit2::Minuit2)
+
+# Bounded gradient and near-boundary quadratic reference witness.
+add_executable(cpp_gradient_witness cpp_gradient_witness.cxx)
+target_link_libraries(cpp_gradient_witness PUBLIC Minuit2::Minuit2)
+
+# Public retry-policy comparison using pinned Minuit2 building blocks.
+add_executable(cpp_retry_witness cpp_retry_witness.cxx)
+target_link_libraries(cpp_retry_witness PUBLIC Minuit2::Minuit2)

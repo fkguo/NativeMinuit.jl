@@ -21,6 +21,29 @@ both subtypes that splice either just `f` (CostFunction) or both
 """
 abstract type AbstractCostFunction end
 
+# A reusable buffer is leased only by its creating task. Other tasks and
+# reentrant invocations get private scratch, so a yielding objective cannot
+# observe its input being overwritten. The owner alone reads/writes `busy`.
+mutable struct _OwnedBuffer{V<:AbstractVector{Float64}}
+    owner::Task
+    buffer::V
+    busy::Bool
+end
+_OwnedBuffer(template::AbstractVector{Float64}) =
+    _OwnedBuffer(current_task(), similar(template, Float64), false)
+
+@inline function _with_owned_buffer(f, scratch::_OwnedBuffer)
+    if current_task() === scratch.owner && !scratch.busy
+        scratch.busy = true
+        try
+            return f(scratch.buffer)
+        finally
+            scratch.busy = false
+        end
+    end
+    return f(similar(scratch.buffer, Float64))
+end
+
 """
     CostFunction{F,T} <: AbstractCostFunction
 

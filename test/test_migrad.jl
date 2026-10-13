@@ -155,10 +155,28 @@
         @test NativeMinuit._migrad_second_pass_invalid(1, invalid_state, 0.0, edmval)
         # ipass > 0 + above-max-edm (edm_corrected > 10·edmval) → bail.
         @test NativeMinuit._migrad_second_pass_invalid(1, valid_state, 11 * edmval, edmval)
+        @test NativeMinuit._migrad_second_pass_invalid(1, valid_state, 10 * edmval, edmval)
         # ipass > 0 + valid + edm within 10·edmval → do NOT bail; a
         # converging multi-pass fit must keep iterating.
         @test !NativeMinuit._migrad_second_pass_invalid(1, valid_state, 5 * edmval, edmval)
         @test !NativeMinuit._migrad_second_pass_invalid(2, valid_state, 9 * edmval, edmval)
+
+        # C++ accepts the inner pass at machine accuracy before testing
+        # above-max EDM. It must continue to outer HESSE, not bail early.
+        shifted_state = MinimumState(
+            MinimumParameters(copy(valid_state.parameters.x), -8.0),
+            valid_state.error, valid_state.gradient, valid_state.edm,
+            nfcn(valid_state))
+        for prec in (MachinePrecision(), MachinePrecision(1e-12))
+            machine_limit = abs(prec.eps2 * shifted_state.parameters.fval)
+            tight_goal = machine_limit / 100
+            @test !NativeMinuit._migrad_second_pass_invalid(
+                1, shifted_state, 20 * tight_goal, tight_goal, prec)
+            @test NativeMinuit._migrad_second_pass_invalid(
+                1, shifted_state, machine_limit, tight_goal, prec)
+            @test NativeMinuit._migrad_second_pass_invalid(
+                1, shifted_state, 2 * machine_limit, tight_goal, prec)
+        end
     end
 
     @testset "2nd-pass bail leaves converging Strategy≥1 fits unchanged" begin

@@ -136,15 +136,14 @@ migrad!(m)
 
 | value | behaviour |
 |---|---|
-| `false` *(default)* | serial gradient — always safe, zero overhead. |
-| `true` | force the threaded gradient. On the first gradient call it auto-verifies thread-safety and raises [`ThreadSafetyError`](@ref) if the FCN races (the thread-safety contract below). |
-| `:auto` | probe thread-safety **once** at the seed (memoized on the fit). If the probe passes, thread; otherwise emit a single `@warn` and fall back to serial. Never throws. Best-effort single-point probe — catches the common shared-buffer race but not one that only appears away from the seed (use `true` for the strict per-call check). |
+| `false` *(default)* | serial numerical gradient without a parallel safety probe. |
+| `true` | force the threaded gradient. With verification enabled, compare serial and threaded gradients at the entry seed; a detected mismatch raises [`ThreadSafetyError`](@ref). |
+| `:auto` | probe **once** at the seed (memoized on the fit). If the probe passes, thread; otherwise warn and fall back to serial. Objective exceptions still propagate. Neither mode proves safety at every input or task interleaving. |
 
-The two safe-by-construction modes differ in what happens to an *unsafe* FCN:
-`true` **refuses** it (throws), `:auto` **demotes** it (warns + serial). Use
-`true` when you expect the FCN to be safe and want a hard failure if it is not;
-use `:auto` for "thread it if you can, silently, but never give me a wrong
-answer." A few edge behaviours of `:auto` worth knowing:
+The modes differ in their response to a detected mismatch: `true` throws,
+whereas `:auto` warns and uses serial gradients. Both require an objective
+that respects the ownership contract below; a seed-point probe is a diagnostic.
+A few edge behaviours of `:auto` worth knowing:
 
 - On single-thread Julia (`julia -t 1`) it is silently serial — no probe, no
   warning (threading is impossible, so there is nothing to check).
@@ -180,15 +179,15 @@ wrong minimum** — a single-threaded χ² of 614 has been observed "converging"
 catch (worked failure case:
 [`BenchmarkExamples/IAM_2Pformfactor/`](https://github.com/fkguo/NativeMinuit.jl/tree/main/BenchmarkExamples)).
 
-NativeMinuit's *own* internal buffers are all per-thread; the contract is entirely on
-your FCN. Two safety nets back it up:
+NativeMinuit's internal gradient and transform buffers belong to the work unit
+or invocation using them. Your FCN must likewise avoid sharing mutable scratch. Two safety nets back it up:
 
 - **Automatic verification.** With `threaded_gradient=true` (and the default
-  `verify_threading=true`), the first gradient call runs the gradient both
+  `verify_threading=true`), the entry check runs the gradient both
   sequentially and threaded at the seed and compares them; a mismatch raises
   [`ThreadSafetyError`](@ref) with a diagnostic pointing at the likely cause.
 - **A standalone probe.** [`is_thread_safe(cf, x0)`](@ref) returns `true`/`false`
-  without throwing — useful to gate the decision yourself:
+  on a completed probe; objective exceptions propagate. Use it to gate the decision:
 
 ```julia
 using NativeMinuit
@@ -202,7 +201,7 @@ end
 
 (`:auto` runs this same probe internally and acts on it for you.)
 
-### Fixing a thread-unsafe FCN: per-thread buffers
+### Fixing a thread-unsafe FCN: private scratch
 
 The fix is to stop sharing the scratch. Two ways:
 
@@ -223,27 +222,17 @@ not hard-coded to `ComplexF64`: under AD `par` carries `ForwardDiff.Dual`
 numbers, so a `ComplexF64` buffer could not hold the resulting `Complex{Dual}`
 values and would break differentiation. This stays AD-generic.)
 
-**One buffer per thread** — if you must avoid the allocation, give each thread
-its own slot and index by `Threads.threadid()`:
+For reusable scratch, give each task or work unit exclusive ownership for the
+entire objective call. Indexing a shared pool by `Threads.threadid()` is unsafe:
+an objective can yield, another task can reuse the same slot, and the original
+task can migrate. NativeMinuit uses composable dynamic scheduling; threaded
+fits and mode analysis can run from a spawned worker or an outer threaded loop.
+Use separate `CostFunction`/`Minuit` objects for concurrent fits, since their
+counters and fit state are mutable.
 
-```julia
-const T_POOL = [zeros(ComplexF64, 3, 3) for _ in 1:Threads.maxthreadid()]
-function chi2(par)
-    T = T_POOL[Threads.threadid()]        # this thread's private buffer
-    fill_T_matrix!(T, par)
-    return loss_from(T)
-end
-```
-
-Two details make this sound: NativeMinuit threads the gradient with `Threads.@threads
-:static`, which **pins each loop iteration to a fixed thread**, so `threadid()`
-is stable within a call (under the `:dynamic` / `@spawn` schedules it would not
-be — do not use this pattern there). And the pool is sized with
-`Threads.maxthreadid()`, not `nthreads()`, because Julia can hand out thread ids
-beyond `nthreads()` in interactive sessions.
-
-Either way, confirm the fix with `is_thread_safe(cf, x0)` (or just let
-`threaded_gradient=true` auto-verify on the first call).
+Confirm the objective with `is_thread_safe(cf, x0)` or the default verification
+in `threaded_gradient=true`. This seed-point probe is a diagnostic, not a proof
+of safety for every possible input or task interleaving.
 
 ## See also
 
