@@ -5,8 +5,33 @@ and [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-10-14
+
+### Fixed
+
+- Match Minuit2's bounded numerical-gradient step limits and final
+  negative-curvature recovery iteration, including warm starts and HESSE.
+- Preserve the machine-accuracy and exact-threshold termination rules during
+  MIGRAD retries, so subsequent HESSE and retry passes follow the reference
+  behavior. An invalid candidate remains invalid even if its objective decreases.
+- Keep callback scratch owned throughout each invocation, including yielding
+  objectives and nested threaded calls. Count objective calls exactly when
+  threaded gradients or per-mode refinements throw.
+- Preserve parameter columns in DataFrame output when their names collide with
+  diagnostic columns. Reject unsupported coordinate axes before indexed access.
+- Execute optional-extension compilation workloads without suppressing errors.
+
+### Changed
+
+- Benchmark tools record fixed inputs, raw timings, allocations and runtime
+  configuration, reject incomplete comparisons, and validate the actual BLAS
+  thread count. Historical cross-language timings do not establish a current
+  performance comparison.
+
 ### Documentation
 
+- Corrected gradient, retry-budget, HESSE and MINOS behavior descriptions and
+  refreshed executable examples.
 - Clarified `m.covariance` versus `m.matrix`
   ([#49](https://github.com/fkguo/NativeMinuit.jl/issues/49)): `m.covariance`
   is the full `n_total × n_total` matrix with zero rows/columns for fixed

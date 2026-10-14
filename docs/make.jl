@@ -1,13 +1,19 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # Documenter.jl entry point. Builds docs into docs/build/.
-# Run from the repo root with:
+# Run from the repository root:
+#     julia --project=docs -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
 #     julia --project=docs docs/make.jl
 
 ENV["GKSwstype"] = "100"   # headless GR backend for the @example figures
 
 using Documenter
 using NativeMinuit
+# Load the integrations used below before output-sensitive doctests start.
+using ForwardDiff, Optim, ComponentArrays, Plots
+
+# Local manuals must document this checkout, rather than a registry release.
+@assert realpath(dirname(dirname(pathof(NativeMinuit)))) == realpath(dirname(@__DIR__))
 
 DocMeta.setdocmeta!(NativeMinuit, :DocTestSetup, :(using NativeMinuit); recursive = true)
 
@@ -15,6 +21,8 @@ makedocs(
     sitename = "NativeMinuit.jl",
     authors  = "Feng-Kun Guo",
     modules  = [NativeMinuit],
+    # Local builds work without a Git remote; CI supplies hosted source links.
+    remotes  = get(ENV, "CI", "false") == "true" ? Dict() : nothing,
     format   = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
         canonical  = "https://fkguo.github.io/NativeMinuit.jl",
@@ -45,7 +53,9 @@ makedocs(
         "API Reference" => "api.md",
         "Internals" => "internals.md",
     ],
-    warnonly = [:missing_docs, :cross_references, :docs_block],
+    # Internal helpers need not all appear in the public API. Broken references,
+    # docs bindings, examples and doctests remain fatal.
+    warnonly = [:missing_docs],
 )
 
 # CI deployment to gh-pages (skips on local builds)

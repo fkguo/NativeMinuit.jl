@@ -75,6 +75,13 @@ IMinuit.jl code calling `migrad(m)` keeps working. `hesse!` is an alias of
 `hesse`, and `minos(m, …)` forwards to `minos!`, so either spelling is fine —
 the bang form is the idiomatic Julia choice because these methods mutate `m`.
 
+NativeMinuit’s retry policy is close to iminuit’s but adds repeated-basin
+detection and selection of the best finite candidate by validity, then cost.
+`iterate=1` requests one MIGRAD pass. `maxfcn` is not a hard budget for all
+retry/Simplex calls; inspect `m.nfcn` and `m.n_passes`. Subsequent fits resume
+from the cached result; `reset(m)` drops that result. See
+[Tolerances and budgets](../tutorials/quickstart.md#Tolerances-and-budgets).
+
 ## Reading results: property access stays the same
 
 The result accessors are unchanged — they are properties on `m`:
@@ -95,7 +102,7 @@ available. Other iminuit aliases are present too: `m.is_valid`, `m.ncalls`,
 `m.parameters`, `m.accurate`, `m.npar`, …
 
 IMinuit.jl's small functional accessors are exported unchanged:
-[`args`](@ref)`(m)` (a `Vector{Float64}` of the current values, `≡ m.values`)
+[`args`](@ref)`(m)` (a copy of the current external values, preserving supported named containers)
 and [`matrix`](@ref)`(m; correlation=false)` (the covariance or correlation
 matrix). `reset(m)` drops cached MIGRAD/MINOS results and
 [`set_precision`](@ref)`(m, p)` overrides the machine precision.
@@ -210,8 +217,9 @@ either gives a clear "load Optim" message rather than a `MethodError`.
 - **algorithm helpers take `m` as an argument** — `mncontour(m, a, b)`,
   `profile(m, a)`, `mnprofile(m, a)` instead of `m.mncontour(a, b)` etc.;
 - **generic Julia FCNs** — your `f(x::AbstractVector)` can be any callable;
-  pass `grad = x -> ForwardDiff.gradient(f, x)` (or `using ForwardDiff`) for
-  AD-backed gradients;
+  load ForwardDiff and pass `grad = x -> ForwardDiff.gradient(f, x)`, or
+  construct a `CostFunctionAD`. Loading ForwardDiff alone does not switch
+  an existing numerical fit to AD;
 - **package extensions** — alternative minimizers (`using Optim`) and plotting
   (`using Plots`) load on demand rather than as hard dependencies.
 

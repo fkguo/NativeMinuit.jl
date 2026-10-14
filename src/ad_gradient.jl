@@ -245,6 +245,7 @@ function analytical_gradient!(
 
     grad_vec = cf.g(par.x)
     cf.ngrad[] += 1
+    Base.require_one_based_indexing(grad_vec)
     length(grad_vec) == n ||
         throw(DimensionMismatch("gradient function returned length $(length(grad_vec)), expected $n"))
 
@@ -262,12 +263,13 @@ function analytical_gradient(
     par::MinimumParameters,
     cf::CostFunctionWithGradient,
     strategy::Strategy = Strategy(0),
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     has_step_size(par) ||
         throw(ArgumentError("analytical_gradient(par, cf) cold-start needs par with step sizes"))
     # Seed g2 + gstep using the same convention as numerical cold-start
-    seed = initial_gradient(par, par.dirin, cf)
+    seed = initial_gradient(par, par.dirin, cf, prec; has_limits = has_limits)
     out = FunctionGradient(_zero_vector_like(par.x),
                            _zero_vector_like(par.x),
                            _zero_vector_like(par.x))
@@ -281,11 +283,12 @@ end
 function initial_gradient(par::MinimumParameters,
                            errs::AbstractVector{Float64},
                            cf::CostFunctionWithGradient,
-                           prec::MachinePrecision = MachinePrecision())
+                           prec::MachinePrecision = MachinePrecision();
+                           has_limits::Union{Nothing,AbstractVector{Bool}} = nothing)
     out = FunctionGradient(_zero_vector_like(par.x),
                            _zero_vector_like(par.x),
                            _zero_vector_like(par.x))
-    initial_gradient!(out, par, errs, cf.up, prec)
+    initial_gradient!(out, par, errs, cf.up, prec; has_limits = has_limits)
     return out
 end
 
@@ -357,8 +360,11 @@ function seed_state(
     strategy::Strategy = Strategy(0),
     prec::MachinePrecision = MachinePrecision();
     prior_cov::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
+    Base.require_one_based_indexing(x0, errs)
     n = length(x0)
+    _validate_bound_flags(has_limits, n)
     length(errs) == n ||
         throw(DimensionMismatch("errs length $(length(errs)) != x0 length $n"))
     # All strategy levels are supported, mirroring the numerical
@@ -379,7 +385,7 @@ function seed_state(
     fval = cf(x)
     par = MinimumParameters(x, dirin, fval)
 
-    grad = analytical_gradient(par, cf, strategy, prec)
+    grad = analytical_gradient(par, cf, strategy, prec; has_limits = has_limits)
 
     # CheckGradient discrepancy check (C++ MnSeedGenerator.cxx:124-144).
     # Validate the user/AD gradient against a numerical 2-point estimate at
@@ -413,7 +419,7 @@ function seed_state(
     if has_negative_g2(grad, prec)
         # Fall back to numerical refinement (negative_g2 requires
         # numerical_gradient! semantics under the hood)
-        state = negative_g2_line_search(state, cf, strategy, prec)
+        state = negative_g2_line_search(state, cf, strategy, prec; has_limits = has_limits)
     end
 
     # Strategy(2): seed-time MnHesse bootstrap. Mirrors the numerical
@@ -423,7 +429,7 @@ function seed_state(
     # bootstrap is well-defined on the AD path too. Skipped when the caller
     # supplied `prior_cov` (the `!HasCovariance` C++ guard).
     if strategy.level == 2 && prior_cov === nothing
-        state = hesse(cf, state, strategy; prec = prec)
+        state = hesse(cf, state, strategy; prec = prec, has_limits = has_limits)
     end
 
     return state
@@ -441,6 +447,7 @@ function numerical_gradient!(
     strategy::Strategy,
     prec::MachinePrecision = MachinePrecision();
     threaded::Bool = false,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     # `x_work` argument unused for AD path (kept for signature symmetry
     # with the central-diff overload so the MIGRAD loop dispatches
@@ -471,11 +478,12 @@ function negative_g2_line_search(
     state::MinimumState,
     cf::CostFunctionWithGradient,
     strategy::Strategy,
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     has_negative_g2(state.gradient, prec) || return state
     cf_num = CostFunction(cf.f, cf.up, cf.nfcn, cf.n_nonfinite)
-    return negative_g2_line_search(state, cf_num, strategy, prec)
+    return negative_g2_line_search(state, cf_num, strategy, prec; has_limits = has_limits)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -512,7 +520,7 @@ function migrad(
     # M5: optional `prior_cov` overrides the diagonal-from-g2 seed
     # inv_hessian (and sets `dcovar = 0`). Mirrors C++
     # MnSeedGenerator.cxx:63-67 `state.HasCovariance()` branch.
-    seed = seed_state(cf, x0, errs, strategy, prec; prior_cov = prior_cov)
+    seed = seed_state(cf, x0, errs, strategy, prec; prior_cov = prior_cov, has_limits = has_limits)
     # Note: `threaded_gradient` is a no-op for the AD path (the gradient
     # is one call into `cf.g`, not a per-parameter loop). Accepted here
     # for API symmetry with the numerical path; downstream
@@ -555,6 +563,7 @@ function migrad(
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
     storage_level::Integer = 0,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
 )
     n = length(seed)
@@ -564,5 +573,6 @@ function migrad(
                           threaded_gradient = threaded_gradient,
                           verify_threading = verify_threading,
                           storage_level = storage_level,
+                          has_limits = has_limits,
                           print_level = print_level)
 end

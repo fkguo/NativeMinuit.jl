@@ -20,22 +20,14 @@
 using Aqua
 using RecipesBase
 
-# JET reaches deep into Julia's compiler internals and is FRAGILE across Julia
-# point releases (e.g. JET 0.11.3 fails to *precompile* on Julia 1.12.x —
-# `MethodError: add_active_gotos!(…, ::Compiler.GenericDomTree{true})`), which
-# would abort the WHOLE `Pkg.test()` at the dependency-precompile stage, before
-# any NativeMinuit test runs. JET is a dev-only optimization diagnostic, so it is
-# NOT in the `[targets] test` deps: load it opportunistically and SKIP its check
-# when unavailable, instead of letting a tooling/Julia-version incompatibility
-# block CI and releases. Aqua + the `@inferred` block below (the real
-# type-stability gate) always run. A developer who wants the JET check adds JET
-# to the test environment (`]add JET`) and it runs automatically.
+# Core tests do not depend on JET. Optional execution is explicitly recorded as
+# unavailable when its package/compiler integration cannot load. The required
+# independent CI diagnostic is scripts/jet/run.jl in its pinned environment.
 const HAS_JET = try
     @eval using JET
     true
 catch err
-    @info "JET unavailable — skipping the JET opt-analysis guard (dev-only, " *
-          "Julia-version-fragile tool; add JET to the env to enable it)" exception = err
+    @info "Optional JET diagnostic status: unavailable (executed=false); see docs/dev/JET.md" exception = err
     false
 end
 
@@ -115,7 +107,7 @@ end
     if HAS_JET
         include("test_jet_optanalysis.jl")
     else
-        @testset "JET opt-analysis (skipped — JET unavailable)" begin
+        @testset "JET diagnostic unavailable (executed=false)" begin
             @test_skip true
         end
     end

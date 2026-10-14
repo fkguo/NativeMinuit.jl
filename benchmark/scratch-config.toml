@@ -1,0 +1,18 @@
+[target]
+module = "NativeMinuit"
+source_root = ".."
+source_files = ["src", "Project.toml", "benchmark/bench_scratch_suite.jl"]
+[benchmark]
+suite_file = "bench_scratch_suite.jl"
+baseline_file = ""
+samples = 50
+seconds = 1
+timeout_seconds = 600
+[benchmark.evals]
+policy = "fixed"
+fixed_value = 1
+[regression]
+[output]
+out_dir = ".julia-perf/scratch/latest"
+[blas]
+num_threads = 1

@@ -7,7 +7,10 @@ For internal helpers and non-exported names see [Internals](internals.md).
 ## Cost function
 
 ```@docs
+NativeMinuit.AbstractCostFunction
 NativeMinuit.CostFunction
+NativeMinuit.nonfinite_calls
+NativeMinuit.reset_ncalls!
 NativeMinuit.CostFunctionWithGradient
 NativeMinuit.CostFunctionAD
 ```
@@ -55,6 +58,10 @@ NativeMinuit.CovStatus
 
 ## MINOS (asymmetric errors)
 
+`minos_upper` and `minos_lower` add objective calls to `m.nfcn` without storing
+MINOS results. Their scalar returns carry no limit/validity flags; use the
+stored `MinosError` from `minos!` when interpreting uncertainty.
+
 ```@docs
 NativeMinuit.minos
 NativeMinuit.MinosError
@@ -62,6 +69,7 @@ NativeMinuit.has_closed_interval
 NativeMinuit.minos_upper
 NativeMinuit.minos_lower
 NativeMinuit.function_cross
+NativeMinuit.function_cross_external
 NativeMinuit.MnCross
 ```
 
@@ -239,6 +247,13 @@ NativeMinuit.find_solution_modes
 NativeMinuit.SolutionMode
 NativeMinuit.SolutionModes
 ```
+
+For mode refinement, `refine_maxfcn` is a per-attempt low-level stopping threshold.
+Seed and complete gradient/HESSE probes may overshoot it, and Simplex/retry
+passes spend additional calls. Consequently `refine_maxfcn * refine_iterate`
+is not a hard bound on total work. Use the returned per-mode call counts
+when accounting for completed work.
+
 
 ## Escaping a local basin
 

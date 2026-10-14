@@ -10,7 +10,7 @@ exactly as after a [`migrad!`](@ref).
 
 It is a package extension (like the Plots / DataFrames / ForwardDiff ones): Optim
 pulls in a sizeable transitive stack, so it is not a hard dependency. Activate the
-bridge with `using Optim`; without it, `optim(m)` raises a helpful "load Optim"
+bridge with `Pkg.add("Optim")` followed by `using Optim`; without it, `optim(m)` raises a helpful "load Optim"
 message rather than a bare `MethodError`.
 
 ```julia
@@ -19,6 +19,17 @@ using NativeMinuit, Optim
 m = Minuit(fcn, x0)
 optim(m; method = :lbfgs)   # minimise with Optim's LBFGS (or:  m |> optim)
 hesse!(m)                   # covariance / symmetric errors, à la iminuit
+```
+
+A complete quadratic example:
+
+```jldoctest
+julia> using NativeMinuit, Optim
+
+julia> m = Minuit(x -> sum(abs2, x .- [1.0, 2.0]), zeros(2)); optim(m; method=:lbfgs); hesse!(m);
+
+julia> m.valid && m.fval < 1e-10 && isapprox(collect(m.values), [1.0, 2.0]; atol=1e-4, rtol=0)
+true
 ```
 
 ## When to reach for it

@@ -69,9 +69,30 @@ symmetric Hesse placeholder, while an at-limit side publishes only the
 distance to the bound.
 
 If you only need one side, `minos_upper(m, "a")` /
-`minos_lower(m, "a")` return just that value without mutating
-`m`. The whole-fit alias `minos!(m; sigma = 2)` widens the scan to the
+`minos_lower(m, "a")` return just that value without storing a result in
+`m.merrors`. Their objective calls still increase `m.nfcn`, and a scalar return
+contains no crossing or limit flags. For uncertainty reporting, use
+`minos!(m, par)` and inspect the stored `MinosError`. The whole-fit alias
+`minos!(m; sigma = 2)` widens the scan to the
 2σ crossing.
+
+A bounded scan can terminate cleanly without a closed interval:
+
+```jldoctest
+julia> using NativeMinuit
+
+julia> m = Minuit(x -> (x[1]-10.0)^2 + x[2]^2, [9.0, 0.0]; limits=[(nothing, 10.0), nothing]); migrad!(m); minos!(m, 1);
+
+julia> e = m.merrors["x0"];
+
+julia> e.upper_valid && e.upper_par_limit && !has_closed_interval(e) && isapprox(e.upper, 10.0-m.values[1]; atol=1e-6, rtol=0)
+true
+
+julia> q = Minuit(x -> sum(abs2, x), [0.1, 0.1]); migrad!(q); before = q.nfcn; minos_upper(q, 1);
+
+julia> isempty(q.merrors) && q.nfcn > before
+true
+```
 
 ## 2-D contours: three tools, three jobs
 

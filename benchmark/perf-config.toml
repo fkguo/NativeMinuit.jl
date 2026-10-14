@@ -1,29 +1,29 @@
-# NativeMinuit.jl Phase 0 §3.4 evidence-gate config
-# Drives scripts/run_perf.jl per the julia-perf skill contract.
-
 [mode]
 mode = "standalone"
 
 [target]
 module = "NativeMinuit"
-functions = ["migrad", "_migrad_loop", "numerical_gradient!", "davidon_update!"]
+source_root = ".."
+source_files = ["src", "Project.toml", "benchmark/bench_migrad_suite.jl", "benchmark/fixtures/migrad_inputs.json"]
 
 [benchmark]
-suite_file = "../benchmark/bench_migrad_suite.jl"
+suite_file = "bench_migrad_suite.jl"
 baseline_file = ""
+input_files = ["fixtures/migrad_inputs.json"]
 samples = 50
-seconds = 20
-timeout_seconds = 300
+seconds = 1
+timeout_seconds = 600
 
 [benchmark.evals]
-policy = "auto"
-tier_1_threshold_ns = 1000
-tier_2_threshold_ns = 1_000_000
+policy = "fixed"
 fixed_value = 1
+
+[regression]
+# No threshold is inferred from old measurements. An empty table is UNVERIFIED.
 
 [output]
 out_dir = ".julia-perf/runs/latest"
 
 [blas]
-# Phase 0 §3.4: single-threaded BLAS for apples-to-apples vs C++.
+# Applied to the owned worker's OpenBLAS and OpenMP thread limits.
 num_threads = 1

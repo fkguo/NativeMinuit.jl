@@ -41,10 +41,14 @@ using Test
     include("test_issue45_view.jl")
     include("test_issue45_isolation.jl")
     include("test_minuit_retry.jl")
+    include("test_retry_cpp_oracle.jl")
     include("test_ad_gradient.jl")
     include("test_serialize.jl")
     include("test_contour_exact.jl")
     include("test_threaded_gradient.jl")
+    include("test_composable_gradient.jl")
+    include("test_bounded_gradient_oracle.jl")
+    include("test_precompile_workload.jl")
     include("test_plot_recipes.jl")
     include("test_plot_text.jl")
     include("test_iminuit_compat.jl")
@@ -76,4 +80,8 @@ using Test
     # (`test_iminuit_compat_data.jl` checks that `optim(m)` errors helpfully
     # when the Optim extension has not been loaded).
     include("test_structured_parameters.jl")
+    # These checks load extension triggers, so keep them after absence tests.
+    include("test_interface_boundaries.jl")
+    include("test_coordinate_conversions.jl")
+    include("test_extension_workloads.jl")
 end

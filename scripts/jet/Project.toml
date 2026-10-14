@@ -1,0 +1,10 @@
+[deps]
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
+NativeMinuit = "5523a57a-07f4-4aae-a9fd-d526bcb5d194"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+
+[compat]
+JET = "=0.9.20"
+NativeMinuit = "0.7"
+julia = "=1.11.7"

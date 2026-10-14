@@ -322,14 +322,11 @@ using ForwardDiff
         - 8.0 * exp(-((x[1] - 0.8)^2 + (x[2] - 0.8)^2) / 0.3)
     )
 
-    @testset "Fixed-point detection stops a deterministically cycling retry" begin
-        # Seeded AT the well: pass 1 converges to the well but exits INVALID
-        # (the ripple keeps EDM above threshold) without hitting the budget.
-        # The well is the only attractor in reach, so every retry pass
-        # re-converges to the SAME point — the retry map has cycled.
-        # Fixed-point detection must catch the re-visit and stop early,
-        # recovering the wasted IAM-style retries (where all 4 passes
-        # re-converge to one fval).
+    @testset "Rugged retries preserve objective values and stop on revisits" begin
+        # This non-smooth objective returns an invalid first candidate.
+        # Later passes can lower its objective without establishing a valid
+        # minimum. Check the returned values and bounded pass count here;
+        # the revisit predicate itself has positive/negative controls below.
         m1 = Minuit(fcn_rugged, [0.8, 0.8]; names = ["x", "y"], errors = [0.05, 0.05])
         migrad!(m1; iterate = 1, tol = 1e-6, maxfcn = 4000)
         @test !m1.valid                              # pass 1 fails to validate
@@ -338,21 +335,16 @@ using ForwardDiff
 
         m5 = Minuit(fcn_rugged, [0.8, 0.8]; names = ["x", "y"], errors = [0.05, 0.05])
         migrad!(m5; iterate = 5, tol = 1e-6, maxfcn = 4000)
-        # Loop entered (≥2 passes) but stopped BEFORE exhausting iterate=5:
-        # the cycle was detected. This is the core "stops early ONLY when
-        # provably redundant" claim.
+        # The retry loop entered but stopped before the five-pass maximum.
+        # The pass count alone does not identify the termination reason.
         @test 2 <= m5.n_passes < 5
-        # The retries cycle and add nothing material, so the best-of-passes
-        # selector returns essentially pass 1's result.
-        #
-        # NOTE: the 2nd-pass-invalid bail (C++ VariableMetricBuilder.cxx
-        # :127-132) makes each invalid inner pass return its EARLIER-pass
-        # point — matching C++, which returns the pass-1 minimum — so the
-        # retry no longer cycles to a BIT-identical fval; it agrees to ~1e-7.
-        # The safety invariant (best-of-passes is never WORSE than the
-        # single-shot pass 1) still holds exactly, since the selector takes
-        # the min over passes and m5's pass 1 equals m1.
-        @test m5.fval ≈ m1.fval atol = 1e-5
+        # Strategy(2) retries may improve an invalid Strategy(1) candidate.
+        # The non-smooth ripple does not imply a unique retry attractor or
+        # equality to the first-pass cost. Verify the returned costs directly
+        # at tighter absolute accuracy, and retain the exact selector policy.
+        @test fcn_rugged(collect(m1.values)) ≈ m1.fval atol = 1e-12 rtol = 0
+        @test fcn_rugged(collect(m5.values)) ≈ m5.fval atol = 1e-12 rtol = 0
+        @test NativeMinuit._retry_select_better(m1.fmin, m5.fmin) === m5.fmin
         @test m5.fval <= m1.fval + 1e-9
     end
 

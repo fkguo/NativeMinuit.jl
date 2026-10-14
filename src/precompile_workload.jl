@@ -1,140 +1,216 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-# ─────────────────────────────────────────────────────────────────────────────
-# precompile_workload.jl — Phase 2.4 PrecompileTools workload.
-#
-# Runs a small set of representative calls during precompilation so user TTFX
-# (time-to-first-execution) is dominated by their FCN compilation, not by ours.
-# Covers the public API surface listed in §3 of the ROADMAP plus the Phase 3
-# iminuit-style wrapper, the Julia-native cost-function family, the algorithm
-# wrappers (mncontour / profile / mnprofile / simplex / scan) and the
-# error-analysis layer (bootstrap / jackknife / contour sampling / solution
-# modes). Each path is exercised on the SMALLEST data that still compiles it,
-# so the bulk of the type-generic machinery (linear algebra, the DFP loop,
-# MINOS, contour, Parameters, result construction) is cached once here — only
-# the thin FCN-calling wrappers recompile per user closure.
-#
-# Each path/section below is wrapped in its OWN try/catch so workload failures
-# during package precompilation (a) never break installation and (b) cannot let
-# one drifting path silently skip the others. (Every call is validated to run
-# cleanly, without warnings, so a catch never silently drops a path.)
-#
-# AD- and Optim-backed paths live in the package extensions, which carry their
-# own @compile_workload blocks (ext/NativeMinuit*Ext.jl) — they precompile when the
-# trigger package is loaded.
-# ─────────────────────────────────────────────────────────────────────────────
-
+# Independently callable compilation workloads. Each unit constructs its own
+# inputs, so failure cannot skip another unit through shared setup state.
+# Exceptions propagate during precompilation and in the focused regression test.
+# These calls exercise compilation; they do not establish a TTFX improvement.
 using PrecompileTools
 
-PrecompileTools.@setup_workload begin
-    # Small test FCN — type-stable, Float64 in/out.
-    _wl_f = x -> (x[1] - 1.0)^2 + (x[2] - 2.0)^2
+_wl_quadratic(x) = (x[1] - 1.0)^2 + (x[2] - 2.0)^2
+_wl_line(x, p) = p[1] * x + p[2]
+_wl_pdf(x, p) = exp(-0.5 * ((x - p[1]) / p[2])^2) / (p[2] * sqrt(2π))
+_wl_density(x, p) = p[3] * _wl_pdf(x, p)
+_wl_integral(p) = p[3]
+_wl_cdf(x, p) = 1.0 / (1.0 + exp(-(x - p[1]) / p[2]))
+_wl_scaled_cdf(x, p) = p[3] * _wl_cdf(x, p)
+_wl_data() = Data([0.0, 1.0, 2.0, 3.0], [1.0, 3.0, 5.0, 7.0], ones(4))
+_wl_cost() = CostFunction(_wl_quadratic, 1.0)
+_wl_minimum() = migrad(_wl_cost(), [0.0, 0.0], [0.1, 0.1])
+function _wl_minuit()
+    m = Minuit(_wl_quadratic, [0.0, 0.0]; names = ["a", "b"], errors = [0.1, 0.1])
+    migrad!(m)
+    return m
+end
+function _wl_bounded()
+    params = Parameters([
+        MinuitParameter("a", 0.0, 0.1; lower = -3.0, upper = 3.0),
+        MinuitParameter("b", 0.0, 0.1; fixed = true),
+    ])
+    return migrad(_wl_cost(), params)
+end
+_wl_ensemble() = mcmc_sample(_wl_minuit(); nsteps = 60, burn = 10, thin = 5,
+                            seed = 1, warn = false)
 
-    # Tiny datasets + simple model/pdf/cdf closures for the cost-function
-    # family and the error-analysis layer. Kept minimal (3-5 points) but
-    # well-posed so every fit converges quietly.
-    _wl_x  = [0.0, 1.0, 2.0, 3.0]
-    _wl_y  = [1.0, 3.0, 5.0, 7.0]
-    _wl_ye = [1.0, 1.0, 1.0, 1.0]
-    _wl_line = (x, p) -> p[1] * x + p[2]
-    _wl_samp = [-0.4, 0.1, 0.3, -0.2, 0.5]
-    # Normalised Gaussian pdf / extended density + integral (no extra deps).
-    _wl_pdf  = (x, p) -> exp(-0.5 * ((x - p[1]) / p[2])^2) / (p[2] * sqrt(2π))
-    _wl_dens = (x, p) -> p[3] * exp(-0.5 * ((x - p[1]) / p[2])^2) / (p[2] * sqrt(2π))
-    _wl_intg = p -> p[3]
-    # Binned: logistic cdf — smooth, normalised to (0,1), no SpecialFunctions.
-    _wl_n    = [2.0, 5.0, 3.0]
-    _wl_xe   = [-1.0, -0.3, 0.3, 1.0]
-    _wl_cdf  = (x, p) -> 1.0 / (1.0 + exp(-(x - p[1]) / p[2]))
-    _wl_scdf = (x, p) -> p[3] / (1.0 + exp(-(x - p[1]) / p[2]))
+function _precompile_migrad()
+    return _wl_minimum()
+end
 
-    PrecompileTools.@compile_workload begin
-        try
-            # ── Path A: bare-vector unbounded MIGRAD ───────────────
-            cf_a = CostFunction(_wl_f, 1.0)
-            m_a = migrad(cf_a, [0.0, 0.0], [0.1, 0.1])
+function _precompile_minos()
+    return minos(_wl_minimum(), _wl_cost(), 1)
+end
 
-            # ── Path B: MINOS + contour (uses function_cross) ──────
-            me_a = minos(m_a, cf_a, 1)
-            ce_a = contour_ellipse(m_a, cf_a, 1, 2; npoints = 6)
+function _precompile_contour()
+    return contour_ellipse(_wl_minimum(), _wl_cost(), 1, 2; npoints = 6)
+end
 
-            # ── Path C: bound-aware via Parameters ─────────────────
-            params = Parameters([
-                MinuitParameter("a", 0.0, 0.1; lower = -3.0, upper = 3.0),
-                MinuitParameter("b", 0.0, 0.1; fixed = true),
-            ])
-            m_b = migrad(cf_a, params)
+function _precompile_bounded()
+    return _wl_bounded()
+end
 
-            # ── Path D: iminuit-style Minuit wrapper ───────────────
-            mw = Minuit(_wl_f, [0.0, 0.0];
-                        names = ["a", "b"], errors = [0.1, 0.1])
-            migrad!(mw)
-            minos!(mw, 1)
+function _precompile_minuit()
+    return _wl_minuit()
+end
 
-            # ── Path E: HESSE standalone ───────────────────────────
-            hesse(cf_a, m_a.state, Strategy(0))
+function _precompile_minuit_minos()
+    return minos!(_wl_minuit(), 1)
+end
 
-            # ── Path F: serialization ──────────────────────────────
-            to_dict(m_a)
-            to_dict(m_b)
-            to_dict(me_a)
-        catch; end
+function _precompile_hesse()
+    return hesse(_wl_cost(), _wl_minimum().state, Strategy(0))
+end
 
-        try
-            # ── Path G: Julia-native cost-function family ──────────
-            # construct → Minuit(cost, x0) → migrad! for each cost type.
-            migrad!(Minuit(LeastSquares(_wl_x, _wl_y, _wl_ye, _wl_line), [1.0, 0.0]))
-            migrad!(Minuit(LeastSquares(Data(_wl_x, _wl_y, _wl_ye), _wl_line), [1.0, 0.0]))
-            migrad!(Minuit(UnbinnedNLL(_wl_samp, _wl_pdf), [0.0, 1.0]))
-            migrad!(Minuit(ExtendedUnbinnedNLL(_wl_samp, _wl_dens, _wl_intg),
-                           [0.0, 1.0, 5.0]))
-            migrad!(Minuit(BinnedNLL(_wl_n, _wl_xe, _wl_cdf), [0.0, 0.5]))
-            migrad!(Minuit(ExtendedBinnedNLL(_wl_n, _wl_xe, _wl_scdf),
-                           [0.0, 0.5, 10.0]))
-            # CostSum: two named LeastSquares sharing params (simultaneous fit).
-            _lsa = LeastSquares(_wl_x, _wl_y, _wl_ye, _wl_line; name = [:a, :b])
-            _lsb = LeastSquares(_wl_x, _wl_y, _wl_ye, _wl_line; name = [:a, :b])
-            migrad!(Minuit(_lsa + _lsb, [1.0, 0.0]))
-        catch; end
+function _precompile_serialize_minimum()
+    return to_dict(_wl_minimum())
+end
 
-        try
-            # ── Path H: iminuit-style algorithm wrappers ───────────
-            mncontour(mw, 1, 2; numpoints = 6)
-            profile(mw, 1; bins = 5)
-            mnprofile(mw, 1; bins = 4)
-            # scan mutates `m` (best-value retention) — use a throwaway fit.
-            _ms = Minuit(_wl_f, [0.0, 0.0]); migrad!(_ms)
-            scan(_ms, 1; maxsteps = 5)
-            simplex(Minuit(_wl_f, [0.0, 0.0]))
-        catch; end
+function _precompile_serialize_bounded()
+    return to_dict(_wl_bounded())
+end
 
-        try
-            # ── Path I: error analysis (smallest settings) ─────────
-            _data = Data(_wl_x, _wl_y, _wl_ye)
-            bootstrap(_wl_line, _data, [1.0, 0.0]; nresample = 2, seed = 1)
-            jackknife(_wl_line, _data, [1.0, 0.0])
-            get_contours_samples(mw; nsamples = 64, adaptive = false,
-                                 seed = 1, warn = false)
-            _ens = mcmc_sample(mw; nsteps = 60, burn = 10, thin = 5,
-                               seed = 1, warn = false)
-            quantiles(_ens, x -> x[1]; warn = false)
-            quantile_band(_ens, (t, x) -> x[1] + x[2] * t, [0.0, 1.0]; warn = false)
-            quantile_band(_ens, x -> [x[1], x[1] + x[2]], [0.0, 1.0];
-                          curve = true, warn = false)
-            _eio = IOBuffer()
-            save_ensemble(_eio, _ens)
-            load_ensemble(IOBuffer(take!(_eio)))
-            _S = [0.98 1.99; 1.02 2.01; 1.00 2.00; 0.99 2.02; 1.01 1.98; 1.00 1.99]
-            find_solution_modes(_S, mw)
-        catch; end
+function _precompile_serialize_minos()
+    return to_dict(minos(_wl_minimum(), _wl_cost(), 1))
+end
 
-        try
-            # ── Path J: result plot recipes (RecipesBase; Plots-agnostic) ──
-            RecipesBase.apply_recipe(Dict{Symbol,Any}(), ce_a)
-            RecipesBase.apply_recipe(Dict{Symbol,Any}(), me_a)
-            RecipesBase.apply_recipe(Dict{Symbol,Any}(), m_a)
-        catch
-            # Don't fail precompile on transient issues
-        end
+function _precompile_least_squares()
+    return migrad!(Minuit(LeastSquares([0.0, 1.0, 2.0, 3.0], [1.0, 3.0, 5.0, 7.0], ones(4), _wl_line), [1.0, 0.0]))
+end
+
+function _precompile_least_squares_data()
+    return migrad!(Minuit(LeastSquares(_wl_data(), _wl_line), [1.0, 0.0]))
+end
+
+function _precompile_unbinned()
+    return migrad!(Minuit(UnbinnedNLL([-0.4, 0.1, 0.3, -0.2, 0.5], _wl_pdf), [0.0, 1.0]))
+end
+
+function _precompile_extended_unbinned()
+    return migrad!(Minuit(ExtendedUnbinnedNLL([-0.4, 0.1, 0.3, -0.2, 0.5], _wl_density, _wl_integral), [0.0, 1.0, 5.0]))
+end
+
+function _precompile_binned()
+    return migrad!(Minuit(BinnedNLL([2.0, 5.0, 3.0], [-1.0, -0.3, 0.3, 1.0], _wl_cdf), [0.0, 0.5]))
+end
+
+function _precompile_extended_binned()
+    return migrad!(Minuit(ExtendedBinnedNLL([2.0, 5.0, 3.0], [-1.0, -0.3, 0.3, 1.0], _wl_scaled_cdf), [0.0, 0.5, 10.0]))
+end
+
+function _precompile_cost_sum()
+    a = LeastSquares(_wl_data(), _wl_line; name = [:a, :b])
+    b = LeastSquares(_wl_data(), _wl_line; name = [:a, :b])
+    return migrad!(Minuit(a + b, [1.0, 0.0]))
+end
+
+function _precompile_mncontour()
+    return mncontour(_wl_minuit(), 1, 2; numpoints = 6)
+end
+
+function _precompile_profile()
+    return profile(_wl_minuit(), 1; bins = 5)
+end
+
+function _precompile_mnprofile()
+    return mnprofile(_wl_minuit(), 1; bins = 4)
+end
+
+function _precompile_scan()
+    return scan(_wl_minuit(), 1; maxsteps = 5)
+end
+
+function _precompile_simplex()
+    return simplex(Minuit(_wl_quadratic, [0.0, 0.0]))
+end
+
+function _precompile_bootstrap()
+    return bootstrap(_wl_line, _wl_data(), [1.0, 0.0]; nresample = 2, seed = 1)
+end
+
+function _precompile_jackknife()
+    return jackknife(_wl_line, _wl_data(), [1.0, 0.0])
+end
+
+function _precompile_contour_samples()
+    return get_contours_samples(_wl_minuit(); nsamples = 64, adaptive = false, seed = 1, warn = false)
+end
+
+function _precompile_mcmc()
+    return _wl_ensemble()
+end
+
+function _precompile_quantiles()
+    return quantiles(_wl_ensemble(), x -> x[1]; warn = false)
+end
+
+function _precompile_quantile_band()
+    return quantile_band(_wl_ensemble(), (t, x) -> x[1] + x[2] * t, [0.0, 1.0]; warn = false)
+end
+
+function _precompile_curve_band()
+    return quantile_band(_wl_ensemble(), x -> [x[1], x[1] + x[2]], [0.0, 1.0]; curve = true, warn = false)
+end
+
+function _precompile_serialize_ensemble()
+    io = IOBuffer()
+    save_ensemble(io, _wl_ensemble())
+    return load_ensemble(IOBuffer(take!(io)))
+end
+
+function _precompile_solution_modes()
+    samples = [0.98 1.99; 1.02 2.01; 1.00 2.00; 0.99 2.02; 1.01 1.98; 1.00 1.99]
+    return find_solution_modes(samples, _wl_minuit())
+end
+
+function _precompile_recipe_contour()
+    return RecipesBase.apply_recipe(Dict{Symbol,Any}(), _precompile_contour())
+end
+
+function _precompile_recipe_minos()
+    return RecipesBase.apply_recipe(Dict{Symbol,Any}(), _precompile_minos())
+end
+
+function _precompile_recipe_minimum()
+    return RecipesBase.apply_recipe(Dict{Symbol,Any}(), _wl_minimum())
+end
+
+const _PRECOMPILE_WORKLOADS = (
+    :migrad => _precompile_migrad,
+    :minos => _precompile_minos,
+    :contour => _precompile_contour,
+    :bounded => _precompile_bounded,
+    :minuit => _precompile_minuit,
+    :minuit_minos => _precompile_minuit_minos,
+    :hesse => _precompile_hesse,
+    :serialize_minimum => _precompile_serialize_minimum,
+    :serialize_bounded => _precompile_serialize_bounded,
+    :serialize_minos => _precompile_serialize_minos,
+    :least_squares => _precompile_least_squares,
+    :least_squares_data => _precompile_least_squares_data,
+    :unbinned => _precompile_unbinned,
+    :extended_unbinned => _precompile_extended_unbinned,
+    :binned => _precompile_binned,
+    :extended_binned => _precompile_extended_binned,
+    :cost_sum => _precompile_cost_sum,
+    :mncontour => _precompile_mncontour,
+    :profile => _precompile_profile,
+    :mnprofile => _precompile_mnprofile,
+    :scan => _precompile_scan,
+    :simplex => _precompile_simplex,
+    :bootstrap => _precompile_bootstrap,
+    :jackknife => _precompile_jackknife,
+    :contour_samples => _precompile_contour_samples,
+    :mcmc => _precompile_mcmc,
+    :quantiles => _precompile_quantiles,
+    :quantile_band => _precompile_quantile_band,
+    :curve_band => _precompile_curve_band,
+    :serialize_ensemble => _precompile_serialize_ensemble,
+    :solution_modes => _precompile_solution_modes,
+    :recipe_contour => _precompile_recipe_contour,
+    :recipe_minos => _precompile_recipe_minos,
+    :recipe_minimum => _precompile_recipe_minimum,
+)
+
+PrecompileTools.@compile_workload begin
+    for (_, workload) in _PRECOMPILE_WORKLOADS
+        workload()
     end
 end

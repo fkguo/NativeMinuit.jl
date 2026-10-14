@@ -9,7 +9,7 @@
 # `g2[i]` comes out non-positive (which makes the trivial diagonal
 # inverse-Hessian guess `1/g2[i]` invalid), perform a one-dimensional
 # line search along that parameter direction, recompute the gradient
-# at the new point, and check again. Iterate up to 2n times.
+# at the new point, and check again. Permit up to 2n+1 body passes.
 #
 # **Phase 0 must include this** (Opus parallel-review blocking #2):
 # C++ `MnSeedGenerator.cxx:80` calls `HasNegativeG2(...)` *unconditionally*
@@ -51,7 +51,7 @@ end
 
 If `state.gradient` has any non-positive `g2[i]`, do a 1-D line search
 along the offending parameter, recompute the gradient at the new point,
-and iterate up to `2n` times until either all `g2[i] > 0` or the iter
+and permit up to `2n+1` body passes until either all `g2[i] > 0` or the iter
 cap is reached. Return a new `MinimumState` with updated parameters /
 gradient / error / EDM / nfcn.
 
@@ -94,7 +94,8 @@ function negative_g2_line_search(
     state::MinimumState,
     cf::CostFunction,
     strategy::Strategy,
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     if !has_negative_g2(state.gradient, prec)
         return state
@@ -117,14 +118,10 @@ function negative_g2_line_search(
     iter = 0
     iterate_flag = true
     # NB: C++ uses a post-increment `do { … } while (iter++ < 2*n && iterate)`
-    # (NegativeG2LineSearch.cxx:93) → up to 2n+1 body passes, whereas this
-    # pre-check form gives 2n. A codex fidelity pass flagged the off-by-one, but
-    # bumping the cap to 2n+1 measurably perturbs the seed for FCNs with negative
-    # seed curvature (it shifts the multi-minimum retry trajectory in
-    # test_minuit_retry), so it is left as a documented micro-divergence rather
-    # than a behavior change beyond this audit's §7 (AD-stub) scope. The cap only
-    # ever bites in non-convergent pathology; real FCNs converge in 1-2 passes.
-    while iter < 2 * n && iterate_flag
+    # C++ post-increment do/while permits 2n+1 body passes. Near a bound,
+    # even an externally convex quadratic can have negative internal curvature
+    # and require the last pass to reach a positive-curvature point.
+    while iter <= 2 * n && iterate_flag
         iter += 1
         iterate_flag = false
         @inbounds for i in 1:n
@@ -153,7 +150,7 @@ function negative_g2_line_search(
                 # one fresh FunctionGradient allocation per inner fix.
                 new_par = MinimumParameters(x, fval)
                 numerical_gradient!(work_g, x_work, new_par, work_g,
-                                     cf, strategy, prec)
+                                     cf, strategy, prec; has_limits = has_limits)
                 iterate_flag = true
                 break
             end

@@ -83,6 +83,7 @@ end
 # through their ordinary `similar` method; ranges and other immutable vectors
 # naturally return a mutable dense vector.
 function _float_vector_like(x::AbstractVector{<:Real})
+    Base.require_one_based_indexing(x)
     out = similar(x, Float64)
     copyto!(out, x)
     return out
@@ -95,6 +96,7 @@ function _zero_vector_like(x::AbstractVector)
 end
 
 function MinimumParameters(x::AbstractVector{Float64}, fval::Real)
+    Base.require_one_based_indexing(x)
     dirin = similar(x, Float64)
     fill!(dirin, 0.0)
     MinimumParameters(x, dirin, Float64(fval), true, false)
@@ -102,6 +104,7 @@ end
 
 function MinimumParameters(x::AbstractVector{Float64},
                            dirin::AbstractVector{Float64}, fval::Real)
+    Base.require_one_based_indexing(x, dirin)
     length(dirin) == length(x) ||
         throw(DimensionMismatch("dirin length $(length(dirin)) != x length $(length(x))"))
     MinimumParameters(x, dirin, Float64(fval), true, true)
@@ -155,6 +158,7 @@ end
 function FunctionGradient(grad::AbstractVector{Float64},
                           g2::AbstractVector{Float64},
                           gstep::AbstractVector{Float64}; analytical::Bool = false)
+    Base.require_one_based_indexing(grad, g2, gstep)
     n = length(grad)
     (length(g2) == n && length(gstep) == n) ||
         throw(DimensionMismatch("FunctionGradient field lengths must agree: " *

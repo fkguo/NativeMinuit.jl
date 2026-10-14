@@ -479,7 +479,7 @@ function _eval_fvals(m::Minuit, Xfull::Matrix{Float64}, parallel::Bool)
     template = _init_params(m).values
     npar = size(Xfull, 2)
     if parallel
-        Threads.@threads :static for i in 1:N
+        Threads.@threads :dynamic for i in 1:N
             b = similar(template, Float64)
             @inbounds for k in 1:npar
                 b[k] = Xfull[i, k]
@@ -542,14 +542,21 @@ function _refine_mode(m::Minuit, rep_full::Vector{Float64},
                        strategy::Union{Nothing,Strategy,Integer} = nothing,
                        tol::Union{Nothing,Real} = nothing)
     empty_vec = Float64[]
+    attempted = Ref(0)
+    counted_f = let f = m.fcn.f, attempted = attempted
+        x -> begin
+            attempted[] += 1
+            f(x)
+        end
+    end
     try
         grad = m.cfwg === nothing ? nothing : m.cfwg.g
         # Preserve the parent's check_gradient choice — otherwise the constructor
         # default (true) re-enables the seed-time CheckGradient check on every
         # refine fit, emitting spurious warnings when the user set it false.
         mm = grad === nothing ?
-            Minuit(m.fcn.f, m; threaded_gradient = false, verify_threading = false) :
-            Minuit(m.fcn.f, m; grad = grad, check_gradient = m.cfwg.check_gradient,
+            Minuit(counted_f, m; threaded_gradient = false, verify_threading = false) :
+            Minuit(counted_f, m; grad = grad, check_gradient = m.cfwg.check_gradient,
                    threaded_gradient = false, verify_threading = false)
         # Start from the cluster representative, but PIN fixed parameters at the
         # fit's value: a fixed parameter must not be re-anchored to whatever the
@@ -570,7 +577,7 @@ function _refine_mode(m::Minuit, rep_full::Vector{Float64},
         rv = Float64[mm.values[i] for i in 1:mm.ndim]
         re = Float64[mm.errors[i] for i in 1:mm.ndim]
         rf = mm.fval
-        nf = mm.nfcn
+        nf = attempted[]
         # Deeper basin: a valid re-fit strictly below the global best (with a
         # small absolute+relative tolerance so numerical jitter at the same
         # minimum is NOT flagged).
@@ -581,7 +588,7 @@ function _refine_mode(m::Minuit, rep_full::Vector{Float64},
     catch err
         @warn "find_solution_modes: per-mode re-fit failed; reporting cluster without refinement" exception = err
         return (refined = false, values = empty_vec, errors = empty_vec,
-                fval = NaN, valid = false, nfcn = 0, new_min = false)
+                fval = NaN, valid = false, nfcn = attempted[], new_min = false)
     end
 end
 
@@ -686,14 +693,13 @@ On expensive FCNs either pass the per-sample χ² you already have
   mode is DEEPER than the global best (the main fit missed the better basin).
 - `refine_iterate::Integer=5` — `iterate` passed to each re-fit `migrad!`
   (max MIGRAD attempts per mode).
-- `refine_maxfcn::Union{Nothing,Integer}=nothing` — FCN call cap **per MIGRAD
-  attempt** of a re-fit. Reaching the cap also stops the retry loop, so a
-  budgeted mode costs ≈ `1.3 × refine_maxfcn` calls in practice (an attempt
-  may extend its own budget by ×1.3 — the C++ second-pass bump — and the cap
-  is checked once per MIGRAD iteration, so it can overshoot by one
-  iteration's evaluations); `refine_maxfcn × refine_iterate` is a hard upper
-  bound. `nothing` = Minuit's default budget `200 + 100·n + 5·n²` per
-  attempt — effectively uncapped; SET THIS on expensive FCNs.
+- `refine_maxfcn::Union{Nothing,Integer}=nothing` — low-level FCN stopping
+  threshold supplied to each refinement attempt. Seed and complete
+  gradient/HESSE probes can exceed it; Simplex and retry passes can spend
+  additional calls. Consequently `refine_maxfcn * refine_iterate` is not a
+  hard bound on total work. `nothing` selects the finite default budget
+  `200 + 100*n + 5*n²` per low-level minimization. Inspect `refined_nfcn`
+  for the total calls actually spent on each mode.
 - `refine_strategy::Union{Nothing,Strategy,Integer}=nothing` — MIGRAD strategy
   for the re-fits (`nothing` inherits the parent fit's; `0` = fastest, for
   triage on slow FCNs).
@@ -1046,7 +1052,7 @@ function find_solution_modes(samples::AbstractMatrix, m::Minuit;
             return nothing
         end
         if do_parallel && K > 1
-            Threads.@threads :static for c in 1:K
+            Threads.@threads :dynamic for c in 1:K
                 run_one(c)
             end
         else

@@ -565,44 +565,20 @@ function _fix_one_param(cf::CostFunction, i::Integer, v::Float64, n::Integer,
     up = Float64(up)
     i_ = Int(i)
     n_ = Int(n)
-    # Per-thread splice-buffer pool (Phase G).
-    #
-    # The closure body writes the free slots from `y` and the fixed slot
-    # from `v` on every call. Loop structure identical to Phase A V3 — we
-    # *only* hoist the alloc + scale it to per-thread, not change the
-    # gather pattern, to keep LLVM's branch + memory layout decisions
-    # unchanged.
-    #
-    # Single-threaded Julia: `Threads.maxthreadid() == 1`, so `full_bufs`
-    # has length 1 and `Threads.threadid()` always returns 1 →
-    # ZERO behavioral / memory / perf change vs Phase A V3 default.
-    #
-    # Multi-threaded Julia (`julia -t N`): allocate one buffer per
-    # possible threadid (`maxthreadid()` ≥ N, with one extra for the
-    # interactive thread on Julia 1.10+). When the inner-gradient
-    # `Threads.@threads :static for i in 1:n` calls `cf(xw)` from
-    # parallel tasks, each task indexes a distinct `full_bufs[tid]`
-    # → no race. Memory cost = N × n × 8 bytes (tiny: 9 × 10 × 8 = 720
-    # bytes for the typical M3 + 10D fit).
-    #
-    # User FCN `f` is the caller's responsibility for thread safety —
-    # if `f` has hidden mutable state (cache, RNG, file I/O) the user
-    # must guard it (documented in `Minuit(..., threaded_gradient=true)`
-    # docstring).
-    nbuf = max(1, Threads.maxthreadid())
-    full_bufs = [similar(template, Float64) for _ in 1:nbuf]
-    wrapped = let full_bufs = full_bufs, i_ = i_, n_ = n_, v = v, f = f
+    # Invocation-owned splice scratch remains valid while a user FCN yields.
+    scratch = _OwnedBuffer(template)
+    wrapped = let scratch = scratch, i_ = i_, n_ = n_, v = v, f = f
         function (y::AbstractVector{<:Real})
-            # `` deliberately omitted on the tid index — bounds-check cost (~1 ns) is negligible vs the FCN call (≥100 ns), and the check protects against silent memory corruption if Julia's threadpool model ever expands at runtime. The body of f(full_buf) is still `` where it matters.
-            full_buf = full_bufs[Threads.threadid()]
-            @inbounds for k in 1:(i_ - 1)
-                full_buf[k] = y[k]
+            return _with_owned_buffer(scratch) do full_buf
+                @inbounds for k in 1:(i_ - 1)
+                    full_buf[k] = y[k]
+                end
+                @inbounds full_buf[i_] = v
+                @inbounds for k in (i_ + 1):n_
+                    full_buf[k] = y[k - 1]
+                end
+                return f(full_buf)
             end
-            @inbounds full_buf[i_] = v
-            @inbounds for k in (i_ + 1):n_
-                full_buf[k] = y[k - 1]
-            end
-            return f(full_buf)
         end
     end
     return CostFunction(wrapped, up)
@@ -622,13 +598,9 @@ The wrapped FCN is identical to the numerical-gradient overload: splice
 GRADIENT delegates to `cf.g(full)` on the same spliced full-length
 vector and returns the (n-1)-vector with slot `i` removed (the
 gradient component w.r.t. the fixed parameter is discarded — inner
-MIGRAD doesn't see it). Both wrappers use the same lifted `full_buf`
-+ `out_buf` strategy as Phase A V3 to keep per-call alloc at zero.
-
-Thread-safety contract is identical to the numerical-gradient
-overload: `full_buf` and `out_buf` are closure-captured and shared
-across calls within the wrapper's lifetime. Safe under single-
-threaded MnFunctionCross / MINOS / MnContours.
+MIGRAD doesn't see it). Each invocation leases task-owned splice scratch
+through the complete function or gradient call; overlapping or reentrant calls
+use private vectors. Result gradients are returned in fresh vectors.
 """
 function _fix_one_param(cf::CostFunctionWithGradient, i::Integer, v::Float64,
                          n::Integer,
@@ -644,51 +616,46 @@ function _fix_one_param(cf::CostFunctionWithGradient, i::Integer, v::Float64,
     # callers need to introspect.
     i_ = Int(i)
     n_ = Int(n)
-    # Per-thread `full_buf` AND per-thread `out_buf` (the n-1 gradient
-    # splice scratch). Same Phase G rationale as the numerical-gradient
-    # overload above — single-threaded Julia gets 1 buffer each (zero
-    # overhead vs Phase F); multi-threaded gets one per `threadid()`.
-    nbuf = max(1, Threads.maxthreadid())
-    full_bufs = [similar(template, Float64) for _ in 1:nbuf]
-    out_bufs  = [Vector{Float64}(undef, n_ - 1) for _ in 1:nbuf]
-    f_wrapped = let full_bufs = full_bufs, i_ = i_, n_ = n_, v = v, f = f
+    # Each invocation owns the buffers read across a possible user yield.
+    scratch_f = _OwnedBuffer(template)
+    scratch_g = _OwnedBuffer(template)
+    f_wrapped = let scratch = scratch_f, i_ = i_, n_ = n_, v = v, f = f
         function (y::AbstractVector{<:Real})
-            # `` deliberately omitted on the tid index — bounds-check cost (~1 ns) is negligible vs the FCN call (≥100 ns), and the check protects against silent memory corruption if Julia's threadpool model ever expands at runtime. The body of f(full_buf) is still `` where it matters.
-            full_buf = full_bufs[Threads.threadid()]
-            @inbounds for k in 1:(i_ - 1)
-                full_buf[k] = y[k]
+            return _with_owned_buffer(scratch) do full_buf
+                @inbounds for k in 1:(i_ - 1)
+                    full_buf[k] = y[k]
+                end
+                @inbounds full_buf[i_] = v
+                @inbounds for k in (i_ + 1):n_
+                    full_buf[k] = y[k - 1]
+                end
+                return f(full_buf)
             end
-            @inbounds full_buf[i_] = v
-            @inbounds for k in (i_ + 1):n_
-                full_buf[k] = y[k - 1]
-            end
-            return f(full_buf)
         end
     end
-    g_wrapped = let full_bufs = full_bufs, out_bufs = out_bufs,
+    g_wrapped = let scratch = scratch_g,
                      i_ = i_, n_ = n_, v = v, g = g
         function (y::AbstractVector{<:Real})
-            tid = Threads.threadid()
-            full_buf = full_bufs[tid]
-            out_buf  = out_bufs[tid]
-            @inbounds for k in 1:(i_ - 1)
-                full_buf[k] = y[k]
+            return _with_owned_buffer(scratch) do full_buf
+                out_buf = Vector{Float64}(undef, n_ - 1)
+                @inbounds for k in 1:(i_ - 1)
+                    full_buf[k] = y[k]
+                end
+                @inbounds full_buf[i_] = v
+                @inbounds for k in (i_ + 1):n_
+                    full_buf[k] = y[k - 1]
+                end
+                grad_full = g(full_buf)
+                # Splice out slot i_: copy the n-1 free-coord components into
+                # invocation-owned out_buf.
+                @inbounds for k in 1:(i_ - 1)
+                    out_buf[k] = Float64(grad_full[k])
+                end
+                @inbounds for k in (i_ + 1):n_
+                    out_buf[k - 1] = Float64(grad_full[k])
+                end
+                return out_buf
             end
-            @inbounds full_buf[i_] = v
-            @inbounds for k in (i_ + 1):n_
-                full_buf[k] = y[k - 1]
-            end
-            grad_full = g(full_buf)
-            # Splice out slot i_: copy the n-1 free-coord components into
-            # the pre-allocated out_buf. Avoids a per-call alloc when
-            # `g` returns a fresh Vector (the common ForwardDiff case).
-            @inbounds for k in 1:(i_ - 1)
-                out_buf[k] = Float64(grad_full[k])
-            end
-            @inbounds for k in (i_ + 1):n_
-                out_buf[k - 1] = Float64(grad_full[k])
-            end
-            return out_buf
         end
     end
     # `check_gradient=false`: the user gradient is validated once at the
@@ -736,51 +703,50 @@ function _fix_multi_params(
         fixed_value[kk] = Float64(v[idx])
     end
     n_free = n_ - count(is_fixed)
-    # Per-thread buffer pools — Phase G threading support.
-    nbuf = max(1, Threads.maxthreadid())
-    full_bufs = [similar(template, Float64) for _ in 1:nbuf]
-    out_bufs  = [Vector{Float64}(undef, n_free) for _ in 1:nbuf]
-    f_wrapped = let full_bufs = full_bufs, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
+    # Each invocation owns the buffers read across a possible user yield.
+    scratch_f = _OwnedBuffer(template)
+    scratch_g = _OwnedBuffer(template)
+    f_wrapped = let scratch = scratch_f, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
         function (y::AbstractVector{<:Real})
-            # `` deliberately omitted on the tid index — bounds-check cost (~1 ns) is negligible vs the FCN call (≥100 ns), and the check protects against silent memory corruption if Julia's threadpool model ever expands at runtime. The body of f(full_buf) is still `` where it matters.
-            full_buf = full_bufs[Threads.threadid()]
-            j = 1
-            @inbounds for k in 1:n_
-                if is_fixed[k]
-                    full_buf[k] = fixed_value[k]
-                else
-                    full_buf[k] = y[j]
-                    j += 1
+            return _with_owned_buffer(scratch) do full_buf
+                j = 1
+                @inbounds for k in 1:n_
+                    if is_fixed[k]
+                        full_buf[k] = fixed_value[k]
+                    else
+                        full_buf[k] = y[j]
+                        j += 1
+                    end
                 end
+                return f(full_buf)
             end
-            return f(full_buf)
         end
     end
-    g_wrapped = let full_bufs = full_bufs, out_bufs = out_bufs,
+    g_wrapped = let scratch = scratch_g, n_free = n_free,
                      is_fixed = is_fixed, fixed_value = fixed_value,
                      n_ = n_, g = g
         function (y::AbstractVector{<:Real})
-            tid = Threads.threadid()
-            full_buf = full_bufs[tid]
-            out_buf  = out_bufs[tid]
-            j = 1
-            @inbounds for k in 1:n_
-                if is_fixed[k]
-                    full_buf[k] = fixed_value[k]
-                else
-                    full_buf[k] = y[j]
-                    j += 1
+            return _with_owned_buffer(scratch) do full_buf
+                out_buf = Vector{Float64}(undef, n_free)
+                j = 1
+                @inbounds for k in 1:n_
+                    if is_fixed[k]
+                        full_buf[k] = fixed_value[k]
+                    else
+                        full_buf[k] = y[j]
+                        j += 1
+                    end
                 end
-            end
-            grad_full = g(full_buf)
-            j = 1
-            @inbounds for k in 1:n_
-                if !is_fixed[k]
-                    out_buf[j] = Float64(grad_full[k])
-                    j += 1
+                grad_full = g(full_buf)
+                j = 1
+                @inbounds for k in 1:n_
+                    if !is_fixed[k]
+                        out_buf[j] = Float64(grad_full[k])
+                        j += 1
+                    end
                 end
+                return out_buf
             end
-            return out_buf
         end
     end
     # `check_gradient=false`: the user gradient is validated once at the
@@ -812,25 +778,22 @@ function _fix_multi_params(
         is_fixed[kk] = true
         fixed_value[kk] = Float64(v[idx])
     end
-    # Per-thread splice-buffer pool — same rationale as `_fix_one_param`
-    # above. Single-threaded: 1 buffer, zero overhead. Multi-threaded:
-    # safe under inner-gradient parallel calls.
-    nbuf = max(1, Threads.maxthreadid())
-    full_bufs = [similar(template, Float64) for _ in 1:nbuf]
-    wrapped = let full_bufs = full_bufs, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
+    # Each invocation owns the buffers read across a possible user yield.
+    scratch = _OwnedBuffer(template)
+    wrapped = let scratch = scratch, is_fixed = is_fixed, fixed_value = fixed_value, n_ = n_, f = f
         function (y::AbstractVector{<:Real})
-            # `` deliberately omitted on the tid index — bounds-check cost (~1 ns) is negligible vs the FCN call (≥100 ns), and the check protects against silent memory corruption if Julia's threadpool model ever expands at runtime. The body of f(full_buf) is still `` where it matters.
-            full_buf = full_bufs[Threads.threadid()]
-            j = 1
-            @inbounds for k in 1:n_
-                if is_fixed[k]
-                    full_buf[k] = fixed_value[k]
-                else
-                    full_buf[k] = y[j]
-                    j += 1
+            return _with_owned_buffer(scratch) do full_buf
+                j = 1
+                @inbounds for k in 1:n_
+                    if is_fixed[k]
+                        full_buf[k] = fixed_value[k]
+                    else
+                        full_buf[k] = y[j]
+                        j += 1
+                    end
                 end
+                return f(full_buf)
             end
-            return f(full_buf)
         end
     end
     return CostFunction(wrapped, up)

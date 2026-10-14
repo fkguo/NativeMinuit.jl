@@ -114,6 +114,9 @@ step size. No record mirror exists that could desynchronize from them.
 materializes `MinuitParameter` records from `metadata`/`values`/`errors` on
 access (see `ParameterRecords`); it is read-only.
 
+Coordinate arrays must use one-based indexing; structured one-based vectors
+and ordinary views are supported.
+
 All fields are **read-only** by contract: mutate through the `Minuit` API
 (`set_value!`/`set_error!`/`set_limits!`/`fix!`/`release!`, or
 `m.values`/`m.errors`/`m.limits`/`m.fixed`), which rebuilds the `Parameters`
@@ -170,6 +173,7 @@ end
 function Parameters(pars::Vector{MinuitParameter},
                      prec::MachinePrecision = MachinePrecision();
                      values::AbstractVector = [p.value for p in pars])
+    Base.require_one_based_indexing(values)
     n = length(pars)
     length(values) == n ||
         throw(DimensionMismatch(
@@ -237,6 +241,9 @@ function Parameters(
     fixed::Union{Nothing,AbstractVector{Bool}} = nothing,
     prec::MachinePrecision = MachinePrecision(),
 )
+    Base.require_one_based_indexing(names, values, errors)
+    limits === nothing || Base.require_one_based_indexing(limits)
+    fixed === nothing || Base.require_one_based_indexing(fixed)
     n = length(names)
     length(values) == n && length(errors) == n ||
         throw(DimensionMismatch("names/values/errors must be the same length"))
@@ -345,6 +352,7 @@ allocating method.
 """
 function int_to_ext_vector!(ext::AbstractVector{<:Real}, p::Parameters,
                             int_vec::AbstractVector{<:Real})
+    Base.require_one_based_indexing(ext, int_vec)
     length(int_vec) == n_free(p) ||
         throw(DimensionMismatch("int_vec length $(length(int_vec)) != n_free $(n_free(p))"))
     length(ext) == n_pars(p) ||
@@ -385,6 +393,7 @@ Map the full external vector to the free-parameter internal vector.
 Fixed parameters are dropped. Length: `n_free(p)`.
 """
 function ext_to_int_vector(p::Parameters, ext_vec::AbstractVector{<:Real})
+    Base.require_one_based_indexing(ext_vec)
     length(ext_vec) == n_pars(p) ||
         throw(DimensionMismatch("ext_vec length $(length(ext_vec)) != n_pars $(n_pars(p))"))
     int = Vector{Float64}(undef, n_free(p))

@@ -1,18 +1,23 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
+# Internal flags always follow free/internal coordinate order.
+function _validate_bound_flags(flags::Union{Nothing,AbstractVector{Bool}}, n::Int)
+    flags === nothing && return nothing
+    Base.require_one_based_indexing(flags)
+    length(flags) == n || throw(DimensionMismatch("has_limits length $(length(flags)) != coordinate length $n"))
+    return nothing
+end
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # gradient.jl — Initial + Numerical2P gradient calculators.
 #
 # Mirrors reference/Minuit2_cpp/src/InitialGradientCalculator.cxx and
 # reference/Minuit2_cpp/src/Numerical2PGradientCalculator.cxx.
 #
-# Bounded fits go through `migrad_bounded.jl`, which wraps the user
-# FCN to take internal coords; the int↔ext transformation is in
-# `transform.jl`. The C++ `if HasLimits; step ≤ 0.5` clamps at
-# InitialGradientCalculator.cxx:66-69 and Numerical2PGradientCalculator
-# .cxx:136-139 are not implemented (they'd require threading
-# `has_limits[]` through `seed_state`); the inline "NOTE — known
-# limitation" comments below document why they're dormant in practice.
+# Bounded fits use internal coordinates and pass active-coordinate bound flags
+# through the seed and every refinement. Minuit2 caps bounded steps at 0.5
+# before applying the remaining step bounds.
 #
 # Per ROADMAP §2.1, the Numerical2P gradient is the dominant cost in
 # MIGRAD for cheap FCNs: 2·n FCN calls per cycle × up to Ncycle cycles
@@ -50,25 +55,27 @@ For the no-bounds case (Phase 0), per `InitialGradientCalculator.cxx:60-72`:
 - `up::Real` — error definition (`cf.up`).
 - `prec::MachinePrecision` — defaults to `MachinePrecision()`.
 
-# Phase 0 / Phase 1 boundary
+# Bounded parameters
 
-The `HasLimits()` branches at C++ lines 47-58 and 66-69 (handling
-`UpperLimit`, `LowerLimit`, `gstep` clamp to 0.5) are **not ported in
-Phase 0**. They reappear in Phase 1's `transform.jl`.
+`has_limits` is either `nothing` (all unbounded) or one flag per internal
+coordinate. Bounded initial steps are capped at 0.5, as in Minuit2.
 """
 function initial_gradient!(
     out::FunctionGradient,
     par::MinimumParameters,
     errs::AbstractVector{Float64},
     up::Real,
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
+    Base.require_one_based_indexing(errs)
     n = length(par)
     length(out) == n ||
         throw(DimensionMismatch("FunctionGradient length $(length(out)) != par length $n"))
     length(errs) == n ||
         throw(DimensionMismatch("errs length $(length(errs)) != par length $n"))
 
+    _validate_bound_flags(has_limits, n)
     eps2 = prec.eps2
     up_f = Float64(up)
 
@@ -83,16 +90,11 @@ function initial_gradient!(
         # silently differ from C++ (parallel-review B1).
         dirin = max(abs(werr), gsmin)
         # Safety: never zero (prevents NaN in g2 = 2·up/dirin²).
-        # NOTE — known limitation: C++ InitialGradientCalculator.cxx:66-69
-        # clamps `gstep > 0.5` for parameters with limits, to keep the
-        # finite-difference step inside the sin/sqrt transform's locally
-        # linear region. NativeMinuit doesn't thread `has_limits[]` through
-        # `seed_state`, so the clamp isn't applied. Dormant for typical
-        # use because `gstep = 0.1·dirin` with `dirin ≤ 5` keeps gstep
-        # under the threshold; would matter if a user supplied huge
-        # initial step sizes (`errs ≫ 5`) on a bounded parameter.
         g2 = 2.0 * up_f / (dirin * dirin)
         gstep = max(gsmin, 0.1 * dirin)
+        if has_limits !== nothing && has_limits[i]
+            gstep = min(gstep, 0.5)
+        end
         grd = g2 * dirin
         out.grad[i] = grd
         out.g2[i] = g2
@@ -111,12 +113,13 @@ function initial_gradient(
     par::MinimumParameters,
     errs::AbstractVector{Float64},
     cf::CostFunction,
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     out = FunctionGradient(_zero_vector_like(par.x),
                            _zero_vector_like(par.x),
                            _zero_vector_like(par.x))
-    initial_gradient!(out, par, errs, cf.up, prec)
+    initial_gradient!(out, par, errs, cf.up, prec; has_limits = has_limits)
     return out
 end
 
@@ -126,7 +129,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    numerical_gradient!(out, x_work, par, prev, cf, strategy, prec) -> out
+    numerical_gradient!(out, x_work, par, prev, cf, strategy, prec; has_limits = has_limits) -> out
 
 In-place two-point central-difference gradient calculation with
 per-coordinate iterative step refinement. Mirrors
@@ -163,12 +166,9 @@ per-coordinate iterative step refinement. Mirrors
 
 # Bounded parameters
 
-The C++ `HasLimits()` clamp at lines 136-139 (`step > 0.5 → step = 0.5`
-when the parameter has limits) is intentionally not implemented in
-NativeMinuit. See the inline "NOTE — known limitation" comment in the
-body for the rationale. Dormant for typical fits because `step` is
-bounded by `10·gstep` and our `gstep ≈ 0.1·dirin` keeps it under the
-0.5 threshold for reasonable user-supplied step sizes.
+`has_limits` supplies one flag per internal coordinate, including one-sided
+limits and excluding fixed external coordinates. Bounded steps are capped at
+0.5 before the previous-step and roundoff bounds, matching Minuit2.
 
 # Performance
 
@@ -191,7 +191,9 @@ function numerical_gradient!(
     strategy::Strategy,
     prec::MachinePrecision = MachinePrecision();
     threaded::Bool = false,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
+    Base.require_one_based_indexing(x_work)
     n = length(par)
     length(out) == n ||
         throw(DimensionMismatch("out length $(length(out)) != par length $n"))
@@ -199,6 +201,8 @@ function numerical_gradient!(
         throw(DimensionMismatch("x_work length $(length(x_work)) != par length $n"))
     length(prev) == n ||
         throw(DimensionMismatch("prev length $(length(prev)) != par length $n"))
+
+    _validate_bound_flags(has_limits, n)
 
     # Seed the working gradient from the previous iteration's values.
     copyto!(out.grad, prev.grad)
@@ -220,84 +224,65 @@ function numerical_gradient!(
     grad_tol = strategy.grad_tolerance
 
     if threaded && Threads.nthreads() > 1
-        # Phase 2.2 threaded gradient — mirrors the OpenMP block at
-        # reference/Minuit2_cpp/src/Numerical2PGradientCalculator.cxx:116-127.
-        # Each parameter index `i` writes to disjoint slots of
-        # out.grad/g2/gstep; no cross-thread reduction needed. Each
-        # thread holds a private copy of x_work so the per-coord
-        # `x_work[i] = xtf ± step` mutations don't race.
-        # Use Threads.maxthreadid() because Julia 1.12 may dispatch
-        # tasks to thread IDs > Threads.nthreads() (interactive +
-        # foreign-task scenarios).
-        n_buffers = max(Threads.maxthreadid(), Threads.nthreads())
-        x_work_perthread = [copy(x_work) for _ in 1:n_buffers]
-        # Call counting. `cf.nfcn` / `cf.n_nonfinite` are plain (non-atomic)
-        # Refs; the counting call operator `cf(x)` issued from every worker
-        # thread raced on them and LOST increments (v0.7.2, 8 threads,
-        # n = 300: 139 of ~49.6k calls dropped). So the loop body evaluates
-        # the FCN uncounted, tallies its own calls for coordinate `i` into
-        # slot `i` of the two vectors below (disjoint slots, written once
-        # per coordinate — no race, and no shared cache line hammered on
-        # every call), and the tallies are folded into the shared counters
-        # serially after the parallel region. The counters end exactly
-        # where the serial branch would leave them.
+        # Each work unit owns its coordinate vector, even when the objective
+        # yields and the task migrates or a caller already runs on a worker.
+        # Each coordinate writes disjoint gradient and call-count slots.
         ncalls_i = zeros(Int, n)        # FCN calls made for coordinate i
         nnonfinite_i = zeros(Int, n)    # … of which returned NaN / ±Inf
-        # Phase G — `:static` scheduling. Codex review: under non-`:static`
-        # schedules Julia DOES NOT guarantee `Threads.threadid()` stays
-        # constant within a single iteration body (task may migrate
-        # between yields), which would break the per-thread buffer
-        # indexing in cf_fixed's `full_bufs[threadid()]`. `:static` IS
-        # guaranteed to keep threadid stable within an iter under the
-        # implicit no-yield contract our numeric FCN bodies satisfy.
-        # Trade-off: M3 P/E-core asymmetry means `:static`'s round-robin
-        # lets fast cores wait on slow cores → measured ~1.25× speedup
-        # (vs `:dynamic` ~1.39× but UNSAFE under thread-migration). The
-        # 0.14× gap is acceptable cost for correctness.
-        Threads.@threads :static for i in 1:n
-            tid = Threads.threadid()
-            xw = x_work_perthread[tid]
-            xtf = xw[i]
-            epspri = eps2 + abs(out.grad[i] * eps2)
-            stepb4 = 0.0
-            ncyc = 0      # cycles run for this coordinate (2 FCN calls each)
-            nnf = 0       # non-finite returns among them
-            @inbounds for _ in 1:ncycle
-                optstp = sqrt(dfmin / (abs(out.g2[i]) + epspri))
-                step = max(optstp, abs(0.1 * out.gstep[i]))
-                stpmax = 10.0 * abs(out.gstep[i])
-                if step > stpmax; step = stpmax; end
-                stpmin = max(vrysml, 8.0 * abs(eps2 * xw[i]))
-                if step < stpmin; step = stpmin; end
-                if abs((step - stepb4) / step) < step_tol
-                    break
-                end
-                out.gstep[i] = step
-                stepb4 = step
+        try
+            Threads.@threads :dynamic for i in 1:n
+                xw = copy(x_work)
+                xtf = xw[i]
+                epspri = eps2 + abs(out.grad[i] * eps2)
+                stepb4 = 0.0
+                ncall = 0     # attempted evaluations, including a throwing objective
+                nnf = 0       # non-finite returns among them
+                try
+                    @inbounds for _ in 1:ncycle
+                        optstp = sqrt(dfmin / (abs(out.g2[i]) + epspri))
+                        step = max(optstp, abs(0.1 * out.gstep[i]))
+                        if has_limits !== nothing && has_limits[i]
+                            step = min(step, 0.5)
+                        end
+                        stpmax = 10.0 * abs(out.gstep[i])
+                        if step > stpmax; step = stpmax; end
+                        stpmin = max(vrysml, 8.0 * abs(eps2 * xw[i]))
+                        if step < stpmin; step = stpmin; end
+                        if abs((step - stepb4) / step) < step_tol
+                            break
+                        end
+                        out.gstep[i] = step
+                        stepb4 = step
 
-                xw[i] = xtf + step
-                fs1 = _evaluate_uncounted(cf, xw)
-                xw[i] = xtf - step
-                fs2 = _evaluate_uncounted(cf, xw)
-                xw[i] = xtf
-                ncyc += 1
-                isfinite(fs1) || (nnf += 1)
-                isfinite(fs2) || (nnf += 1)
+                        xw[i] = xtf + step
+                        ncall += 1
+                        fs1 = _evaluate_uncounted(cf, xw)
+                        isfinite(fs1) || (nnf += 1)
+                        xw[i] = xtf - step
+                        ncall += 1
+                        fs2 = _evaluate_uncounted(cf, xw)
+                        isfinite(fs2) || (nnf += 1)
+                        xw[i] = xtf
 
-                grdb4 = out.grad[i]
-                out.grad[i] = 0.5 * (fs1 - fs2) / step
-                out.g2[i] = (fs1 + fs2 - 2.0 * fcnmin) / (step * step)
+                        grdb4 = out.grad[i]
+                        out.grad[i] = 0.5 * (fs1 - fs2) / step
+                        out.g2[i] = (fs1 + fs2 - 2.0 * fcnmin) / (step * step)
 
-                if abs(grdb4 - out.grad[i]) / (abs(out.grad[i]) + dfmin / step) < grad_tol
-                    break
+                        if abs(grdb4 - out.grad[i]) / (abs(out.grad[i]) + dfmin / step) < grad_tol
+                            break
+                        end
+                    end
+                finally
+                    @inbounds ncalls_i[i] = ncall
+                    @inbounds nnonfinite_i[i] = nnf
                 end
             end
-            @inbounds ncalls_i[i] = 2 * ncyc
-            @inbounds nnonfinite_i[i] = nnf
+        finally
+            # @threads joins every task before throwing; preserve partial
+            # counts even when a user objective raises an exception.
+            cf.nfcn[] += sum(ncalls_i)
+            cf.n_nonfinite[] += sum(nnonfinite_i)
         end
-        # Serial fold-in, after every task has finished.
-        cf.nfcn[] += sum(ncalls_i)
-        cf.n_nonfinite[] += sum(nnonfinite_i)
         return out
     end
 
@@ -308,13 +293,9 @@ function numerical_gradient!(
         for _ in 1:ncycle
             optstp = sqrt(dfmin / (abs(out.g2[i]) + epspri))
             step = max(optstp, abs(0.1 * out.gstep[i]))
-            # NOTE — known limitation: C++ Numerical2PGradientCalculator
-            # .cxx:136-139 clamps `if HasLimits(i) && step > 0.5; step = 0.5`
-            # for the same reason as `initial_gradient!` above (sin/sqrt
-            # transform linearity floor). Not implemented because we
-            # don't thread `has_limits[]` through to this function;
-            # dormant for current tests because `step ≤ stpmax = 10·gstep`
-            # and typical gstep is well below 0.05.
+            if has_limits !== nothing && has_limits[i]
+                step = min(step, 0.5)
+            end
             stpmax = 10.0 * abs(out.gstep[i])
             if step > stpmax
                 step = stpmax
@@ -360,13 +341,14 @@ function numerical_gradient(
     prev::FunctionGradient,
     cf::CostFunction,
     strategy::Strategy,
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     out = FunctionGradient(_zero_vector_like(par.x),
                            _zero_vector_like(par.x),
                            _zero_vector_like(par.x))
     x_work = similar(par.x)
-    numerical_gradient!(out, x_work, par, prev, cf, strategy, prec)
+    numerical_gradient!(out, x_work, par, prev, cf, strategy, prec; has_limits = has_limits)
     return out
 end
 
@@ -382,12 +364,13 @@ function numerical_gradient(
     par::MinimumParameters,
     cf::CostFunction,
     strategy::Strategy,
-    prec::MachinePrecision = MachinePrecision(),
+    prec::MachinePrecision = MachinePrecision();
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
 )
     has_step_size(par) ||
         throw(ArgumentError("numerical_gradient(par, cf, ...) without explicit prev " *
                             "gradient requires par to carry step sizes (par.dirin); " *
                             "construct via MinimumParameters(x, dirin, fval)."))
-    init = initial_gradient(par, par.dirin, cf, prec)
-    return numerical_gradient(par, init, cf, strategy, prec)
+    init = initial_gradient(par, par.dirin, cf, prec; has_limits = has_limits)
+    return numerical_gradient(par, init, cf, strategy, prec; has_limits = has_limits)
 end

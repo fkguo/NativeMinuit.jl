@@ -176,7 +176,8 @@ Cost: 2 × (one gradient evaluation) ≈ 4·n·grad_ncycles FCN calls
 Internal — drivers call this via `verify_threading=true` kwarg.
 """
 function _verify_thread_safety(cf, seed::MinimumState, strategy::Strategy,
-                                 prec::MachinePrecision; tol::Float64 = 1e-8)
+                                 prec::MachinePrecision; tol::Float64 = 1e-8,
+                                 has_limits::Union{Nothing,AbstractVector{Bool}} = nothing)
     n = length(seed)
     n >= 1 || return nothing
 
@@ -193,10 +194,10 @@ function _verify_thread_safety(cf, seed::MinimumState, strategy::Strategy,
 
     # Sequential gradient (ground truth)
     numerical_gradient!(grad_seq, x_work_seq, seed.parameters, seed.gradient,
-                          cf, strategy, prec; threaded = false)
+                          cf, strategy, prec; threaded = false, has_limits = has_limits)
     # Threaded gradient (potentially corrupted by user-FCN race)
     numerical_gradient!(grad_par, x_work_par, seed.parameters, seed.gradient,
-                          cf, strategy, prec; threaded = true)
+                          cf, strategy, prec; threaded = true, has_limits = has_limits)
 
     # Element-wise relative difference
     max_rel_diff = 0.0
@@ -237,13 +238,7 @@ function _verify_thread_safety(cf, seed::MinimumState, strategy::Strategy,
 
             Mitigations (see README "THREAD-SAFETY CONTRACT" section):
               1. Move scratch into local scope (allocate per call).
-              2. Use per-thread storage:
-                   const T_POOL = [zeros(ComplexF64, 3, 3)
-                                   for _ in 1:Threads.maxthreadid()]
-                   function chi2(par)
-                       T = T_POOL[Threads.threadid()]
-                       fill_T_matrix!(T, par); loss_from(T)
-                   end
+              2. Use workspaces owned by the calling task or invocation.
               3. Disable threading: `threaded_gradient = false`.
 
             To bypass this check after verifying thread-safety some other
@@ -260,10 +255,13 @@ end
                     strategy=Strategy(0), prec=MachinePrecision()) -> Bool
 
 Standalone helper: test whether a user FCN gives the same numerical
-gradient sequentially vs. threaded at `x0`. Returns `true` if safe,
-`false` otherwise. Does NOT throw — for the throw version, see the
-auto-check triggered by `migrad(..., threaded_gradient=true,
-verify_threading=true)` (the default for high-level callers).
+gradient sequentially vs. threaded at `x0`. Returns `true` when the
+probe completes without a detected mismatch and `false` on a
+`ThreadSafetyError`. Other exceptions propagate, including errors from
+the objective. On single-thread Julia it returns `true` without a probe.
+A seed-point comparison does not prove safety at other inputs or task
+interleavings. The entry check in `migrad(..., threaded_gradient=true,
+verify_threading=true)` raises `ThreadSafetyError` on a detected mismatch.
 
 Use this to probe a new FCN before committing to `threaded_gradient=true`:
 
@@ -416,7 +414,7 @@ function migrad(
     # M5: optional `prior_cov` overrides the diagonal-from-g2 seed
     # inv_hessian (and sets `dcovar = 0`). Mirrors C++
     # MnSeedGenerator.cxx:63-67 `state.HasCovariance()` branch.
-    seed = seed_state(cf, x0, errs, strategy, prec; prior_cov = prior_cov)
+    seed = seed_state(cf, x0, errs, strategy, prec; prior_cov = prior_cov, has_limits = has_limits)
     fm = _migrad_loop(seed, cf, strategy, Float64(tol), maxfcn_eff, prec;
                           scratch = scratch,
                           threaded_gradient = threaded_gradient,
@@ -460,6 +458,7 @@ function migrad(
     threaded_gradient::Bool = false,
     verify_threading::Bool = false,
     storage_level::Integer = 0,
+    has_limits::Union{Nothing,AbstractVector{Bool}} = nothing,
     print_level::Integer = 0,
 )
     n = length(seed)
@@ -473,6 +472,7 @@ function migrad(
                           threaded_gradient = threaded_gradient,
                           verify_threading = verify_threading,
                           storage_level = storage_level,
+                          has_limits = has_limits,
                           print_level = print_level)
 end
 
@@ -498,7 +498,7 @@ function migrad(
 end
 
 """
-    _migrad_second_pass_invalid(ipass, s0, edm_corrected, edmval) -> Bool
+    _migrad_second_pass_invalid(ipass, s0, edm_corrected, edmval, prec) -> Bool
 
 Predicate for the C++ `VariableMetricBuilder.cxx:127-132` 2nd-pass-invalid
 early bail: `if (ipass > 0 && !min.IsValid()) return min;`. After a
@@ -512,17 +512,23 @@ so the remaining inner-pass invalidity is
 
     !min.IsValid()  ⇔  !State().IsValid() || IsAboveMaxEdm()
 
-i.e. `!is_valid(s0)` OR above-max-edm. The latter uses `edm_corrected >
-10·edmval` — the *same* expression `_migrad_loop`'s final-verdict
-`above_max` uses, so the bail fires exactly when the resulting
-`FunctionMinimum` would be flagged invalid-by-above-max. This is
-efficiency-only (identical final `is_valid` verdict, fewer wasted FCN
-calls on non-converging Strategy≥1 fits). For `ipass == 0` it is always
+i.e. `!is_valid(s0)` OR the inner pass's above-max-edm flag. C++ accepts
+an inner pass whose corrected EDM is below `abs(prec.eps2 * fval)` even
+when it reaches `10·edmval` (lines 356-360). That machine-accuracy exit
+must still reach the outer HESSE calculation; it does not establish the
+validity of the final fit. For `ipass == 0` this predicate is always
 `false`, preserving the first-pass do-while semantics.
 """
+_migrad_inner_above_max(s0::MinimumState, edm_corrected::Real,
+                       edmval::Real, prec::MachinePrecision) =
+    edm_corrected > edmval && edm_corrected >= 10 * edmval &&
+    edm_corrected >= abs(prec.eps2 * s0.parameters.fval)
+
 _migrad_second_pass_invalid(ipass::Integer, s0::MinimumState,
-                            edm_corrected::Real, edmval::Real) =
-    ipass > 0 && (!is_valid(s0) || edm_corrected > 10 * edmval)
+                            edm_corrected::Real, edmval::Real,
+                            prec::MachinePrecision = MachinePrecision()) =
+    ipass > 0 && (!is_valid(s0) ||
+                  _migrad_inner_above_max(s0, edm_corrected, edmval, prec))
 
 """
     _migrad_loop(seed, cf, strategy, tol, maxfcn, prec;
@@ -563,6 +569,7 @@ function _migrad_loop(
     nonfinite_baseline::Union{Nothing,Int} = nothing,
 )
     n = length(seed)
+    _validate_bound_flags(has_limits, n)
     nf_base = nonfinite_baseline === nothing ? nonfinite_calls(cf) :
               Int(nonfinite_baseline)
     # M6: per-iteration history. Empty when `storage_level == 0`
@@ -584,10 +591,10 @@ function _migrad_loop(
     # (`_migrad_with_fixed`, `_migrad_with_multi_fixed`) skip via
     # `verify_threading=false` — the outer call already verified the
     # FCN, and NativeMinuit's `cf_fixed` splice infrastructure (Phase G.1
-    # per-thread `full_buf`) does not introduce thread-unsafety on
+    # invocation-owned `full_buf`) does not introduce thread-unsafety on
     # top of a thread-safe user FCN.
     if threaded_gradient && verify_threading && n >= 1 && is_valid(seed)
-        _verify_thread_safety(cf, seed, strategy, prec)
+        _verify_thread_safety(cf, seed, strategy, prec; has_limits = has_limits)
     end
 
     # Tolerance handling matches C++ exactly:
@@ -754,6 +761,7 @@ function _migrad_loop(
     made_pos_def_flag = false
     hessian_computed = false
     hesse_failed_flag = false
+    second_pass_above_max = false
 
     # ─────────────────────────────────────────────────────────────────────
     # Outer do-while loop (C++ VariableMetricBuilder.cxx:111-185).
@@ -873,7 +881,7 @@ function _migrad_loop(
             new_grad = FunctionGradient(ng_buf, ng2_buf, ngs_buf)
             numerical_gradient!(new_grad, grad_work, new_par, s0.gradient,
                                  cf, strategy, prec;
-                                 threaded = threaded_gradient)
+                                 threaded = threaded_gradient, has_limits = has_limits)
 
             # ── Step 6: EDM using OLD error matrix (C++ line 300).
             # `estimate_edm!` reuses vg_work; the allocating `estimate_edm`
@@ -991,11 +999,15 @@ function _migrad_loop(
         # invalid, bail rather than spending further HESSE + DFP passes
         # grinding toward the call limit. C++:
         #     if (ipass > 0 && !min.IsValid()) return min;
-        # See `_migrad_second_pass_invalid` for the predicate. Efficiency-
-        # only: same final is_valid verdict, just fewer wasted FCN calls on
-        # non-converging Strategy≥1 fits. Purely ADDITIVE — does NOT touch
-        # the deliberate status-gated entry shortcut at the top of the loop.
-        if _migrad_second_pass_invalid(ipass, s0, edm_corrected, edmval)
+        # The inner pass can be accepted at machine accuracy and still need
+        # HESSE here, even when its corrected EDM exceeds 10 times the goal.
+        if _migrad_second_pass_invalid(ipass, s0, edm_corrected, edmval, prec)
+            # Preserve the inner FunctionMinimum's invalidity when returning
+            # before HESSE. Its threshold is inclusive; the final outer
+            # comparison below is strict, so it cannot reconstruct this flag
+            # at exact equality (C++ lines 127-132 and 356-366).
+            second_pass_above_max =
+                _migrad_inner_above_max(s0, edm_corrected, edmval, prec)
             break
         end
 
@@ -1074,7 +1086,7 @@ function _migrad_loop(
     # v1 AND-gate with edm_corrected > edmval (parallel-review #2 E5).
     # Use the EFFECTIVE budget (post-bump) for the check, not the original.
     reached_limit = ncalls(cf) >= maxfcn_eff
-    above_max = edm_corrected > 10 * edmval
+    above_max = second_pass_above_max || edm_corrected > 10 * edmval
 
     # P6: a non-finite incumbent fval can NEVER be a valid minimum — but
     # none of the C++-mirrored flags catches it (`NaN > 10·edmval` is

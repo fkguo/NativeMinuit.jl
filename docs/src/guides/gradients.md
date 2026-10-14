@@ -1,53 +1,44 @@
 # Gradients: AD & threading
 
-MIGRAD, MINOS, and the contour scans all need the gradient of the cost function.
-C++ Minuit2 has exactly one way to get it: a two-point central-difference
-**numerical** gradient (`2·n` FCN calls per refinement cycle). NativeMinuit keeps
-that as the default, and — because the FCN is an ordinary generic Julia function,
-not a `double`-locked virtual call — adds **two** options that C++ cannot offer:
+MIGRAD, MINOS, and contour searches use gradients of the cost function.
+The default is a central-difference numerical gradient. C++ Minuit2 also
+accepts user-supplied analytical gradients through
+[`FCNGradientBase`](https://github.com/GooFit/Minuit2/blob/57dc936a2b74d0b4dda1254c3dd63e7c61a97c84/inc/Minuit2/FCNGradientBase.h).
+NativeMinuit accepts `grad=` callbacks and provides two Julia integrations:
 
-1. **Automatic differentiation** via the ForwardDiff package extension — one
-   exact gradient call replaces the `2·n` finite-difference evaluations.
-2. **A threaded numerical gradient** — the same finite differences, but with the
-   per-coordinate loop spread across `julia -t N` threads.
+- **ForwardDiff gradients** for objectives generic over their parameter element
+  type, including complex intermediates supported by ForwardDiff. AD evaluates
+  derivatives with dual numbers; it avoids finite-difference step selection.
+- **Threaded numerical gradients** for objectives whose simultaneous calls keep
+  mutable state private. Start Julia with `julia -t N` to enable parallel work.
 
-Both route through the full MIGRAD → MINOS → contour chain unchanged. This page
-is the map: which one, when, and the contract each imposes on your FCN.
-
-## Which one, when
-
-The default (serial numerical) is the right choice far more often than not:
-threading and AD both have fixed overhead that only pays off when the FCN itself
-is expensive. The decision is driven by **per-FCN cost** and **parameter count
-`n`**, not by taste.
-
-| Per-FCN cost | `n ≤ 5` | `5 < n ≤ 30` | `n > 30` |
-|---|---|---|---|
-| `< ~500 ns` | numerical | numerical | numerical |
-| `~1–50 μs` | AD | AD | threaded or AD |
-| `≥ ~50 μs` | AD | AD or threaded | **threaded** |
-
-Rules of thumb:
-
-- A **cheap** FCN (sub-microsecond): stay serial numerical. The threading and
-  AD machinery cost more than they save.
-- An **expensive** FCN that is **generic on element type**: prefer **AD**. One
-  `cf.g(x)` call versus `2·n·ncycles` finite-difference evaluations is typically
-  a 2–10× reduction in FCN work, and the gradient is exact (no step-size noise).
-- An expensive FCN that **cannot be made generic** (mutates `Float64` buffers,
-  hard-codes types, calls a C library): use the **threaded numerical** gradient
-  on `julia -t N`. It needs nothing from the FCN except thread-safety.
-
-The two options are not mutually exclusive in spirit but are in mechanism: the
-AD path makes a single gradient call, so threading the per-coordinate loop is a
-no-op for it (passing `threaded_gradient=true` to an AD fit is silently ignored).
+These choices also apply to MINOS and contour searches. For a cheap objective,
+threading overhead can outweigh its benefit. AD costs depend on the objective
+and ForwardDiff chunk size. Compare the actual supported workload when choosing
+a gradient; there is no universal crossover in parameter count or call time.
+Threading the per-coordinate numerical loop is a no-op when `grad=` is supplied.
 
 ## AD gradients via ForwardDiff
 
-Loading ForwardDiff alongside NativeMinuit auto-activates the extension that backs
-the gradient factory. You then have two equivalent ways to wire AD in.
+Install the optional package with `Pkg.add("ForwardDiff")`, then load
+`using NativeMinuit, ForwardDiff`. Loading both activates the extension
+that supplies `CostFunctionAD`; installing ForwardDiff alone does not activate it.
+You can pass a gradient callback directly or use the gradient factory.
 
-**Pass `grad=` to [`Minuit`](@ref)** — the iminuit-style entry point:
+A complete example:
+
+```jldoctest
+julia> using NativeMinuit, ForwardDiff
+
+julia> f(x) = sum(abs2, x .- [1.0, 2.0]);
+
+julia> m = Minuit(f, zeros(2); grad = x -> ForwardDiff.gradient(f, x)); migrad!(m);
+
+julia> m.valid && isapprox(collect(m.values), [1.0, 2.0]; atol=1e-4, rtol=0)
+true
+```
+
+**Pass `grad=` to [`Minuit`](@ref)** for a model and data you have defined:
 
 ```julia
 using NativeMinuit, ForwardDiff          # extension auto-activates
@@ -115,9 +106,9 @@ numerical gradient below instead.
 By default NativeMinuit validates the AD (or hand-written) gradient against a
 numerical 2-point estimate **once**, at the seed point, and **warns** — never
 crashes — on disagreement beyond tolerance (the C++ Minuit2 `CheckGradient`
-diagnostic). A warning here almost always means the FCN is not actually generic
-(so the "AD gradient" silently fell back to something wrong) or the gradient
-function returns the wrong thing. Pass `check_gradient = false` to skip it once
+diagnostic). A warning means the supplied derivative disagrees with the numerical estimate
+at that point. Check the derivative, the objective’s smoothness, and the
+finite-difference scale; the comparison does not identify the cause by itself. Pass `check_gradient = false` to skip it once
 you trust the gradient.
 
 ## Threaded numerical gradient
@@ -136,26 +127,25 @@ migrad!(m)
 
 | value | behaviour |
 |---|---|
-| `false` *(default)* | serial gradient — always safe, zero overhead. |
-| `true` | force the threaded gradient. On the first gradient call it auto-verifies thread-safety and raises [`ThreadSafetyError`](@ref) if the FCN races (the thread-safety contract below). |
-| `:auto` | probe thread-safety **once** at the seed (memoized on the fit). If the probe passes, thread; otherwise emit a single `@warn` and fall back to serial. Never throws. Best-effort single-point probe — catches the common shared-buffer race but not one that only appears away from the seed (use `true` for the strict per-call check). |
+| `false` *(default)* | serial numerical gradient without a parallel safety probe. |
+| `true` | force the threaded gradient. With verification enabled, compare serial and threaded gradients at the entry seed; a detected mismatch raises [`ThreadSafetyError`](@ref). |
+| `:auto` | probe at the seed until a result is obtained, then reuse that result (memoized on the fit). If the probe passes, thread; otherwise warn and fall back to serial. Exceptions other than `ThreadSafetyError` propagate. Neither mode proves safety at every input or task interleaving. |
 
-The two safe-by-construction modes differ in what happens to an *unsafe* FCN:
-`true` **refuses** it (throws), `:auto` **demotes** it (warns + serial). Use
-`true` when you expect the FCN to be safe and want a hard failure if it is not;
-use `:auto` for "thread it if you can, silently, but never give me a wrong
-answer." A few edge behaviours of `:auto` worth knowing:
+The modes differ in their response to a detected mismatch: `true` throws,
+whereas `:auto` warns and uses serial gradients. Both require an objective
+that respects the ownership contract below; a seed-point probe is a diagnostic.
+A few edge behaviours of `:auto` worth knowing:
 
 - On single-thread Julia (`julia -t 1`) it is silently serial — no probe, no
   warning (threading is impossible, so there is nothing to check).
 - It is a no-op for AD (`grad=`) fits — the gradient is one call, so there is no
   per-coordinate loop to parallelize and no probe is run.
-- The probe runs **at most once** per fit and the result is cached, so it never
-  re-runs on later MINOS / contour evaluations.
+- A completed probe result is cached on the fit and reused by later MINOS /
+  contour evaluations. If an exception interrupts the probe, no result is cached.
 
-The win scales with FCN cost and `n` (see the table above): an expensive FCN at
-high `n` benefits most, a sub-microsecond FCN not at all. That is exactly why the
-default is `false`.
+Parallel evaluation can help when objective calls are expensive enough to
+amortize scheduling overhead. Measure the actual objective and parameter count;
+the default is serial.
 
 ### The thread-safety contract
 
@@ -180,15 +170,16 @@ wrong minimum** — a single-threaded χ² of 614 has been observed "converging"
 catch (worked failure case:
 [`BenchmarkExamples/IAM_2Pformfactor/`](https://github.com/fkguo/NativeMinuit.jl/tree/main/BenchmarkExamples)).
 
-NativeMinuit's *own* internal buffers are all per-thread; the contract is entirely on
-your FCN. Two safety nets back it up:
+NativeMinuit's internal gradient and transform buffers belong to the work unit
+or invocation using them. Your FCN must likewise avoid sharing mutable scratch. Two safety nets back it up:
 
 - **Automatic verification.** With `threaded_gradient=true` (and the default
-  `verify_threading=true`), the first gradient call runs the gradient both
+  `verify_threading=true`), the entry check runs the gradient both
   sequentially and threaded at the seed and compares them; a mismatch raises
   [`ThreadSafetyError`](@ref) with a diagnostic pointing at the likely cause.
 - **A standalone probe.** [`is_thread_safe(cf, x0)`](@ref) returns `true`/`false`
-  without throwing — useful to gate the decision yourself:
+  on a completed probe, converting `ThreadSafetyError` to `false`; other
+  exceptions propagate. Use it to gate the decision:
 
 ```julia
 using NativeMinuit
@@ -202,7 +193,7 @@ end
 
 (`:auto` runs this same probe internally and acts on it for you.)
 
-### Fixing a thread-unsafe FCN: per-thread buffers
+### Fixing a thread-unsafe FCN: private scratch
 
 The fix is to stop sharing the scratch. Two ways:
 
@@ -217,33 +208,22 @@ function chi2(par)
 end
 ```
 
-For a millisecond-scale FCN — exactly the regime where you would thread — that
-allocation is negligible. (Note the element type is derived from `eltype(par)`,
+Measure the allocation cost for your objective. (Note the element type is derived from `eltype(par)`,
 not hard-coded to `ComplexF64`: under AD `par` carries `ForwardDiff.Dual`
 numbers, so a `ComplexF64` buffer could not hold the resulting `Complex{Dual}`
 values and would break differentiation. This stays AD-generic.)
 
-**One buffer per thread** — if you must avoid the allocation, give each thread
-its own slot and index by `Threads.threadid()`:
+For reusable scratch, give each task or work unit exclusive ownership for the
+entire objective call. Indexing a shared pool by `Threads.threadid()` is unsafe:
+an objective can yield, another task can reuse the same slot, and the original
+task can migrate. NativeMinuit uses composable dynamic scheduling; threaded
+fits and mode analysis can run from a spawned worker or an outer threaded loop.
+Use separate `CostFunction`/`Minuit` objects for concurrent fits, since their
+counters and fit state are mutable.
 
-```julia
-const T_POOL = [zeros(ComplexF64, 3, 3) for _ in 1:Threads.maxthreadid()]
-function chi2(par)
-    T = T_POOL[Threads.threadid()]        # this thread's private buffer
-    fill_T_matrix!(T, par)
-    return loss_from(T)
-end
-```
-
-Two details make this sound: NativeMinuit threads the gradient with `Threads.@threads
-:static`, which **pins each loop iteration to a fixed thread**, so `threadid()`
-is stable within a call (under the `:dynamic` / `@spawn` schedules it would not
-be — do not use this pattern there). And the pool is sized with
-`Threads.maxthreadid()`, not `nthreads()`, because Julia can hand out thread ids
-beyond `nthreads()` in interactive sessions.
-
-Either way, confirm the fix with `is_thread_safe(cf, x0)` (or just let
-`threaded_gradient=true` auto-verify on the first call).
+Confirm the objective with `is_thread_safe(cf, x0)` or the default verification
+in `threaded_gradient=true`. This seed-point probe is a diagnostic, not a proof
+of safety for every possible input or task interleaving.
 
 ## See also
 
@@ -255,8 +235,6 @@ Either way, confirm the fix with `is_thread_safe(cf, x0)` (or just let
   [`src/gradient.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/gradient.jl);
   the thread-safety verification lives in
   [`src/migrad.jl`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/migrad.jl)
-- [Cost functions](../cost_functions.md) — AD works with generic FCNs and the
-  `LeastSquares` / `UnbinnedNLL` / `ExtendedUnbinnedNLL` costs; the binned costs
-  (`BinnedNLL` / `ExtendedBinnedNLL`) push their CDF values through `Float64`
-  buffers and are **not** currently AD-generic. The threaded numerical gradient
-  works on all of them.
+- [Cost functions](../cost_functions.md) — all built-in cost types support AD
+  when their model, PDF or CDF is generic over the parameter element type.
+  Threaded numerical evaluation additionally requires thread-safe callbacks.
