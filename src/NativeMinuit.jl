@@ -9,8 +9,7 @@
 
 Native-Julia port of the C++ Minuit2 function-minimization library — the
 algorithm at the heart of every HEP fit. A drop-in replacement for IMinuit.jl
-(the Julia wrapper of the Python `iminuit`), with an iminuit-style API and
-C++-comparable (often better) performance.
+(the Julia wrapper of the Python `iminuit`), with an iminuit-style API.
 
 # What's included
 - **MIGRAD** (variable-metric / DFP), **HESSE**, **MINOS** (asymmetric

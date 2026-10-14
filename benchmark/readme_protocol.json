@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "julia_commit": "68de553cbccf1dd4f83949cea7b9e6d83df982fb",
+  "cpp_commit": "57dc936a2b74d0b4dda1254c3dd63e7c61a97c84",
+  "fixture_sha256": "ce19bab9235a7436bcfcd93b78a674367d88927e0110d6f0d96d371f4f4a4b69",
+  "cases": [
+    "quad_4d",
+    "rosenbrock_2d",
+    "rosenbrock_10d",
+    "gauss_ll_2_100",
+    "gauss_ll_10_1000"
+  ],
+  "strategy": 0,
+  "tol": 0.1,
+  "maxfcn": 10000,
+  "storage_level": 0,
+  "rounds": 5,
+  "samples": 50,
+  "evals": 1,
+  "warmups": 5,
+  "order": [
+    "julia,cpp",
+    "cpp,julia",
+    "julia,cpp",
+    "cpp,julia",
+    "julia,cpp"
+  ],
+  "operation": "Fresh counted callback and initial user-state/core solver construction; full core MIGRAD (C++ VariableMetricMinimizer::Minimize vs Julia migrad); owned parameter vector, error vector and full row-major covariance materialization; fval, EDM, NFcn, actual callback count, validity, covariance and termination flags. Five unbounded cases: internal parameters equal external parameters. Excludes immutable Gaussian input parsing/preparation, optional global correlation coefficients, JSON serialization. Julia BenchmarkTools uses gctrial=true,gcsample=false,overhead=0; C++ steady_clock surrounds one complete operation.",
+  "threads": {
+    "julia": 1,
+    "blas": 1,
+    "OMP_NUM_THREADS": 1,
+    "OPENBLAS_NUM_THREADS": 1
+  },
+  "strict_tolerances": {
+    "params": {
+      "rtol": 1e-10,
+      "atol": 1e-12
+    },
+    "fval": {
+      "rtol": 1e-10,
+      "atol": 1e-18
+    },
+    "edm": {
+      "rtol": 1e-06,
+      "atol": 1e-12
+    },
+    "covariance": {
+      "rtol": 1e-06,
+      "atol": 1e-12
+    },
+    "errors": {
+      "rtol": 1e-06,
+      "atol": 1e-12
+    }
+  },
+  "rosenbrock_diagnostic_tolerances": {
+    "rosenbrock_2d": {
+      "params": {
+        "rtol": 0.001,
+        "atol": 0.0001
+      },
+      "fval": {
+        "rtol": 0.5,
+        "atol": 1e-06
+      },
+      "edm": {
+        "rtol": 0.5,
+        "atol": 1e-12
+      },
+      "covariance": {
+        "rtol": 0,
+        "atol": 0.02
+      },
+      "nfcn_slack": 20
+    },
+    "rosenbrock_10d": {
+      "params": {
+        "rtol": 0.005,
+        "atol": 0.002
+      },
+      "fval": {
+        "rtol": 1,
+        "atol": 0.0002
+      },
+      "edm": {
+        "rtol": 1,
+        "atol": 1e-12
+      },
+      "covariance": {
+        "rtol": 0,
+        "atol": 0.5
+      },
+      "nfcn_slack": 100
+    }
+  },
+  "mandatory": "Both valid; all required outputs finite; required covariance present; no missing rows; same per-process output across all warmed samples; exact callback counts within each implementation. Strict parity failures retained; Rosenbrock diagnostic pass does not authorize equivalent-computation speed claim.",
+  "scope_exclusions": [
+    "numerical kernel edits",
+    "global minimum claims",
+    "cold startup performance",
+    "MINOS",
+    "Strategy(1)",
+    "global environment changes",
+    "new dependency policy",
+    "historical timing comparison",
+    "MnMigrad facade/global correlation coefficients"
+  ],
+  "uncertainty": "Report five paired median ratios and their observed range; descriptive interleaved variation, no population confidence interval or universal speed claim."
+}

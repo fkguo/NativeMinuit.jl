@@ -27,6 +27,9 @@ and [Semantic Versioning](https://semver.org/).
   configuration, reject incomplete comparisons, and validate the actual BLAS
   thread count. Historical cross-language timings do not establish a current
   performance comparison.
+- Replaced the README's historical timing table with matched core-MIGRAD
+  measurements, raw samples and per-process variation. Cases failing strict
+  final-output comparisons are retained without an admitted timing ratio.
 
 ### Documentation
 

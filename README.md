@@ -91,21 +91,43 @@ Each is detailed in the sections below.
 
 ## Performance
 
-**Historical measurements.** The table below preserves an earlier comparison.
-Its package version and measurement date were not recorded with the table;
-these values do not establish the current release’s speed.
+Measured on **2026-10-14**, using NativeMinuit **0.7.5** at
+[`68de553c`](https://github.com/fkguo/NativeMinuit.jl/tree/68de553cbccf1dd4f83949cea7b9e6d83df982fb)
+and C++ Minuit2 **6.24.0**: Apple M3, macOS 15.6.1, Julia 1.12.6,
+OpenBLAS 0.3.33, Apple clang 17 (`-O3 -DNDEBUG`), one Julia thread and one
+actual BLAS thread. Both use the same fixed inputs, numerical gradients,
+`Strategy(0)`, tolerance 0.1, at most 10000 calls, and storage level 0.
 
-Recorded wall time for a full **MIGRAD** minimization vs C++ Minuit2 on five standard
-test objectives — the FCN being minimized, *not* a Minuit operation (Apple M3 /
-Julia 1.12 / OpenBLAS 0.3.29; `Strategy(0)`, single-threaded BLAS on both sides):
+The timed operation constructs a fresh callback and solver state, runs full
+**core MIGRAD**, and materializes parameters, errors, covariance and status.
+Immutable data preparation, compilation and optional global correlations are
+excluded on both sides. This compares Julia `migrad` with C++
+`VariableMetricMinimizer::Minimize`, rather than the additional work performed
+by the C++ `MnMigrad` application.
 
-| Benchmark | Julia (μs) | C++ (μs) | Julia / C++ |
-|---|---|---|---|
-| `quad_4d` | 0.81 | 5.50 | **0.147×** |
-| `rosenbrock_2d` | 9.50 | 37.62 | **0.253×** |
-| `rosenbrock_10d` | 58.11 | 156.62 | **0.371×** |
-| `gauss_ll_10_1000` | 32.26 | 44.96 | **0.718×** |
-| `gauss_ll_2_100` | 20.16 | 22.71 | **0.888×** |
+Five alternating process pairs each collect 50 warmed samples per objective.
+Times below are medians of the five process medians; the ratio is the median
+of the five **paired** ratios, so it need not equal the quotient of the displayed
+times. The range preserves the smallest and largest paired ratios observed.
+
+| Benchmark | Julia (μs) | C++ (μs) | Paired Julia / C++ | Observed range |
+|---|---:|---:|---:|---:|
+| `quad_4d` | 1.666 | 6.792 | 0.242 | 0.177–0.250 |
+| `rosenbrock_2d` | — | — | Not admitted | Strict output comparison failed |
+| `rosenbrock_10d` | — | — | Not admitted | Strict output comparison failed |
+| `gauss_ll_10_1000` | 50.834 | 64.334 | 0.790 | 0.688–0.793 |
+| `gauss_ll_2_100` | 31.667 | 27.605 | 1.150 | 0.874–1.855 |
+
+Only cases passing the predeclared strict parameter, objective, EDM, error and
+covariance checks receive timing ratios. Both Rosenbrock results are valid and
+pass the existing diagnostic checks, but their terminal outputs fail the strict
+comparison; all raw results are retained. The small Gaussian case's range crosses
+1, so these measurements do not support a stable faster/slower conclusion for it.
+Ranges describe this single-machine measurement, not confidence intervals or
+general speed guarantees. See the [protocol and reproduction commands](benchmark/readme_comparison.md)
+and [numerical results, raw timings and environment](benchmark/results/readme_075.json).
+The previous table used unmatched Gaussian inputs and timing boundaries and has
+been replaced rather than reused as a current comparison.
 
 The objectives (the user FCN that MIGRAD minimizes — these are standard
 optimization test problems, not Minuit operations) are:
