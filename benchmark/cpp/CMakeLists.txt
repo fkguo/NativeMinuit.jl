@@ -27,3 +27,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../reference/Minuit2_cpp
 
 add_executable(cpp_bench cpp_bench.cxx)
 target_link_libraries(cpp_bench PUBLIC Minuit2::Minuit2)
+
+# Fixture-matched Strategy(0) collector; legacy cpp_bench records stay historical.
+add_executable(cpp_readme_bench cpp_readme_bench.cxx)
+target_link_libraries(cpp_readme_bench PUBLIC Minuit2::Minuit2)
