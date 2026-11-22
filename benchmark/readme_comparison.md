@@ -1,17 +1,26 @@
 # Matched MIGRAD measurements
 
-These measurements remain provisional. The Rosenbrock strict comparisons fail, and the short sampling blocks show unexplained timing variation. Numerical agreement alone does not establish timing repeatability.
+The README reports two Linux runs with their own per-case admission decisions.
+The [result records](results/readme_075_linux.json) retain all five cases, their
+terminal outputs, strict comparisons and timing-block medians, including rejected
+comparisons. The raw records and metadata are available from the
+[EPYC 7763 run](https://github.com/fkguo/NativeMinuit.jl/actions/runs/45034761039)
+and the [EPYC 9V74 run](https://github.com/fkguo/NativeMinuit.jl/actions/runs/45035374057).
+Both use the same resolved Julia dependency versions, Julia 1.13.2 and GCC
+15.2.0, with both collectors pinned to one logical CPU. The warmups were 0.5 s
+and 2 s, respectively. The host CPU models also differ, so the runs do not
+isolate a warmup effect.
 
-The [recorded measurements and environment](results/readme_075.json) include all five process-pair medians, numerical comparisons and source hashes.
+The [initial Apple M3 record](results/readme_075.json) predates the current
+fixed-duration block checks and is retained as historical evidence.
 
 The five standard objectives are compared using numerical-gradient MIGRAD,
 Strategy(0), tolerance 0.1, at most 10000 objective calls, and storage level 0, without full iteration-state snapshots. The C++ reference is Minuit2 6.24.0 at
 [`57dc936a`](https://github.com/GooFit/Minuit2/tree/57dc936a2b74d0b4dda1254c3dd63e7c61a97c84).
-The recorded Julia numerical source is NativeMinuit 0.7.5 at
-[`68de553c`](https://github.com/fkguo/NativeMinuit.jl/tree/68de553cbccf1dd4f83949cea7b9e6d83df982fb).
-The collector files are identified separately by SHA-256 in the measurement
-record. Historical C++ timings used different Gaussian data and included data
-generation, so they cannot be compared with these measurements.
+The Linux runs use the NativeMinuit 0.7.5 numerical source at
+[`ca9df7d`](https://github.com/fkguo/NativeMinuit.jl/tree/ca9df7d59a6579f08021a73d2addb7e5e9fe3c69).
+Each run separately identifies the collector checkout and hashes the measured
+files and dependency environment.
 
 The measured operation creates a fresh counted objective and solver state,
 runs core MIGRAD, and materializes an owned parameter vector, parameter-error
@@ -57,13 +66,11 @@ It builds the C++ reference at the protocol's `cpp_commit`. Each dispatch
 archives its own resolved manifest. A fresh dependency resolution can differ
 from an earlier run.
 
-The initial measurement record predates these timing checks. It remains readable as a provisional measurement and cannot establish current benchmark readiness. A new fixed-duration comparison must pass its numerical and timing requirements before replacing the provisional table.
-
 The reported ratio is Julia time divided by C++ time. The central value is the
 median of five paired median ratios; its range is the smallest to largest paired
 ratio observed. These summarize variation between interleaved processes on one
 machine; they are not population confidence intervals or broad speed guarantees.
-CPU scheduling, thermal state and unrelated background work are not controlled.
+The Linux runs pin both collectors to one logical CPU. Host scheduling and thermal state can still vary.
 
 First establish the pinned reference checkout as described in [Upstream C++ reference](../docs/UPSTREAM.md#re-establishing-the-reference). To repeat the measurement with the pinned sources and the recorded benchmark dependencies:
 

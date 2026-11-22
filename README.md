@@ -91,66 +91,34 @@ Each is detailed in the sections below.
 
 ## Performance
 
-The current measurements are provisional: strict Rosenbrock output agreement and timing repeatability remain unresolved. They do not establish a reliable current-version speed comparison. All original measurements are retained below.
+Two single-threaded Linux measurements compare NativeMinuit 0.7.5 and C++
+Minuit2 6.24.0 on the same fixtures. Each times a fresh core MIGRAD fit with
+the same solver settings and materialized parameters, errors, covariance and
+status. Immutable inputs are prepared before timing. Julia 1.13.2 and GCC
+15.2.0 were used on both hosts.
 
-Measured on **2026-10-14**, using NativeMinuit **0.7.5** at
-[`68de553c`](https://github.com/fkguo/NativeMinuit.jl/tree/68de553cbccf1dd4f83949cea7b9e6d83df982fb)
-and C++ Minuit2 **6.24.0**: Apple M3, macOS 15.6.1, Julia 1.12.6,
-OpenBLAS 0.3.33, Apple clang 17 (`-O3 -DNDEBUG`), one Julia thread and one
-actual BLAS thread. Both use the same fixed inputs, numerical gradients,
-`Strategy(0)`, tolerance 0.1, at most 10000 calls, and storage level 0.
+Each result is the median of five paired Julia/C++ time ratios, with the
+observed range in parentheses. Ratios below 1 indicate lower times for Julia
+on that host. Each pair uses the median of six timing blocks per language.
+A ratio is reported only when the case passes strict numerical agreement and
+the 10% block and paired-ratio stability limits on that host.
 
-The timed operation constructs a fresh callback and solver state, runs full
-**core MIGRAD**, and materializes parameters, errors, covariance and status.
-Immutable data preparation, compilation and optional global correlations are
-excluded on both sides. This compares Julia `migrad` with C++
-`VariableMetricMinimizer::Minimize`, rather than the additional work performed
-by the C++ `MnMigrad` application.
+| Workload | EPYC 7763, 0.5 s warmup | EPYC 9V74, 2 s warmup |
+|---|---:|---:|
+| Four-parameter quadratic | 0.620 (0.607–0.634) | 0.630 (0.625–0.633) |
+| Rosenbrock, 2 parameters | Numerical agreement failed | Numerical agreement failed |
+| Rosenbrock, 10 parameters | Numerical agreement failed | Numerical agreement failed |
+| Gaussian likelihood, 2 parameters, 100 observations | 1.091 (1.047–1.108) | Timing stability failed |
+| Gaussian likelihood, 10 parameters, 1000 observations | Timing stability failed | 0.950 (0.948–0.956) |
 
-Five alternating process pairs each collect 50 warmed samples per objective.
-Times below are medians of the five process medians; the ratio is the median
-of the five **paired** ratios, so it need not equal the quotient of the displayed
-times. The range preserves the smallest and largest paired ratios observed.
+Both Rosenbrock fits meet the solver's stopping criterion. The Julia and
+C++ terminal states exceed the strict agreement tolerances. Each Gaussian
+case meets the timing limit on only one of the two hosts, so its result is
+specific to that measurement. These ranges describe the observed trials.
 
-| Benchmark | Julia (μs) | C++ (μs) | Paired Julia / C++ | Observed range |
-|---|---:|---:|---:|---:|
-| `quad_4d` | 1.666 | 6.792 | 0.242 | 0.177–0.250 |
-| `rosenbrock_2d` | — | — | Not admitted | Strict output comparison failed |
-| `rosenbrock_10d` | — | — | Not admitted | Strict output comparison failed |
-| `gauss_ll_10_1000` | 50.834 | 64.334 | 0.790 | 0.688–0.793 |
-| `gauss_ll_2_100` | 31.667 | 27.605 | 1.150 | 0.874–1.855 |
-
-Only cases passing the predeclared strict parameter, objective, EDM, error and
-covariance checks receive timing ratios. Both Rosenbrock results are valid and
-pass the existing diagnostic checks, but their terminal outputs fail the strict
-comparison; all raw results are retained. The small Gaussian case's range crosses
-1, so these measurements do not support a stable faster/slower conclusion for it.
-Ranges describe this single-machine measurement, not confidence intervals or
-general speed guarantees. See the [protocol and reproduction commands](benchmark/readme_comparison.md)
-and [numerical results, raw timings and environment](benchmark/results/readme_075.json).
-The previous table used unmatched Gaussian inputs and timing boundaries and has
-been replaced rather than reused as a current comparison.
-
-The objectives (the user FCN that MIGRAD minimizes — these are standard
-optimization test problems, not Minuit operations) are:
-
-- `quad_4d` — a 4-parameter quadratic (smooth and convex — the easy baseline).
-- `rosenbrock_2d` / `rosenbrock_10d` — the Rosenbrock "banana" function (a
-  curved, narrow valley; the classic hard test for a minimizer) in 2 and 10
-  dimensions.
-- `gauss_ll_<npar>_<ndata>` — a Gaussian negative-log-likelihood fit with
-  `<npar>` free parameters over `<ndata>` data points (a realistic
-  maximum-likelihood fit; e.g. `gauss_ll_10_1000` = 10 parameters, 1000 points).
-
-The parametric Julia cost function can specialize objective calls. The table
-alone does not isolate this mechanism or establish the cause of a timing
-difference. Benchmarking requires the same objective, requested outputs,
-strategy, limits, dependencies and machine, with numerical agreement checked
-separately. The sources live in [`benchmark/`](benchmark/) and
-[`scripts/`](scripts/).
-
-(Real-world HEP-fit benchmarks vs `iminuit` are further down, under
-[Real-world physics fits](#real-world-physics-fits).)
+See the [protocol and reproduction commands](benchmark/readme_comparison.md)
+and [both result records](benchmark/results/readme_075_linux.json). Additional
+physics examples are described under [Real-world physics fits](#real-world-physics-fits).
 
 ## Features
 
