@@ -51,9 +51,13 @@ jobs:
           arch: x64
       - name: Prepare pinned reference and benchmark dependencies
         run: |
+          julia_source=$(python3 -c 'import json; print(json.load(open("benchmark/readme_protocol.json"))["julia_commit"])')
+          cpp_source=$(python3 -c 'import json; print(json.load(open("benchmark/readme_protocol.json"))["cpp_commit"])')
+          git fetch --no-tags --depth=1 origin "$julia_source"
+          git diff --exit-code "$julia_source" HEAD -- Project.toml src ext
           mkdir -p reference
           git clone --no-checkout https://github.com/GooFit/Minuit2.git reference/Minuit2_cpp
-          git -C reference/Minuit2_cpp checkout --detach 57dc936a2b74d0b4dda1254c3dd63e7c61a97c84
+          git -C reference/Minuit2_cpp checkout --detach "$cpp_source"
           cmake -S benchmark/cpp -B "$RUNNER_TEMP/minuit2-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON
           cmake --build "$RUNNER_TEMP/minuit2-build" --target cpp_readme_bench --parallel 2
           julia --startup-file=no --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
@@ -77,6 +81,7 @@ jobs:
               uname -sr
               lscpu
             } > "$record/runner.txt"
+            cp benchmark/Project.toml "$record/julia-project.toml"
             cp benchmark/Manifest.toml "$record/julia-manifest.toml"
           fi
           # Exit 2 means a complete record with rejected cases. Retain and verify it.
@@ -90,13 +95,16 @@ jobs:
           import pathlib
           import sys
 
-          report = json.loads((pathlib.Path(sys.argv[1]) / "summary.json").read_text())
-          print(f"**{report['verdict']}**")
-          print()
-          print("| Case | Status |")
-          print("| --- | --- |")
+          record = pathlib.Path(sys.argv[1])
+          report = json.loads((record / "summary.json").read_text())
+          check = json.loads((record / "julia-evidence-check.json").read_text())
+          assert check["validation_status"] == "PASS"
+          print("| Case | Strict numerical agreement | Timing stability | Timing comparison admitted |")
+          print("| --- | --- | --- | --- |")
           for name, case in report["cases"].items():
-              print(f"| {name} | {case['status']} |")
+              fields = ["Pass" if case[key] else "Fail" for key in
+                        ("strict_numeric_admitted", "timing_stability_admitted", "benchmark_admitted")]
+              print(f"| {name} | {' | '.join(fields)} |")
           PY
       - uses: actions/upload-artifact@v4
         if: always()

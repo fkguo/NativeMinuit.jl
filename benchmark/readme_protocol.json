@@ -108,7 +108,7 @@
   ],
   "uncertainty": "Report paired median ratios and their observed range. Each process contributes the median of its declared timing-block medians. Require the declared per-language block-spread and paired-ratio-spread limits over every retained block and process. These are descriptive finite-experiment limits, not population confidence intervals or universal speed claims.",
   "timing_reliability": {
-    "fixed_warmup_seconds": 0.5,
+    "fixed_warmup_seconds": 2.0,
     "blocks": 6,
     "block_min_seconds": 0.1,
     "maximum_language_block_spread_fraction": 0.1,

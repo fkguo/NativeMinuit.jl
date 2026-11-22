@@ -45,9 +45,17 @@ the pre-existing diagnostic checks in [the oracle tests](../test/test_cpp_oracle
 but passing those looser checks does not admit an equivalent-computation timing
 ratio. Failed strict comparisons remain visible.
 
-The current reproduction protocol additionally requires 0.5 seconds of continuous warmup followed by six 100 ms timing blocks per objective in each of five fresh processes per language. It retains the original 50-sample blocks. The current paired statistic uses each process's median of its six block medians. These blocks use Julia `time_ns` and C++ `steady_clock`, with no forced garbage collection between blocks. A timing comparison is admitted only when the largest-to-smallest block median spread is at most 10% across all 30 blocks for each language, and the five paired ratios also have at most 10% spread. All blocks and failed rows are retained. Cross-process output identity and the original strict numerical tolerances are separate requirements. A consistency-check success validates the recorded data and decisions; it does not turn rejected rows into passing benchmarks.
+The current reproduction protocol additionally requires 2 seconds of continuous warmup followed by six 100 ms timing blocks per objective in each of five fresh processes per language. It retains the original 50-sample blocks. The current paired statistic uses each process's median of its six block medians. These blocks use Julia `time_ns` and C++ `steady_clock`, with no forced garbage collection between blocks. A timing comparison is admitted only when the largest-to-smallest block median spread is at most 10% across all 30 blocks for each language, and the five paired ratios also have at most 10% spread. All blocks and failed rows are retained. Cross-process output identity and the original strict numerical tolerances are separate requirements. A consistency-check success validates the recorded data and decisions; it does not turn rejected rows into passing benchmarks.
 
 Sampling durations and block counts are read from `timing_reliability` in the protocol, passed explicitly to both collectors, and checked against both the recorded configuration and measured blocks. Invalid durations/counts and unsupported case, solver or thread settings are rejected. Changing sampling settings defines a new measurement; it does not revise or certify the initial record.
+
+The protocol's `julia_commit` pins the package code and dependency
+declarations (`src/`, `ext/` and `Project.toml`). The manual CI comparison
+checks that these match the pin and records the actual checkout commit
+separately, along with hashes of the collectors and resolved manifest.
+It builds the C++ reference at the protocol's `cpp_commit`. Each dispatch
+archives its own resolved manifest. A fresh dependency resolution can differ
+from an earlier run.
 
 The initial measurement record predates these timing checks. It remains readable as a provisional measurement and cannot establish current benchmark readiness. A new fixed-duration comparison must pass its numerical and timing requirements before replacing the provisional table.
 
