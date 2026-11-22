@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "julia_commit": "68de553cbccf1dd4f83949cea7b9e6d83df982fb",
+  "julia_commit": "ca9df7d59a6579f08021a73d2addb7e5e9fe3c69",
   "cpp_commit": "57dc936a2b74d0b4dda1254c3dd63e7c61a97c84",
   "fixture_sha256": "ce19bab9235a7436bcfcd93b78a674367d88927e0110d6f0d96d371f4f4a4b69",
   "cases": [
@@ -25,7 +25,7 @@
     "cpp,julia",
     "julia,cpp"
   ],
-  "operation": "Fresh counted callback and initial user-state/core solver construction; full core MIGRAD (C++ VariableMetricMinimizer::Minimize vs Julia migrad); owned parameter vector, error vector and full row-major covariance materialization; fval, EDM, NFcn, actual callback count, validity, covariance and termination flags. Five unbounded cases: internal parameters equal external parameters. Excludes immutable Gaussian input parsing/preparation, optional global correlation coefficients, JSON serialization. Julia BenchmarkTools uses gctrial=true,gcsample=false,overhead=0; C++ steady_clock surrounds one complete operation.",
+  "operation": "Fresh counted callback and initial user-state/core solver construction; full core MIGRAD (C++ VariableMetricMinimizer::Minimize vs Julia migrad); owned parameter vector, error vector and full row-major covariance materialization; fval, EDM, NFcn, actual callback count, validity, covariance and termination flags. Five unbounded cases: internal parameters equal external parameters. Excludes immutable Gaussian input parsing/preparation, optional global correlation coefficients, JSON serialization. The retained initial Julia samples use BenchmarkTools with gctrial=true, gcsample=false and overhead=0. Fixed-duration blocks use Julia time_ns and C++ steady_clock around one complete operation, with no forced GC between blocks.",
   "threads": {
     "julia": 1,
     "blas": 1,
@@ -106,5 +106,16 @@
     "historical timing comparison",
     "MnMigrad facade/global correlation coefficients"
   ],
-  "uncertainty": "Report five paired median ratios and their observed range; descriptive interleaved variation, no population confidence interval or universal speed claim."
+  "uncertainty": "Report paired median ratios and their observed range. Each process contributes the median of its declared timing-block medians. Require the declared per-language block-spread and paired-ratio-spread limits over every retained block and process. These are descriptive finite-experiment limits, not population confidence intervals or universal speed claims.",
+  "timing_reliability": {
+    "fixed_warmup_seconds": 0.5,
+    "blocks": 6,
+    "block_min_seconds": 0.1,
+    "maximum_language_block_spread_fraction": 0.1,
+    "maximum_paired_ratio_spread_fraction": 0.1,
+    "all_blocks_retained": true,
+    "initial_samples_retained": 50,
+    "timed_clock": "Julia time_ns / C++ steady_clock; same owned-output operation boundaries",
+    "admission": "Strict numerical agreement, same-language output identity across processes, per-language block spread, and paired-ratio spread must all pass; retain failures."
+  }
 }

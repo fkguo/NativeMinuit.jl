@@ -91,6 +91,8 @@ Each is detailed in the sections below.
 
 ## Performance
 
+The current measurements are provisional: strict Rosenbrock output agreement and timing repeatability remain unresolved. They do not establish a reliable current-version speed comparison. All original measurements are retained below.
+
 Measured on **2026-10-14**, using NativeMinuit **0.7.5** at
 [`68de553c`](https://github.com/fkguo/NativeMinuit.jl/tree/68de553cbccf1dd4f83949cea7b9e6d83df982fb)
 and C++ Minuit2 **6.24.0**: Apple M3, macOS 15.6.1, Julia 1.12.6,

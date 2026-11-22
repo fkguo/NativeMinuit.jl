@@ -1,7 +1,27 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Run only via compare_readme.py, in the pinned benchmark environment.
-using NativeMinuit, BenchmarkTools, JSON3, LinearAlgebra, SHA, Pkg
-include(joinpath(@__DIR__, "bench_migrad_suite.jl"))
+using NativeMinuit, BenchmarkTools, JSON3, LinearAlgebra, SHA
+
+function positive_count(raw, name)
+    value = tryparse(Int, raw)
+    value !== nothing && value > 0 || throw(ArgumentError("$name must be a positive integer"))
+    value
+end
+
+function positive_seconds(raw, name)
+    value = tryparse(Float64, raw)
+    value !== nothing && isfinite(value) && value > 0 ||
+        throw(ArgumentError("$name must be finite and positive"))
+    value
+end
+
+function collector_arguments(args)
+    length(args) == 6 || throw(ArgumentError(
+        "usage: readme_julia_bench.jl OUTPUT_JSON SAMPLES SOURCE_ROOT WARMUP_SECONDS BLOCKS BLOCK_SECONDS"))
+    (output=args[1], samples=positive_count(args[2], "samples"), source_root=realpath(args[3]),
+     warmup_seconds=positive_seconds(args[4], "warmup seconds"),
+     blocks=positive_count(args[5], "blocks"), block_seconds=positive_seconds(args[6], "block seconds"))
+end
 
 function materialized_fit(c)
     cf = CostFunction(c.f, c.up)
@@ -16,7 +36,20 @@ function materialized_fit(c)
      params=copy(Base.values(m)), errors=cov === nothing ? Float64[] : sqrt.(diag(cov)), covariance=flat)
 end
 
-function collect_case(c, samples)
+function timed_block(c, first, seconds)
+    times=Float64[]; stable=true; validated=0; before=Base.gc_num(); start=time_ns()
+    while (time_ns()-start)*1e-9 < seconds
+        t=time_ns(); result=materialized_fit(c); push!(times,Float64(time_ns()-t))
+        stable &= isequal(first,result) && result.nfcn==result.actual_calls
+        validated += 1
+    end
+    elapsed=(time_ns()-start)*1e-9; diff=Base.GC_Diff(Base.gc_num(),before)
+    Dict("sample_times_ns"=>times,"stable_outputs"=>stable,"validated_outputs"=>validated,
+         "elapsed_seconds"=>elapsed,"gc_time_seconds"=>diff.total_time*1e-9,
+         "allocated_bytes"=>diff.allocd)
+end
+
+function collect_case(c, samples, warmup_seconds, block_count, block_seconds)
     first = materialized_fit(c)
     for _ in 2:4
         materialized_fit(c)
@@ -28,8 +61,11 @@ function collect_case(c, samples)
         teardown=(push!($received, $slot[])), evals=1,
         samples=samples, seconds=3600, gctrial=true, gcsample=false, overhead=0)
     trial = run(b)
+    warmup=timed_block(c,first,warmup_seconds)
+    blocks=[timed_block(c,first,block_seconds) for _ in 1:block_count]
     BLAS.get_num_threads() == 1 || error("BLAS thread count changed during timing")
-    Dict("name"=>c.name, "samples"=>length(trial.times), "evals"=>trial.params.evals,
+    Dict("continuous_warmup"=>warmup,"timing_blocks"=>blocks,
+         "name"=>c.name, "samples"=>length(trial.times), "evals"=>trial.params.evals,
          "sample_times_ns"=>trial.times, "sample_gc_times_ns"=>trial.gctimes,
          "memory_bytes"=>trial.memory, "allocations"=>trial.allocs,
          "stable_outputs"=>all(isequal(first),received),
@@ -37,10 +73,14 @@ function collect_case(c, samples)
          "result"=>first, "different_outputs"=>filter(x->!isequal(first,x),received))
 end
 
-function main()
-    length(ARGS)==2 || error("usage: readme_julia_bench.jl OUTPUT_JSON SAMPLES")
-    output, raw_samples = ARGS
-    samples=parse(Int,raw_samples);samples>0 || error("samples must be positive")
+function main(args=ARGS)
+    config = collector_arguments(args)
+    output, samples, source_root = config.output, config.samples, config.source_root
+    loaded_source = realpath(pathof(NativeMinuit))
+    expected_source = realpath(joinpath(source_root, "src", "NativeMinuit.jl"))
+    loaded_source == expected_source || error("loaded NativeMinuit source does not match SOURCE_ROOT")
+    # Loading the fixture suite is delayed until configuration and source identity pass.
+    Base.include(@__MODULE__, joinpath(source_root, "benchmark", "bench_migrad_suite.jl"))
     Threads.nthreads()==1 || error("one Julia thread required")
     ENV["OMP_NUM_THREADS"]=="1" || error("OMP_NUM_THREADS must be 1")
     ENV["OPENBLAS_NUM_THREADS"]=="1" || error("OPENBLAS_NUM_THREADS must be 1")
@@ -55,10 +95,12 @@ function main()
         "julia_threads"=>Threads.nthreads(),"blas_threads_before"=>BLAS.get_num_threads(),
         "blas_config"=>sprint(show,BLAS.get_config()),"cpu"=>Sys.CPU_NAME,
         "fixture_sha256"=>bytes2hex(sha256(read(INPUT_PATH))),
-        "manifest_sha256"=>bytes2hex(sha256(read(joinpath(@__DIR__,"Manifest.toml")))),
-        "package_path"=>pathof(NativeMinuit),"warmups"=>5,"evals"=>1,"rows"=>rows)
+        "manifest_sha256"=>bytes2hex(sha256(read(joinpath(source_root,"benchmark","Manifest.toml")))),
+        "package_path"=>loaded_source,"warmups"=>5,"evals"=>1,"rows"=>rows,
+        "timing_reliability"=>Dict("fixed_warmup_seconds"=>config.warmup_seconds,
+            "blocks"=>config.blocks,"block_min_seconds"=>config.block_seconds))
     for c in cases
-        push!(rows,collect_case(c,samples))
+        push!(rows,Base.invokelatest(collect_case,c,samples,config.warmup_seconds,config.blocks,config.block_seconds))
         report["blas_threads_after"]=BLAS.get_num_threads()
         # Every completed case has an atomic recoverable record.
         open(output*".tmp","w") do io
@@ -67,4 +109,6 @@ function main()
         mv(output*".tmp",output;force=true)
     end
 end
-main()
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end

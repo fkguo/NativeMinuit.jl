@@ -24,6 +24,15 @@
 # Local agent instructions, not package content
 /AGENTS.md
 
+# Local maintenance instructions, coordination and retained execution records
+/docs/dev/PACKAGE_WORKFLOW.md
+/project_index.md
+/research_plan.md
+/artifacts/
+
+# Python bytecode caches
+__pycache__/
+
 # C++ harness build artifacts (regenerable via tools/regen_reference.sh)
 /tools/build/
 

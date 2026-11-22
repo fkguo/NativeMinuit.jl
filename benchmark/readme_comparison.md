@@ -1,5 +1,7 @@
 # Matched MIGRAD measurements
 
+These measurements remain provisional. The Rosenbrock strict comparisons fail, and the short sampling blocks show unexplained timing variation. Numerical agreement alone does not establish timing repeatability.
+
 The [recorded measurements and environment](results/readme_075.json) include all five process-pair medians, numerical comparisons and source hashes.
 
 The five standard objectives are compared using numerical-gradient MIGRAD,
@@ -28,7 +30,7 @@ within process pairs. Each process uses five warmups and 50 measured samples
 per objective, with one fresh fit per sample. Julia performs four explicit
 warmups and BenchmarkTools performs the fifth. Julia uses one thread and one
 actual BLAS thread; child processes receive `OMP_NUM_THREADS=1` and
-`OPENBLAS_NUM_THREADS=1`. BenchmarkTools records allocation and GC information
+`OPENBLAS_NUM_THREADS=1`. For the retained initial 50 samples, BenchmarkTools records allocation and GC information
 with `gctrial=true`, `gcsample=false`, and zero overhead correction. C++ uses
 `steady_clock` around each operation. C++ object destruction and Julia garbage
 collection follow their language runtimes; cold loading and compilation are
@@ -42,6 +44,12 @@ All differences, results and call counts are retained. Rosenbrock also retains
 the pre-existing diagnostic checks in [the oracle tests](../test/test_cpp_oracle.jl),
 but passing those looser checks does not admit an equivalent-computation timing
 ratio. Failed strict comparisons remain visible.
+
+The current reproduction protocol additionally requires 0.5 seconds of continuous warmup followed by six 100 ms timing blocks per objective in each of five fresh processes per language. It retains the original 50-sample blocks. The current paired statistic uses each process's median of its six block medians. These blocks use Julia `time_ns` and C++ `steady_clock`, with no forced garbage collection between blocks. A timing comparison is admitted only when the largest-to-smallest block median spread is at most 10% across all 30 blocks for each language, and the five paired ratios also have at most 10% spread. All blocks and failed rows are retained. Cross-process output identity and the original strict numerical tolerances are separate requirements. A consistency-check success validates the recorded data and decisions; it does not turn rejected rows into passing benchmarks.
+
+Sampling durations and block counts are read from `timing_reliability` in the protocol, passed explicitly to both collectors, and checked against both the recorded configuration and measured blocks. Invalid durations/counts and unsupported case, solver or thread settings are rejected. Changing sampling settings defines a new measurement; it does not revise or certify the initial record.
+
+The initial measurement record predates these timing checks. It remains readable as a provisional measurement and cannot establish current benchmark readiness. A new fixed-duration comparison must pass its numerical and timing requirements before replacing the provisional table.
 
 The reported ratio is Julia time divided by C++ time. The central value is the
 median of five paired median ratios; its range is the smallest to largest paired
@@ -70,8 +78,16 @@ julia --project=benchmark benchmark/check_readme_evidence.jl benchmark/results/n
 
 The output directory must be new. Each completed process record contains raw
 sample times and its result. The comparison also retains raw deltas, per-pair
-medians, source/input/binary hashes and failures or missing rows. A nonzero exit
-status or a failed numerical row cannot be promoted to a performance claim.
+medians, source/input/binary hashes and failures or missing rows. Exit status 2 means all measurement pairs completed but some numerical or timing rows were rejected; exit status 1 means incomplete or invalid evidence. Only exit status 0 admits all five cases. A failed row cannot be promoted to a performance claim.
 For an exact environment reproduction, use the dependency versions recorded in
 the published measurement manifest; a newly resolved environment is a new
 measurement.
+
+Portable record-validation regressions can be run without C++ reference data or historical run directories:
+
+```sh
+python3 -m unittest discover -s benchmark -p 'test_readme_comparison.py'
+julia --startup-file=no --project=benchmark benchmark/test_readme_evidence.jl
+```
+
+These tests use synthetic records to check acceptance and rejection rules. They do not measure optimizer performance. Both tests also run in CI.

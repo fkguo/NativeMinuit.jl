@@ -95,10 +95,41 @@ void output(std::ostream& o,const Output& r) {
 bool identical(const Output&a,const Output&b) {
     return a.fval==b.fval&&a.edm==b.edm&&a.nfcn==b.nfcn&&a.actual_calls==b.actual_calls&&a.valid==b.valid&&a.has_covariance==b.has_covariance&&a.reached_call_limit==b.reached_call_limit&&a.above_max_edm==b.above_max_edm&&a.params==b.params&&a.errors==b.errors&&a.covariance==b.covariance;
 }
+struct TimingBlock {
+    std::vector<double> times;
+    bool stable=true;
+    double elapsed=0;
+};
+TimingBlock timed_block(const Case& c,const Output& first,double seconds) {
+    TimingBlock b; auto start=std::chrono::steady_clock::now();
+    while(std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()<seconds) {
+        auto t0=std::chrono::steady_clock::now();Output r=operation(c);auto t1=std::chrono::steady_clock::now();
+        b.times.push_back(std::chrono::duration<double,std::nano>(t1-t0).count());
+        b.stable=b.stable&&identical(first,r)&&r.nfcn==r.actual_calls;
+    }
+    b.elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();return b;
+}
+void timing_block(std::ostream&o,const TimingBlock&b) {
+    o<<"{\"sample_times_ns\":";array(o,b.times);o<<",\"stable_outputs\":"<<std::boolalpha<<b.stable
+     <<",\"validated_outputs\":"<<b.times.size()<<",\"elapsed_seconds\":";number(o,b.elapsed);o<<'}';
+}
 int main(int argc,char**argv) {
     try {
-        if(argc!=4) throw std::runtime_error("usage: cpp_readme_bench INPUT_TRANSPORT OUTPUT_JSON SAMPLES");
-        int samples=std::stoi(argv[3]);if(samples<1)throw std::runtime_error("samples must be positive");
+        if(argc!=7) throw std::runtime_error("usage: cpp_readme_bench INPUT_TRANSPORT OUTPUT_JSON SAMPLES WARMUP_SECONDS BLOCKS BLOCK_SECONDS");
+        auto integer=[](const char* text) {
+            std::string value(text);std::size_t used=0;
+            int n=std::stoi(value,&used);
+            if(used!=value.size()||n<1)throw std::runtime_error("counts must be positive integers");
+            return n;
+        };
+        auto duration=[](const char* text) {
+            std::string value(text);std::size_t used=0;
+            double n=std::stod(value,&used);
+            if(used!=value.size()||!std::isfinite(n)||n<=0)throw std::runtime_error("durations must be finite and positive");
+            return n;
+        };
+        int samples=integer(argv[3]),block_count=integer(argv[5]);
+        double warmup_seconds=duration(argv[4]),block_seconds=duration(argv[6]);
         std::ifstream input(argv[1]);if(!input)throw std::runtime_error("input unavailable");
         std::vector<double> g2(100),g10(1000);
         for(double&x:g2)if(!(input>>x))throw std::runtime_error("invalid gauss2 input");
@@ -113,7 +144,8 @@ int main(int argc,char**argv) {
         MnPrint::SetGlobalLevel(-1);
         std::string final=argv[2],part=final+".tmp";
         std::ofstream out(part);if(!out)throw std::runtime_error("output unavailable");
-        out<<"{\"schema_version\":1,\"language\":\"cpp\",\"clock\":\"steady_clock\",\"warmups\":5,\"evals\":1,\"rows\":[";
+        out<<"{\"schema_version\":1,\"language\":\"cpp\",\"clock\":\"steady_clock\",\"warmups\":5,\"evals\":1,\"timing_reliability\":{\"fixed_warmup_seconds\":";
+        number(out,warmup_seconds);out<<",\"blocks\":"<<block_count<<",\"block_min_seconds\":";number(out,block_seconds);out<<"},\"rows\":[";
         for(unsigned k=0;k<cases.size();++k) {
             const auto&c=cases[k];
             Output first=operation(c);for(int w=1;w<5;++w)operation(c);
@@ -125,9 +157,13 @@ int main(int argc,char**argv) {
                 times.push_back(std::chrono::duration<double,std::nano>(t1-t0).count());
                 stable=stable&&identical(first,r); // Consume all fields, outside timing.
             }
+            TimingBlock warmup=timed_block(c,first,warmup_seconds);std::vector<TimingBlock>blocks;
+            for(int i=0;i<block_count;++i)blocks.push_back(timed_block(c,first,block_seconds));
             if(k)out<<',';
             out<<"{\"name\":\""<<c.name<<"\",\"samples\":"<<samples<<",\"evals\":1,\"stable_outputs\":"<<std::boolalpha<<stable<<",\"sample_times_ns\":";
-            array(out,times);out<<",\"result\":";output(out,first);out<<'}';out.flush();
+            array(out,times);out<<",\"continuous_warmup\":";timing_block(out,warmup);out<<",\"timing_blocks\":[";
+            for(unsigned i=0;i<blocks.size();++i){if(i)out<<',';timing_block(out,blocks[i]);}out<<"],\"result\":";output(out,first);out<<'}';out.flush();
+            {std::ifstream partial(part);std::ofstream checkpoint(final+".checkpoint.tmp");checkpoint<<partial.rdbuf()<<"]}\n";checkpoint.close();if(!checkpoint||std::rename((final+".checkpoint.tmp").c_str(),final.c_str())!=0)throw std::runtime_error("checkpoint failed");}
         }
         out<<"]}\n";out.close();if(!out)throw std::runtime_error("output write failed");
         if(std::rename(part.c_str(),final.c_str())!=0)throw std::runtime_error("output rename failed");

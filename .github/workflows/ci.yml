@@ -28,16 +28,86 @@ on:
     # (10× billing) cost.
     - cron: '0 6 1 * *'
   workflow_dispatch:
+    inputs:
+      compare-minuit2:
+        description: 'Collect and validate a five-pair Minuit2 benchmark record'
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  compare-minuit2:
+    if: github.event_name == 'workflow_dispatch' && inputs.compare-minuit2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.13.2'
+          arch: x64
+      - name: Prepare pinned reference and benchmark dependencies
+        run: |
+          mkdir -p reference
+          git clone --no-checkout https://github.com/GooFit/Minuit2.git reference/Minuit2_cpp
+          git -C reference/Minuit2_cpp checkout --detach 57dc936a2b74d0b4dda1254c3dd63e7c61a97c84
+          cmake -S benchmark/cpp -B "$RUNNER_TEMP/minuit2-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON
+          cmake --build "$RUNNER_TEMP/minuit2-build" --target cpp_readme_bench --parallel 2
+          julia --startup-file=no --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
+      - name: Collect on one logical CPU
+        run: |
+          cpu=$(python3 -c 'import os; print(max(os.sched_getaffinity(0)))')
+          set +e
+          taskset -c "$cpu" python3 benchmark/compare_readme.py --source . \
+            --cpp-binary "$RUNNER_TEMP/minuit2-build/cpp_readme_bench" \
+            --protocol benchmark/readme_protocol.json --out "$RUNNER_TEMP/minuit2-record" --timeout 360
+          code=$?
+          set -e
+          record="$RUNNER_TEMP/minuit2-record"
+          if [ -d "$record" ]; then
+            {
+              printf 'collector exit: %s\nlogical CPU: %s\n' "$code" "$cpu"
+              git rev-parse HEAD
+              git -C reference/Minuit2_cpp rev-parse HEAD
+              julia --version
+              c++ --version
+              uname -sr
+              lscpu
+            } > "$record/runner.txt"
+            cp benchmark/Manifest.toml "$record/julia-manifest.toml"
+          fi
+          # Exit 2 means a complete record with rejected cases. Retain and verify it.
+          test "$code" -eq 0 || test "$code" -eq 2
+      - name: Verify the record and report every case
+        run: |
+          record="$RUNNER_TEMP/minuit2-record"
+          julia --startup-file=no --project=benchmark benchmark/check_readme_evidence.jl "$record"
+          python3 - "$record" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import pathlib
+          import sys
+
+          report = json.loads((pathlib.Path(sys.argv[1]) / "summary.json").read_text())
+          print(f"**{report['verdict']}**")
+          print()
+          print("| Case | Status |")
+          print("| --- | --- |")
+          for name, case in report["cases"].items():
+              print(f"| {name} | {case['status']} |")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minuit2-benchmark-record
+          path: ${{ runner.temp }}/minuit2-record/
+
   # Per-push minimal: just Julia 1 on Ubuntu. ~5 billable minutes,
   # gives fast feedback. macos is 10× billing — only on schedule/tag.
   test-minimal:
-    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.compare-minuit2)
     name: Julia 1 - ubuntu-latest - ${{ github.event_name }}
     runs-on: ubuntu-latest
     steps:
@@ -57,6 +127,8 @@ jobs:
         run: julia --startup-file=no --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
       - name: Check measurement records and failure controls
         run: |
+          python3 -m unittest discover -s benchmark -p 'test_readme_comparison.py'
+          julia --startup-file=no --project=benchmark benchmark/test_readme_evidence.jl
           julia --startup-file=no --threads=2 --project=benchmark benchmark/test_runner.jl
           julia --startup-file=no --threads=2 --project=benchmark benchmark/test_package_evidence.jl
           julia --startup-file=no --threads=2 --project=benchmark benchmark/test_atomic_writes.jl
@@ -72,7 +144,7 @@ jobs:
   # (macos-14, Apple Silicon — macOS bills 10×); Julia 1.11 is the declared
   # compat floor (Project.toml: julia = "1.11").
   test-full:
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.compare-minuit2)
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - full
     runs-on: ${{ matrix.os }}
     strategy:
@@ -108,12 +180,15 @@ jobs:
         run: julia --startup-file=no --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
       - name: Check measurement records and failure controls
         run: |
+          python3 -m unittest discover -s benchmark -p 'test_readme_comparison.py'
+          julia --startup-file=no --project=benchmark benchmark/test_readme_evidence.jl
           julia --startup-file=no --threads=2 --project=benchmark benchmark/test_runner.jl
           julia --startup-file=no --threads=2 --project=benchmark benchmark/test_package_evidence.jl
           julia --startup-file=no --threads=2 --project=benchmark benchmark/test_atomic_writes.jl
           julia --startup-file=no --threads=2 --project=benchmark benchmark/test_blas_configuration.jl
 
   jet-diagnostics:
+    if: github.event_name != 'workflow_dispatch' || !inputs.compare-minuit2
     name: JET diagnostics - Julia 1.11.7 / JET 0.9.20
     runs-on: ubuntu-latest
     steps:
