@@ -52,7 +52,11 @@ class AdmissionTests(unittest.TestCase):
 
     def test_changed_warmup_duration_rejects_short_records(self):
         p = copy.deepcopy(self.p)
-        p["timing_reliability"]["fixed_warmup_seconds"] = 2.0
+        timing = p["timing_reliability"]
+        timing["fixed_warmup_seconds"] *= 2
+        for pair in self.records:
+            for process in pair:
+                process["timing_reliability"]["fixed_warmup_seconds"] = timing["fixed_warmup_seconds"]
         self.assertFalse(self.admitted(p=p))
 
     def test_changed_block_duration_rejects_short_records(self):
