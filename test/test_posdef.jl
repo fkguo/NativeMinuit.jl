@@ -160,11 +160,18 @@
         end
         cases = Dict(
             "already-posdef" => Float64[4.0 1.0 0.0; 1.0 5.0 0.5; 0.0 0.5 6.0],
+            "large-row-radius" => Float64[1.0 0.99 0.99; 0.99 1.0 -0.99; 0.99 -0.99 1.0],
             "negative-diag"  => Float64[-0.5 0.1; 0.1 2.0],
             "indefinite"     => Float64[1.0 5.0; 5.0 1.0],
             "n1-ok"          => fill(2.5, 1, 1),
             "n1-clamp"       => fill(1e-20, 1, 1),
         )
+        # Moderate total radius, spread over several upper-triangle entries.
+        weakly_coupled = fill(0.02, 8, 8)
+        for i in 1:8
+            weakly_coupled[i, i] = 1.0
+        end
+        cases["weakly-coupled"] = weakly_coupled
         for (name, M) in cases
             r = parity(M)
             @test r.m1 == r.ref        # bit-identical matrix (self-scratch)

@@ -256,6 +256,31 @@ end
            abs(p12) <= 0.25 ? (d1, d2) : nothing
 end
 
+# Use the same normalized entries as the eigenvalue gate. Diagonals in
+# [0.75, 1.25] and row radii at most 0.25 bound the spectrum to [0.5, 1.5].
+# The gap to the worst permitted gate (0.25 * 1.5) is much larger than
+# rounding in at most 127 nonnegative terms per radius. A failed check
+# leaves M untouched for the general eigensolve.
+function _sufficient_posdef_upper(M::Matrix{Float64}, s::Vector{Float64})
+    n = length(s)
+    @inbounds for i in 1:n
+        s[i] = 1.0 / sqrt(M[i, i])
+        0.75 <= M[i, i] * s[i] * s[i] <= 1.25 || return false
+    end
+    @inbounds for i in 1:n
+        radius = 0.0
+        si = s[i]
+        for j in 1:(i - 1)
+            radius += abs(M[j, i] * si * s[j])
+        end
+        for j in (i + 1):n
+            radius += abs(M[i, j] * s[j] * si)
+        end
+        radius <= 0.25 || return false
+    end
+    return true
+end
+
 function _make_posdef_finite_upper!(M::Matrix{Float64}, n::Int, prec::MachinePrecision,
                                   p_buf::Union{Nothing,Matrix{Float64}},
                                   s_buf::Union{Nothing,Vector{Float64}})
@@ -295,10 +320,18 @@ function _make_posdef_finite_upper!(M::Matrix{Float64}, n::Int, prec::MachinePre
         end
     end
 
+    # For modest matrices with an already positive diagonal, try a
+    # sufficient check before allocating the correlation matrix. Caller
+    # scratch still receives the original eigensolve's writes.
+    s = s_buf === nothing ? Vector{Float64}(undef, n) : s_buf
+    if 3 <= n <= 128 && dgmin > 0.0 && epspdf <= 0.25 &&
+       p_buf === nothing && s_buf === nothing && _sufficient_posdef_upper(M, s)
+        return false
+    end
+
     # Normalized correlation matrix p and diagonal add (MnPosDef.cxx:67-77),
     # written in place into M (diagonal) and the upper triangle of p_buf.
     p_M = p_buf === nothing ? Matrix{Float64}(undef, n, n) : p_buf
-    s = s_buf === nothing ? Vector{Float64}(undef, n) : s_buf
     @inbounds for i in 1:n
         M[i, i] += dg
         if M[i, i] < 0
