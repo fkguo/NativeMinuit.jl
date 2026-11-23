@@ -42,7 +42,12 @@ function update!(sp::SimplexParameters, y::Float64, p::AbstractVector{Float64};
     # exposed to the objective. Copy into the departing vertex after each trial.
     # A callback may resize a trial, in which case retain its full new shape.
     old = sp.pts[sp.jh][2]
-    vertex = reuse_vertex && axes(old) == axes(p) ? copyto!(old, p) : copy(p)
+    vertex = if reuse_vertex && old isa Vector{Float64} && p isa Vector{Float64} &&
+                length(old) == length(p)
+        copyto!(old, p)
+    else
+        copy(p)
+    end
     sp.pts[sp.jh] = (y, vertex)
     if y < sp.pts[sp.jl][1]
         sp.jl = sp.jh
