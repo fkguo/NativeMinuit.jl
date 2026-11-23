@@ -104,6 +104,10 @@ compilation and data preparation. The C++ entry point is
 `VariableMetricMinimizer::Minimize`. The workload excludes optional global
 correlation coefficients.
 
+For the two-parameter Gaussian likelihood, both callbacks compute the log of
+the fitted width and its square once per evaluation and reuse them for all
+observations.
+
 The table reports medians over 10 pairs of fresh Julia and C++ processes.
 Each process contributes the median of six timing blocks after warmup. The
 ratio is calculated within each pair, then summarized by its median and
@@ -113,11 +117,11 @@ medians. Those rows show the variation observed on this MacBook.
 
 | Benchmark | Julia (μs) | C++ (μs) | Median Julia/C++ | Observed ratio range | Timing |
 |---|---:|---:|---:|---:|---|
-| `quad_4d` | 0.90 | 3.91 | 0.22 | 0.21–0.25 | Variable |
-| `rosenbrock_2d` | 8.11 | 46.24 | 0.18 | 0.16–0.19 | Variable |
-| `rosenbrock_10d` | 51.53 | 197.19 | 0.27 | 0.00146–0.29 | Variable |
-| `gauss_ll_2_100` | 19.37 | 16.09 | 1.14 | 1.03–1.26 | Variable |
-| `gauss_ll_10_1000` | 30.80 | 37.50 | 0.82 | 0.79–0.89 | Variable |
+| `quad_4d` | 1.03 | 4.46 | 0.23 | 0.15–0.32 | Variable |
+| `rosenbrock_2d` | 9.21 | 52.19 | 0.18 | 0.14–0.21 | Variable |
+| `rosenbrock_10d` | 59.85 | 215.64 | 0.27 | 0.22–0.31 | Variable |
+| `gauss_ll_2_100` | 6.29 | 18.00 | 0.35 | 0.32–0.44 | Variable |
+| `gauss_ll_10_1000` | 33.28 | 40.51 | 0.81 | 0.70–0.91 | Variable |
 
 The quadratic and both Gaussian fits passed the strict output comparison.
 Both Rosenbrock cases passed the diagnostic checks at the same stopping
@@ -125,9 +129,6 @@ settings. The final objectives were:
 
 - Two dimensions: $3.3546 \times 10^{-6}$ in Julia (194 calls) and $3.3539 \times 10^{-6}$ in C++ (194 calls).
 - Ten dimensions: $3.7471 \times 10^{-5}$ in Julia (1625 calls) and $4.8277 \times 10^{-5}$ in C++ (1607 calls).
-
-The ten-dimensional range includes one C++ process with a median of
-38.0 ms per fit.
 
 See the [measurement record](benchmark/results/readme_080_macos.json) for the
 per-pair timings, numerical results and source versions, and the

@@ -43,6 +43,8 @@ and [Semantic Versioning](https://semver.org/).
 - Report matched core-MIGRAD timings and observed variation on an Apple M3
   MacBook, with terminal objectives and call counts for the two Rosenbrock
   cases.
+- Reuse the two-parameter Gaussian likelihood's width-dependent terms across
+  observations in both benchmark objectives.
 
 ### Documentation
 

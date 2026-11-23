@@ -9,6 +9,10 @@ blocks of at least 100 ms per objective. The process statistic is the median
 of its block medians. The README gives the median and observed range of the
 ratios calculated within each Julia/C++ process pair.
 
+In the two-parameter Gaussian case, both objectives compute the log of the
+width and its square once per likelihood evaluation. The per-observation
+formula and accumulation order are identical to the earlier objective.
+
 The quadratic and Gaussian cases use the strict numerical comparison.
 Rosenbrock comparisons use the same stopping settings and require both
 results to be valid and pass the recorded diagnostic tolerances. Final
@@ -16,20 +20,21 @@ objective values and call counts are reported for these two cases. A row
 marked **Variable** has a largest-to-smallest spread above 10% in the
 paired ratios or in the block medians of at least one implementation.
 
-To reproduce the macOS run, use the package commit and the collector commit
+To reproduce the macOS run, use the workload commit and the collector commit
 from the measurement record in a separate checkout. Copy the fixed-duration
 collectors and their protocol into that checkout:
 
 ```sh
-git worktree add --detach ../nativeminuit-benchmark d6f0cdb03c12a4d0e586d6b1a7f30f88651cd352
+git worktree add --detach ../nativeminuit-benchmark bac2ad6c92bd99c650fabf14e41973d069cc43a0
 git archive 39e7dd5dd99dfed795e86db658bc827f9dea2452 \
   benchmark/check_readme_evidence.jl benchmark/compare_readme.py \
   benchmark/cpp/cpp_readme_bench.cxx benchmark/readme_julia_bench.jl \
   benchmark/readme_protocol.json | tar -x -C ../nativeminuit-benchmark
 cd ../nativeminuit-benchmark
+git diff 942b733 bac2ad6 -- benchmark/cpp/cpp_readme_bench.cxx | git apply
 ```
 
-Set `julia_commit` in the copied protocol to the package commit from the
+Set `julia_commit` in the copied protocol to the workload commit from the
 measurement record. Establish the pinned C++ reference and use the build and
 collection commands below. For a second session, reverse the two languages
 in each process pair. The collectors retain all completed observations.
