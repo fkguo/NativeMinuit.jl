@@ -469,6 +469,11 @@ function numerical_gradient!(
     # IGNORED — `analytical_gradient!` makes a single `cf.g(par.x)`
     # call (the AD library handles its own parallelism if any), so
     # there's no per-parameter loop here to thread.
+    return analytical_gradient!(out, par, cf, prev, prec)
+end
+
+@inline function _migrad_gradient!(out, work, par, prev, cf::CostFunctionWithGradient,
+                                   strategy, prec, threaded, has_limits)
     return _analytical_gradient!(out, par, cf, prev, out.grad)
 end
 

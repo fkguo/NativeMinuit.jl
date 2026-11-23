@@ -541,6 +541,11 @@ _migrad_second_pass_invalid(ipass::Integer, s0::MinimumState,
 @inline _zero_gradient_norm(g::Vector{Float64}) =
     isempty(g) || (abs(first(g)) < sqrt(floatmin(Float64)) && dot(g, g) <= 0)
 
+@inline function _migrad_gradient!(out, work, par, prev, cf, strategy, prec,
+                                   threaded, has_limits)
+    return numerical_gradient!(out, work, par, prev, cf, strategy, prec; threaded, has_limits)
+end
+
 """
     _migrad_loop(seed, cf, strategy, tol, maxfcn, prec;
                  scratch=nothing) -> FunctionMinimum
@@ -908,9 +913,8 @@ function _migrad_loop(
             # `out` (= new_grad) and `prev` (= s0.gradient) reference
             # disjoint buffer sets, so the copyto! is well-defined.
             new_grad = FunctionGradient(ng_buf, ng2_buf, ngs_buf)
-            numerical_gradient!(new_grad, grad_work, new_par, s0.gradient,
-                                 cf, strategy, prec;
-                                 threaded = threaded_gradient, has_limits = has_limits)
+            _migrad_gradient!(new_grad, grad_work, new_par, s0.gradient,
+                              cf, strategy, prec, threaded_gradient, has_limits)
 
             # ── Step 6: EDM using OLD error matrix (C++ line 300).
             # `estimate_edm!` reuses vg_work; the allocating `estimate_edm`
