@@ -30,7 +30,7 @@ mutable struct _ForwardDiffWorkspace
     busy::Bool
 end
 
-struct _ForwardDiffGradient{F,C}
+struct _ForwardDiffGradient{F,C} <: Function
     objective::F
     chunk::C
     owner::Task

@@ -108,6 +108,7 @@ _has_checkgrad_warning(logs) =
         f = x -> (x[1] - 1)^2 + 4 * (x[2] - 2)^2
         cf = CostFunctionAD(f, 1.0)
         @test cf isa CostFunctionWithGradient
+        @test cf.g isa Function
         # Gradient matches manual: ∇f = [2(x[1]-1), 8(x[2]-2)]
         @test cf.g([0.0, 0.0]) ≈ [-2.0, -16.0] atol = 1e-12
         @test cf.g([1.0, 2.0]) ≈ [0.0, 0.0] atol = 1e-12
