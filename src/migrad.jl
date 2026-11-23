@@ -82,11 +82,15 @@ end
 
 MigradScratch(n::Integer) = MigradScratch(Vector{Float64}(undef, Int(n)))
 
-function MigradScratch(active::AbstractVector{Float64})
+MigradScratch(active::AbstractVector{Float64}) = MigradScratch(active, false)
+
+function MigradScratch(active::AbstractVector{Float64}, private_hessian::Bool)
     n_ = length(active)
     n_ >= 1 ||
         throw(ArgumentError("MigradScratch n must be ≥ 1, got $n_"))
     makevec() = similar(active, Float64)
+    V_a = Symmetric(Matrix{Float64}(undef, n_, n_), :U)
+    V_b = private_hessian ? V_a : Symmetric(Matrix{Float64}(undef, n_, n_), :U)
     MigradScratch(
         n_,
         makevec(),
@@ -100,8 +104,7 @@ function MigradScratch(active::AbstractVector{Float64})
         makevec(), makevec(),
         makevec(), makevec(),
         makevec(), makevec(),
-        Symmetric(Matrix{Float64}(undef, n_, n_), :U),
-        Symmetric(Matrix{Float64}(undef, n_, n_), :U),
+        V_a, V_b,
     )
 end
 
@@ -742,7 +745,15 @@ function _migrad_loop(
             "the active container $(typeof(seed.parameters.x)); construct it " *
             "from the active vector."))
     end
-    s_eff = scratch === nothing ? MigradScratch(seed.parameters.x) : scratch
+    # The incoming Hessian remains live through the trial EDM check. Once
+    # accepted, the Davidon update may overwrite a fit-private Hessian:
+    # the seed is separate and every retained state has its own matrix.
+    # Caller-supplied pools retain their original two-buffer behavior.
+    s_eff = if scratch === nothing
+        MigradScratch(seed.parameters.x, seed.parameters.x isa Vector{Float64})
+    else
+        scratch
+    end
     step      = s_eff.step
     ls_work   = s_eff.ls_work
     grad_work = s_eff.grad_work
@@ -918,23 +929,8 @@ function _migrad_loop(
             @inbounds @. dx_buf = new_par.x - s0.parameters.x
             @inbounds @. dg_buf = new_grad.grad - s0.gradient.grad
 
-            # Copy s0's V into nV_buf's storage, then mutate in place.
-            # `parent(...)` strips the Symmetric wrapper to the underlying
-            # Matrix; we only need to copy the upper triangle but copyto!
-            # on the full storage is faster (no branches) and the lower
-            # half is unused by Symmetric(:U) semantics anyway.
-            #
-            # Self-copy guard (Phase D): when `scratch` is reused across
-            # `MnFunctionCross` probes AND the previous probe's final
-            # write landed on the same ping-pong slot the new iter just
-            # selected, `s0.error.inv_hessian` (wrapping prev's final
-            # V_a/V_b) can ALIAS `nV_buf`. `copyto!(M, M)` on plain
-            # `Matrix{Float64}` is a well-defined no-op today, but
-            # treating the storage identity check as the invariant
-            # protects against any future move to view-based / sparse
-            # inv_hessian storage where `copyto!` overlap is UB.
-            # (Phase A reviewer's NICE-TO-HAVE; cost = one pointer
-            # comparison per inner iter, ~ns.)
+            # Copy in the seed or any replacement from HESSE or MnPosDef.
+            # Later private updates already have the accepted Hessian here.
             dst_M = parent(nV_buf)
             src_M = parent(s0.error.inv_hessian)
             if dst_M !== src_M

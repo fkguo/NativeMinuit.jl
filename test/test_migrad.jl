@@ -2,6 +2,18 @@
 
 @testset "migrad.jl — MIGRAD loop" begin
 
+    @testset "seed and recorded Hessians remain independent" begin
+        rosen(x) = (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2
+        for level in (0, 1)
+            m = migrad(CostFunction(rosen), [-1.2, 1.0], [0.1, 0.1];
+                       strategy = Strategy(level), storage_level = 1)
+            @test length(m.states) > 2
+            matrices = [parent(s.error.inv_hessian) for s in [m.seed; m.states; m.state]]
+            @test all(i == j || !Base.mightalias(matrices[i], matrices[j])
+                      for i in eachindex(matrices), j in eachindex(matrices))
+        end
+    end
+
     @testset "Quad-1D: f(x) = x²" begin
         cf = CostFunction(x -> x[1]^2)
         m = migrad(cf, [3.0], [0.1])
