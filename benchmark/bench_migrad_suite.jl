@@ -18,10 +18,12 @@ function gauss_nll(data)
     return function (p)
         mu, sigma = p
         sigma <= 0 && return 1e30
+        log_sigma = log(sigma)
+        sigma_squared = sigma * sigma
         s = 0.0
         for x in data
             d = x - mu
-            s += log(sigma) + 0.5 * (d * d) / (sigma * sigma)
+            s += log_sigma + 0.5 * (d * d) / sigma_squared
         end
         s
     end
