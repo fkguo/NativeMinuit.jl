@@ -220,9 +220,6 @@ function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
             throw(ArgumentError("make_posdef!: s_buf must not alias parent(S)"))
     end
 
-    eps = prec.eps
-    eps2 = prec.eps2
-
     # P6 guard — same rationale as the allocating `make_posdef(err)`
     # above: never feed a non-finite matrix to LAPACK eigvals. Leave `S`
     # untouched and report `true` (the MnMadePosDef tag would apply);
@@ -232,7 +229,14 @@ function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
             return true
         end
     end
+    return _make_posdef_finite_upper!(M, n, prec, p_buf, s_buf)
+end
 
+function _make_posdef_finite_upper!(M::Matrix{Float64}, n::Int, prec::MachinePrecision,
+                                  p_buf::Union{Nothing,Matrix{Float64}},
+                                  s_buf::Union{Nothing,Vector{Float64}})
+    eps = prec.eps
+    eps2 = prec.eps2
     # n=1 fast path (MnPosDef.cxx:37-43) — mutate in place.
     if n == 1
         if M[1, 1] < eps
