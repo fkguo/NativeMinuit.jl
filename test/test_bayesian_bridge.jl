@@ -425,6 +425,27 @@ end
         @test NativeMinuit._ess_one([1.0, 1.0, 1.0, 1.0]) == 0.0
     end
 
+    @testset "ESS preserves serial arithmetic when scheduled across tasks" begin
+        samples = randn(MersenneTwister(17), 2048, 8)
+        samples[:, 2] .= 1.0
+        samples[3, 4] = NaN
+        columns = [8, 1, 4, 3, 5, 6, 7, 2]
+        rows = [collect(i:4:2048) for i in 1:4]
+        expected = map(columns) do col
+            ess = 0.0
+            for indices in rows
+                ess += NativeMinuit._ess_one(samples[indices, col])
+            end
+            ess
+        end
+        @test !NativeMinuit._thread_ess(view(samples, 1:32, :), length(columns))
+        @test !NativeMinuit._thread_ess(samples, 3)
+        @test NativeMinuit._thread_ess(samples, length(columns)) == (Threads.threadpoolsize() > 1)
+        @test isequal(NativeMinuit._posterior_ess(samples, rows, columns), expected)
+        task = Threads.@spawn NativeMinuit._posterior_ess(samples, rows, columns)
+        @test isequal(fetch(task), expected)
+    end
+
     @testset "PosteriorSample constructor validates diagnostic shapes" begin
         samples = reshape([0.0, 1.0], :, 1)
         ens = LikelihoodEnsemble(samples, [0.0, 1.0], ["x"], [true], [0.0],

@@ -762,14 +762,33 @@ end
 _posterior_ess(samples, chain_ids, free_idx, nchains) =
     _posterior_ess(samples, _posterior_chain_rows(chain_ids, nchains), free_idx)
 
+function _ess_parameter(samples, chain_rows, col)
+    ess = 0.0
+    for rows in chain_rows
+        ess += _ess_one(samples[rows, col])
+    end
+    return ess
+end
+
+function _thread_ess(samples, nfree)
+    # The work per parameter depends on its autocorrelation as well as row
+    # count. Require enough data to amortize scheduling even for short lags.
+    return samples isa Matrix{Float64} && Threads.threadpoolsize() > 1 &&
+           nfree >= 4 && size(samples, 1) >= max(512, cld(16_384, nfree))
+end
+
 function _posterior_ess(samples, chain_rows, free_idx)
     out = Vector{Float64}(undef, length(free_idx))
-    for (jj, col) in enumerate(free_idx)
-        ess = 0.0
-        for rows in chain_rows
-            ess += _ess_one(samples[rows, col])
+    if _thread_ess(samples, length(free_idx))
+        # Each task writes a different output. Within each parameter the
+        # chain order and autocorrelation arithmetic are the serial ones.
+        Threads.@threads :dynamic for j in eachindex(free_idx)
+            out[j] = _ess_parameter(samples, chain_rows, free_idx[j])
         end
-        out[jj] = ess
+        return out
+    end
+    for (jj, col) in enumerate(free_idx)
+        out[jj] = _ess_parameter(samples, chain_rows, col)
     end
     return out
 end
