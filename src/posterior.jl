@@ -821,7 +821,7 @@ function credible_interval(post::PosteriorSample, par; level::Real = 0.6827,
     method === :central ||
         throw(ArgumentError("MVP credible_interval supports method=:central only"))
     idx = _posterior_col(post, par)
-    lo, hi = quantile(collect(@view post.ensemble.samples[:, idx]), collect(_central_probs(level)))
+    lo, hi = quantile!(collect(@view post.ensemble.samples[:, idx]), collect(_central_probs(level)))
     return (lo, hi)
 end
 
@@ -834,7 +834,7 @@ One-sided Bayesian upper credible limit: the value `x` with
 function upper_limit(post::PosteriorSample, par; level::Real = 0.90)
     _check_level(level)
     idx = _posterior_col(post, par)
-    lim = quantile(collect(@view post.ensemble.samples[:, idx]), Float64(level))
+    lim = quantile!(collect(@view post.ensemble.samples[:, idx]), Float64(level))
     free_pos = findfirst(==(idx), findall(post.ensemble.free))
     b = free_pos === nothing ? false : post.boundary_active[free_pos]
     return CredibleLimit(post.ensemble.names[idx], lim, Float64(level), :upper,
@@ -850,7 +850,7 @@ One-sided Bayesian lower credible limit: the value `x` with
 function lower_limit(post::PosteriorSample, par; level::Real = 0.90)
     _check_level(level)
     idx = _posterior_col(post, par)
-    lim = quantile(collect(@view post.ensemble.samples[:, idx]), 1 - Float64(level))
+    lim = quantile!(collect(@view post.ensemble.samples[:, idx]), 1 - Float64(level))
     free_pos = findfirst(==(idx), findall(post.ensemble.free))
     b = free_pos === nothing ? false : post.boundary_active[free_pos]
     return CredibleLimit(post.ensemble.names[idx], lim, Float64(level), :lower,
@@ -886,7 +886,7 @@ posterior_mean(post::PosteriorSample, par) =
 Posterior median of parameter `par` (name or index).
 """
 posterior_median(post::PosteriorSample, par) =
-    quantile(collect(@view post.ensemble.samples[:, _posterior_col(post, par)]), 0.5)
+    quantile!(collect(@view post.ensemble.samples[:, _posterior_col(post, par)]), 0.5)
 
 """
     posterior_std(post::PosteriorSample, par) -> Float64
