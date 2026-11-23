@@ -290,7 +290,7 @@ function numerical_gradient!(
         xtf = x_work[i]
         epspri = eps2 + abs(out.grad[i] * eps2)
         stepb4 = 0.0
-        for _ in 1:ncycle
+        for cycle in 1:ncycle
             optstp = sqrt(dfmin / (abs(out.g2[i]) + epspri))
             step = max(optstp, abs(0.1 * out.gstep[i]))
             if has_limits !== nothing && has_limits[i]
@@ -304,7 +304,10 @@ function numerical_gradient!(
             if step < stpmin
                 step = stpmin
             end
-            if abs((step - stepb4) / step) < step_tol
+            # With stepb4 = 0 the Float64 ratio is 1 for finite nonzero
+            # steps and NaN otherwise. No preset tolerance exceeds 1.
+            if (cycle != 1 || !(step isa Float64 && step_tol <= 1.0)) &&
+               abs((step - stepb4) / step) < step_tol
                 break
             end
             out.gstep[i] = step
@@ -320,7 +323,10 @@ function numerical_gradient!(
             out.grad[i] = 0.5 * (fs1 - fs2) / step
             out.g2[i] = (fs1 + fs2 - 2.0 * fcnmin) / (step * step)
 
-            if abs(grdb4 - out.grad[i]) / (abs(out.grad[i]) + dfmin / step) < grad_tol
+            # The last cycle has no successor. Preserve custom scalar and
+            # coordinate access semantics outside the dense Float64 path.
+            if (cycle != ncycle || !(dfmin isa Float64 && out.grad isa Vector{Float64})) &&
+               abs(grdb4 - out.grad[i]) / (abs(out.grad[i]) + dfmin / step) < grad_tol
                 break
             end
         end

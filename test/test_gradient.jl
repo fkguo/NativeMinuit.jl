@@ -5,6 +5,18 @@
 
 @testset "gradient.jl" begin
 
+    @testset "custom first-cycle tolerance" begin
+        x = [0.0, 1.0]
+        prev = FunctionGradient([0.0, 2.0], [2.0, 2.0], [0.1, 0.1])
+        for (tolerance, expected_calls) in ((1.0, 4), (nextfloat(1.0), 0))
+            cf = CostFunction(v -> sum(abs2, v))
+            out = FunctionGradient(zeros(2), zeros(2), zeros(2))
+            strategy = Strategy(0, 1, tolerance, 0.05, 3, 0.5, 0.1, 1)
+            numerical_gradient!(out, similar(x), MinimumParameters(x, 1.0), prev, cf, strategy)
+            @test ncalls(cf) == expected_calls
+        end
+    end
+
     # ─────────────────────────────────────────────────────────
     @testset "initial_gradient! on quadratic" begin
         # f(x) = Σ xᵢ²; analytical ∇f(1) = (2, 2, ..., 2); g2 = 2

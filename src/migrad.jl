@@ -533,6 +533,12 @@ _migrad_second_pass_invalid(ipass::Integer, s0::MinimumState,
     ipass > 0 && (!is_valid(s0) ||
                   _migrad_inner_above_max(s0, edm_corrected, edmval, prec))
 
+# One normally representable square guarantees that the sum of squares is
+# positive or NaN. Tiny leading entries keep the original underflow behavior.
+@inline _zero_gradient_norm(g::AbstractVector{Float64}) = dot(g, g) <= 0
+@inline _zero_gradient_norm(g::Vector{Float64}) =
+    isempty(g) || (abs(first(g)) < sqrt(floatmin(Float64)) && dot(g, g) <= 0)
+
 """
     _migrad_loop(seed, cf, strategy, tol, maxfcn, prec;
                  scratch=nothing) -> FunctionMinimum
@@ -832,7 +838,7 @@ function _migrad_loop(
             sym_mul!(step, s0.error.inv_hessian, s0.gradient.grad, -1.0, 0.0)
 
             # ── Check zero gradient (C++ line 247-250)
-            if dot(s0.gradient.grad, s0.gradient.grad) <= 0
+            if _zero_gradient_norm(s0.gradient.grad)
                 break
             end
 
