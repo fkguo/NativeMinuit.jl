@@ -77,6 +77,28 @@
         @test cov[1, 2] == cov[2, 1]
     end
 
+    @testset "External covariance preserves each triangle's multiplication order" begin
+        ps = Parameters([
+            MinuitParameter("a", 0.0, 0.1; lower = 0.0),
+            MinuitParameter("fixed", -0.0, 0.2; fixed = true),
+            MinuitParameter("b", 0.0, 0.1; upper = 3.0),
+        ])
+        x = [0.7, -1.8]
+        v = 0.11
+        up = 0.71
+        err = MinimumError([2.0 v; v 3.0], 0.0)
+        state = MinimumState(MinimumParameters(x, 0.0), err, FunctionGradient(2), 0.0, 1)
+        fm = FunctionMinimum(state, state, up)
+        vals, _, cov = NativeMinuit._internal_to_external_results(fm, ps, up)
+        a, b = (dint2ext_value(ps, i, x[i]) for i in 1:2)
+        ab = 2.0 * up * v * a * b
+        ba = 2.0 * up * v * b * a
+        @test ab != ba
+        @test (cov[1, 3], cov[3, 1]) === (ab, ba)
+        @test all(iszero, cov[2, :]) && all(iszero, cov[:, 2])
+        @test vals[2] === -0.0
+    end
+
     @testset "free_covariance: C++ MnUserParameterState shape (D4)" begin
         # 3 params, fix middle one
         cf = CostFunction(x -> sum(abs2, x .- [1.0, 2.0, 3.0]))

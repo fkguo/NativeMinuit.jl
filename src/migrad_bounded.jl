@@ -276,14 +276,21 @@ function _internal_to_external_results(
         # where D = diag(dint2ext) and C_int = 2·up·V_int (per C++; see
         # result.jl::covariance).
         c_int_scale = 2.0 * up
-        cov_free = zeros(Float64, n_active, n_active)
-        @inbounds for i in 1:n_active, j in 1:n_active
-            cov_free[i, j] = c_int_scale * V_int[i, j] *
-                              dint2ext_diag[i] * dint2ext_diag[j]
+        # Write directly to the full external matrix. Fixed rows and columns
+        # stay zero. Compute both triangles: interchanging the two Jacobian
+        # factors can change the last bit of an off-diagonal entry.
+        cov_full = zeros(Float64, n_total, n_total)
+        @inbounds for j in 1:n_active
+            ej = params.ext_of_int[j]
+            for i in 1:n_active
+                ei = params.ext_of_int[i]
+                cov_full[ei, ej] = c_int_scale * V_int[i, j] *
+                                   dint2ext_diag[i] * dint2ext_diag[j]
+            end
         end
 
         # Set diagonal external errors. For unbounded parameters the
-        # Jacobian-diagonal sqrt(cov_free[i,i]) is exact. For bounded
+        # Jacobian-diagonal sqrt(cov_full[ext_idx,ext_idx]) is exact. For bounded
         # parameters near the boundary the Jacobian shrinks (the sin
         # transform's derivative goes to 0 at the limit) — use the C++
         # `Int2extError` two-sided formula instead (parallel-review #4 D5).
@@ -302,17 +309,10 @@ function _internal_to_external_results(
                 ext_errors_vec[ext_idx] = int2ext_error(
                     kind, int_x[int_idx], int_err, par.lower, par.upper)
             else
-                ext_errors_vec[ext_idx] = sqrt(max(cov_free[int_idx, int_idx], 0.0))
+                ext_errors_vec[ext_idx] = sqrt(max(cov_full[ext_idx, ext_idx], 0.0))
             end
         end
 
-        # Promote to n_total × n_total covariance (fixed params get 0 row/col)
-        cov_full = zeros(Float64, n_total, n_total)
-        @inbounds for i in 1:n_active, j in 1:n_active
-            ei = params.ext_of_int[i]
-            ej = params.ext_of_int[j]
-            cov_full[ei, ej] = cov_free[i, j]
-        end
         ext_cov_mat = cov_full
     else
         # No covariance available — fall back to user's initial errors
