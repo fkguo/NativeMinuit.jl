@@ -111,17 +111,18 @@ observations.
 The table reports medians over 10 pairs of fresh Julia and C++ processes.
 Each process contributes the median of six timing blocks after warmup. The
 ratio is calculated within each pair, then summarized by its median and
-observed range. Values below 1 indicate shorter Julia times. **Variable** marks
-a spread greater than 10% in the paired ratios or in either language's block
-medians. Those rows show the variation observed on this MacBook.
+observed range. Values below 1 indicate shorter Julia times.
 
-| Benchmark | Julia (μs) | C++ (μs) | Median Julia/C++ | Observed ratio range | Timing |
-|---|---:|---:|---:|---:|---|
-| `quad_4d` | 1.03 | 4.46 | 0.23 | 0.15–0.32 | Variable |
-| `rosenbrock_2d` | 9.21 | 52.19 | 0.18 | 0.14–0.21 | Variable |
-| `rosenbrock_10d` | 59.85 | 215.64 | 0.27 | 0.22–0.31 | Variable |
-| `gauss_ll_2_100` | 6.29 | 18.00 | 0.35 | 0.32–0.44 | Variable |
-| `gauss_ll_10_1000` | 33.28 | 40.51 | 0.81 | 0.70–0.91 | Variable |
+| Benchmark | Julia (μs) | C++ (μs) | Median Julia/C++ | Observed ratio range |
+|---|---:|---:|---:|---:|
+| `quad_4d` | 0.93 | 4.2 | 0.22 | 0.21–0.24 |
+| `rosenbrock_2d` | 8.3 | 48 | 0.17 | 0.17–0.19 |
+| `rosenbrock_10d` | 54 | 200 | 0.27 | 0.24–0.30 |
+| `gauss_ll_2_100` | 5.8 | 16 | 0.35 | 0.31–0.44 |
+| `gauss_ll_10_1000` | 31 | 38 | 0.82 | 0.80–0.84 |
+
+Timing varied by more than 10% for the quadratic, both Rosenbrock cases,
+and the two-parameter Gaussian.
 
 The quadratic and both Gaussian fits passed the strict output comparison.
 Both Rosenbrock cases passed the diagnostic checks at the same stopping
