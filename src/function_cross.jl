@@ -954,13 +954,21 @@ function _conditional_prior_cov(err::MinimumError, idxs;
                                 prec::MachinePrecision = MachinePrecision())
     is_available(err) || return nothing
     e = err
-    for i in sort!(Int[idxs...]; rev = true)
+    ordered = idxs isa Tuple{Int} ? idxs : sort!(Int[idxs...]; rev = true)
+    for i in ordered
         e = squeeze_error(e, i; prec = prec)
         e.status == MnInvertFailed && return nothing
     end
-    # Materialise the full symmetric matrix (the `Symmetric` wrapper only
-    # carries the upper triangle, which `seed_state`'s symmetry check rejects).
-    return Matrix(e.inv_hessian)
+    # With no squeeze, the input's storage still belongs to the caller.
+    isempty(ordered) && return Matrix(e.inv_hessian)
+
+    # A squeeze returns a new upper-triangular matrix. Complete its lower
+    # triangle in place for seed_state's symmetry check.
+    V = parent(e.inv_hessian)
+    @inbounds for j in axes(V, 2), i in (j + 1):size(V, 1)
+        V[i, j] = V[j, i]
+    end
+    return V
 end
 
 function function_cross_multi(

@@ -5,6 +5,18 @@ using LinearAlgebra: Symmetric
 @testset "covariance_squeeze.jl — MnCovarianceSqueeze" begin
     prec = MachinePrecision()
 
+    @testset "Conditional seed covariance materializes owned storage" begin
+        M = Float64[4.0 1.0 0.2; -1.0 3.0 0.3; -1.0 -1.0 2.0]
+        err = MinimumError(Symmetric(M, :U), 0.125)
+        expected = Matrix(NativeMinuit.squeeze_error(err, 2).inv_hessian)
+        squeezed = NativeMinuit._conditional_prior_cov(err, (2,))
+        @test squeezed == expected
+        @test !Base.mightalias(squeezed, M)
+        unchanged = NativeMinuit._conditional_prior_cov(err, ())
+        @test unchanged == Matrix(err.inv_hessian)
+        @test !Base.mightalias(unchanged, M)
+    end
+
     @testset "squeeze_symmetric — pure drop row/col" begin
         # Construct a 3×3 symmetric matrix and drop the middle row/col
         M = Float64[1 2 3; 0 4 5; 0 0 6]
