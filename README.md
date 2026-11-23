@@ -91,7 +91,7 @@ Each is detailed in the sections below.
 
 ## Performance
 
-Measured on **2026-10-14**, using NativeMinuit **0.7.5** at
+Measured on **2026-10-14**, using the NativeMinuit development snapshot at
 [`68de553c`](https://github.com/fkguo/NativeMinuit.jl/tree/68de553cbccf1dd4f83949cea7b9e6d83df982fb)
 and C++ Minuit2 **6.24.0**: Apple M3, macOS 15.6.1, Julia 1.12.6,
 OpenBLAS 0.3.33, Apple clang 17 (`-O3 -DNDEBUG`), one Julia thread and one

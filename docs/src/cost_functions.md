@@ -96,8 +96,17 @@ bn  = BinnedNLL(counts, edges, cdf; name = [:λ])
 ebn = ExtendedBinnedNLL(counts, edges, scaled_cdf; name = [:λ, :N])
 ```
 
-All likelihood costs use `errordef = 0.5`, so MINOS and HESSE return the correct
-`−2Δln L = 1` (1σ) interval without any manual scaling.
+NativeMinuit's built-in likelihood costs supply `errordef = 0.5`. For a
+single parameter, the default MINOS endpoints solve $-2\Delta\ln L = 1$
+when both profile crossings exist. HESSE estimates the corresponding
+standard error from the local quadratic approximation.
+
+For ordinary unweighted histograms, NativeMinuit's `BinnedNLL` and
+`ExtendedBinnedNLL` return half the multinomial and Poisson deviance,
+respectively. The [corresponding iminuit costs](https://scikit-hep.org/iminuit/notebooks/cost_functions.html)
+return the full deviance with `errordef = 1`. When comparing the same
+observed and expected bin counts, retain the error definition supplied
+by each cost and compare objective differences as $\Delta\mathrm{FCN}/\mathrm{up}$.
 
 ## Composing a joint fit — `CostSum`
 

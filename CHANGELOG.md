@@ -5,7 +5,7 @@ and [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.7.5] — 2026-10-14
+## [0.8.0]
 
 ### Fixed
 
@@ -23,6 +23,16 @@ and [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Reuse private inverse-Hessian storage in dense MIGRAD and skip redundant
+  finite-difference convergence checks while preserving evaluation order.
+- Reuse dense SIMPLEX vertices and reduce matrix copying during MINOS covariance
+  squeezing. HESSE reuses its finite-matrix check.
+- Write transformed covariances directly into their external coordinates and
+  streamline unbounded coordinate conversion and contour grid evaluation.
+- Reduce redundant sample copies in confidence regions and posterior quantiles.
+  Skip impossible connections in single-linkage mode clustering while retaining
+  cluster membership and representatives.
+
 - Benchmark tools record fixed inputs, raw timings, allocations and runtime
   configuration, reject incomplete comparisons, and validate the actual BLAS
   thread count. Historical cross-language timings do not establish a current
@@ -35,6 +45,8 @@ and [Semantic Versioning](https://semver.org/).
 
 - Corrected gradient, retry-budget, HESSE and MINOS behavior descriptions and
   refreshed executable examples.
+- Clarified likelihood error definitions for custom objectives and comparisons
+  of unweighted binned likelihoods with iminuit.
 - Clarified `m.covariance` versus `m.matrix`
   ([#49](https://github.com/fkguo/NativeMinuit.jl/issues/49)): `m.covariance`
   is the full `n_total × n_total` matrix with zero rows/columns for fixed
