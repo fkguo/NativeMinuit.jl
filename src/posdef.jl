@@ -112,6 +112,23 @@ function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecisio
         dg = 0.5 + epspdf - dgmin
     end
 
+    if n == 2 && epspdf <= 0.25
+        d1 = err_M[1, 1] + dg
+        d2 = err_M[2, 2] + dg
+        s1 = 1.0 / sqrt(d1)
+        s2 = 1.0 / sqrt(d2)
+        p11 = d1 * s1 * s1
+        p22 = d2 * s2 * s2
+        p12 = err_M[1, 2] * s2 * s1
+        # These row bounds put both eigenvalues in [0.5, 1.5].
+        # The tolerance times the largest possible eigenvalue is ≤ 0.375.
+        if 0.75 <= p11 <= 1.25 && 0.75 <= p22 <= 1.25 && abs(p12) <= 0.25
+            err_M[1, 1] = d1
+            err_M[2, 2] = d2
+            return MinimumError(Symmetric(err_M, :U), err.dcovar, MnHesseValid, true)
+        end
+    end
+
     # Build the normalized correlation matrix p and apply diagonal add
     # (MnPosDef.cxx:67-77). Both p and err_M are upper-triangle authoritative.
     p_M = zeros(n, n)
@@ -135,7 +152,7 @@ function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecisio
     p_sym = Symmetric(p_M, :U)
 
     # Eigenvalue gate (MnPosDef.cxx:80-86)
-    eval_ = sym_eigvals(p_sym)
+    eval_ = sym_eigvals!(p_sym)
     pmin = eval_[1]                 # eigvals returns sorted ascending
     pmax = eval_[end]
     pmax = max(abs(pmax), 1.0)      # MnPosDef.cxx:84

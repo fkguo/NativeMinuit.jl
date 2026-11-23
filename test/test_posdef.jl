@@ -2,6 +2,20 @@
 
 @testset "posdef.jl — MnPosDef" begin
 
+    @testset "Two-parameter spectral shortcut preserves LAPACK decision" begin
+        for offdiag in (0.5, nextfloat(0.5), 2.0, 2.5)
+            M = Float64[4.0 offdiag; -3.0 1.0]
+            original = copy(M)
+            reference = Symmetric(copy(M), :U)
+            made_posdef = NativeMinuit.make_posdef!(reference)
+            out = make_posdef(MinimumError(Symmetric(M, :U), 0.125))
+            @test isequal(M, original)
+            @test isequal(parent(out.inv_hessian), parent(reference))
+            @test out.status == (made_posdef ? MnMadePosDef : MnHesseValid)
+            @test out.dcovar == (made_posdef ? 1.0 : 0.125)
+        end
+    end
+
     @testset "Already pos-def: returns same matrix" begin
         # Strongly diagonal-dominant matrix — should pass through
         M = Float64[4.0 1.0 0.0;

@@ -84,21 +84,23 @@ MigradScratch(n::Integer) = MigradScratch(Vector{Float64}(undef, Int(n)))
 
 MigradScratch(active::AbstractVector{Float64}) = MigradScratch(active, false)
 
-function MigradScratch(active::AbstractVector{Float64}, private_hessian::Bool)
+function MigradScratch(active::AbstractVector{Float64}, fit_private::Bool)
     n_ = length(active)
     n_ >= 1 ||
         throw(ArgumentError("MigradScratch n must be ≥ 1, got $n_"))
     makevec() = similar(active, Float64)
+    step = makevec()
     V_a = Symmetric(Matrix{Float64}(undef, n_, n_), :U)
-    V_b = private_hessian ? V_a : Symmetric(Matrix{Float64}(undef, n_, n_), :U)
+    V_b = fit_private ? V_a : Symmetric(Matrix{Float64}(undef, n_, n_), :U)
     MigradScratch(
         n_,
-        makevec(),
+        step,
         makevec(),
         makevec(),
         makevec(),
         Symmetric(Matrix{Float64}(undef, n_, n_), :U),
-        makevec(),
+        # The Davidon update runs after the search direction's last use.
+        fit_private ? step : makevec(),
         makevec(),
         makevec(), makevec(),
         makevec(), makevec(),
@@ -774,6 +776,7 @@ function _migrad_loop(
     V_a   = s_eff.V_a
     V_b   = s_eff.V_b
     use_a = true   # next iter writes to set A; s0 ends up wrapping A
+    no_steps = nothing
 
     made_pos_def_flag = false
     hessian_computed = false
@@ -890,7 +893,16 @@ function _migrad_loop(
             nV_buf  = use_a ? V_a  : V_b
 
             @inbounds @. nx_buf = s0.parameters.x + pp.x * step
-            new_par = MinimumParameters(nx_buf, pp.y)
+            if nx_buf isa Vector{Float64} && cf isa CostFunction
+                # Trial points have no step sizes. Keep their zero vector local
+                # to this fit, since it can escape in the returned state.
+                if no_steps === nothing
+                    no_steps = zeros(Float64, n)
+                end
+                new_par = MinimumParameters(nx_buf, no_steps, pp.y, true, false)
+            else
+                new_par = MinimumParameters(nx_buf, pp.y)
+            end
             # numerical_gradient! does copyto!(out.*, prev.*) internally,
             # so we don't need to zero-init ng_*. The ping-pong guarantees
             # `out` (= new_grad) and `prev` (= s0.gradient) reference

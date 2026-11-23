@@ -134,16 +134,36 @@ function davidon_update!(
         sym_rank1_update!(vUpd_work, gvg, vg_work)
     end
 
-    # ── Step 5: sum_upd from update-only matrix (BEFORE += V) ─────────
-    sum_upd = sum_sym(vUpd_work)
-
-    # ── Step 6: V ← V + vUpd_work (in place, authoritative triangle) ─
-    add_sym!(V, vUpd_work)
-
-    # ── Step 7: new dcov ──────────────────────────────────────────────
-    new_dcov = 0.5 * (prev_dc_f + sum_upd / sum_sym(V))
+    sum_upd, sum_new = _davidon_add_and_sum!(V, vUpd_work, n)
+    new_dcov = 0.5 * (prev_dc_f + sum_upd / sum_new)
 
     return (new_dcov, :updated)
+end
+
+# The caller checks the sizes and triangle convention. Keep the order of each
+# sum_sym reduction and compute the matrix entry with the original addition.
+function _davidon_add_and_sum!(V::Symmetric{Float64,Matrix{Float64}},
+                               update::Symmetric{Float64,Matrix{Float64}}, n::Int)
+    old = parent(V)
+    delta = parent(update)
+    if Base.mightalias(old, delta)
+        sum_upd = sum_sym(update)
+        add_sym!(V, update)
+        return sum_upd, sum_sym(V)
+    end
+    sum_upd = 0.0
+    sum_new = 0.0
+    upper = V.uplo == 'U'
+    @inbounds for j in 1:n
+        for i in (upper ? (1:j) : (j:n))
+            entry = delta[i, j]
+            value = old[i, j] + entry
+            old[i, j] = value
+            sum_upd += abs(entry)
+            sum_new += abs(value)
+        end
+    end
+    return sum_upd, sum_new
 end
 
 """
