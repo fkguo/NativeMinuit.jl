@@ -36,9 +36,14 @@ end
 Base.getindex(sp::SimplexParameters, i::Integer) = sp.pts[i]
 edm(sp::SimplexParameters) = sp.pts[sp.jh][1] - sp.pts[sp.jl][1]
 
-function update!(sp::SimplexParameters, y::Float64, p::AbstractVector{Float64})
-    # Replace the high vertex with (y, p), then recompute jh / jl.
-    sp.pts[sp.jh] = (y, copy(p))
+function update!(sp::SimplexParameters, y::Float64, p::AbstractVector{Float64};
+                 reuse_vertex::Bool = false)
+    # The solver's vertices are private copies, distinct from the trial arrays
+    # exposed to the objective. Copy into the departing vertex after each trial.
+    # A callback may resize a trial, in which case retain its full new shape.
+    old = sp.pts[sp.jh][2]
+    vertex = reuse_vertex && axes(old) == axes(p) ? copyto!(old, p) : copy(p)
+    sp.pts[sp.jh] = (y, vertex)
     if y < sp.pts[sp.jl][1]
         sp.jl = sp.jh
     end
@@ -317,7 +322,7 @@ function simplex(
         if ystar > amin
             # Reflection didn't improve the best.
             if ystar < sp.pts[jh][1]
-                update!(sp, ystar, pstar)
+                update!(sp, ystar, pstar; reuse_vertex = true)
                 if jh != sp.jh
                     continue
                 end
@@ -330,7 +335,7 @@ function simplex(
             if ystst > sp.pts[jh][1]
                 break  # contraction failed — simplex collapsed
             end
-            update!(sp, ystst, pstst)
+            update!(sp, ystst, pstst; reuse_vertex = true)
             continue
         end
 
@@ -346,9 +351,9 @@ function simplex(
         ρ = 0.5 * (ρ2 * y1 - ρ1 * y2) / (y1 - y2)
         if ρ < ρmin
             if ystst < sp.pts[jl][1]
-                update!(sp, ystst, pstst)
+                update!(sp, ystst, pstst; reuse_vertex = true)
             else
-                update!(sp, ystar, pstar)
+                update!(sp, ystar, pstar; reuse_vertex = true)
             end
             continue
         end
@@ -360,18 +365,18 @@ function simplex(
         yrho = cf(prho)
 
         if yrho < sp.pts[jl][1] && yrho < ystst
-            update!(sp, yrho, prho)
+            update!(sp, yrho, prho; reuse_vertex = true)
             continue
         end
         if ystst < sp.pts[jl][1]
-            update!(sp, ystst, pstst)
+            update!(sp, ystst, pstst; reuse_vertex = true)
             continue
         end
         if yrho > sp.pts[jl][1]
             if ystst < sp.pts[jl][1]
-                update!(sp, ystst, pstst)
+                update!(sp, ystst, pstst; reuse_vertex = true)
             else
-                update!(sp, ystar, pstar)
+                update!(sp, ystar, pstar; reuse_vertex = true)
             end
             continue
         end
@@ -383,7 +388,7 @@ function simplex(
             if ystst > sp.pts[jh][1]
                 break  # contraction failed
             end
-            update!(sp, ystst, pstst)
+            update!(sp, ystst, pstst; reuse_vertex = true)
         end
     end
 
@@ -406,7 +411,7 @@ function simplex(
     end
     ybar = cf(pbar)
     if ybar < amin
-        update!(sp, ybar, pbar)
+        update!(sp, ybar, pbar; reuse_vertex = true)
         # If pbar is the new low, ybar/pbar become the result; else
         # we fall through to use jl (the existing low).
     else
