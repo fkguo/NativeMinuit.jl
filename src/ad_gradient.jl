@@ -217,6 +217,7 @@ end
 # Fit callbacks borrow their inputs. Extensions can reuse private work storage
 # for this entry point while keeping direct calls to the user-facing gradient.
 @inline _fit_gradient(g, x) = g(x)
+@inline _fit_gradient(g, x, destination) = _fit_gradient(g, x)
 
 """
     analytical_gradient!(out::FunctionGradient, par::MinimumParameters,
@@ -244,13 +245,19 @@ function analytical_gradient!(
     prev::FunctionGradient,
     prec::MachinePrecision = MachinePrecision(),
 )
+    return _analytical_gradient!(out, par, cf, prev, nothing)
+end
+
+# The solver has private, disjoint buffers. Direct callers of the exported
+# mutating API may use overlapping arrays, so keep their existing write order.
+function _analytical_gradient!(out, par, cf, prev, destination)
     n = length(par)
     length(out) == n ||
         throw(DimensionMismatch("out length $(length(out)) != par length $n"))
     length(prev) == n ||
         throw(DimensionMismatch("prev length $(length(prev)) != par length $n"))
 
-    grad_vec = _fit_gradient(cf.g, par.x)
+    grad_vec = _fit_gradient(cf.g, par.x, destination)
     cf.ngrad[] += 1
     Base.require_one_based_indexing(grad_vec)
     length(grad_vec) == n ||
@@ -280,7 +287,7 @@ function analytical_gradient(
     out = FunctionGradient(_zero_vector_like(par.x),
                            _zero_vector_like(par.x),
                            _zero_vector_like(par.x))
-    return analytical_gradient!(out, par, cf, seed, prec)
+    return _analytical_gradient!(out, par, cf, seed, out.grad)
 end
 
 # Make `initial_gradient(par, errs, cf::CostFunctionWithGradient)` work
@@ -462,7 +469,7 @@ function numerical_gradient!(
     # IGNORED — `analytical_gradient!` makes a single `cf.g(par.x)`
     # call (the AD library handles its own parallelism if any), so
     # there's no per-parameter loop here to thread.
-    return analytical_gradient!(out, par, cf, prev, prec)
+    return _analytical_gradient!(out, par, cf, prev, out.grad)
 end
 
 # negative_g2_line_search on the analytical-gradient (AD) path.

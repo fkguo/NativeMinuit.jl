@@ -96,6 +96,49 @@ _has_checkgrad_warning(logs) =
         @test out.gstep == prev.gstep
     end
 
+    @testset "Bounded analytical gradient destination" begin
+        nm = NativeMinuit
+        params = Parameters(["lower", "fixed", "both"], [0.3, -0.2, 0.1], fill(0.1, 3);
+            limits=[(0.0, NaN), (NaN, NaN), (-0.5, 1.0)], fixed=[false, true, false])
+        x = nm.initial_int_values(params)
+        f = x -> sum(abs2, x)
+        function g!(x)
+            yield()
+            x .*= 2
+            return x
+        end
+        cf = nm._wrap_fcn_internal_to_external(CostFunctionWithGradient(f, g!), params)
+        expected = cf.g(x)
+        dest = zeros(2)
+        @test nm._fit_gradient(cf.g, x, dest) === dest
+        @test isequal(dest, expected)
+        @test cf.g(x) !== expected
+        @test isequal(cf.g(x), expected)
+        points = [x .+ 0.1i for i in 1:4]
+        expected_points = map(cf.g, points)
+        tasks = [@async nm._fit_gradient(cf.g, point, zeros(2)) for point in points]
+        @test isequal(fetch.(tasks), expected_points)
+
+        # The public entry still reads and writes each component in sequence.
+        # The g2 source overlaps the destination at different offsets.
+        shared = [8.0, 9.0, 10.0]
+        out = FunctionGradient(@view(shared[2:3]), zeros(2), zeros(2))
+        prev = FunctionGradient(zeros(2), @view(shared[1:2]), [1.0, 2.0])
+        par = MinimumParameters(x, 0.0)
+        analytical_gradient!(out, par, cf, prev)
+        @test isequal(out.grad, expected)
+        @test isequal(out.g2, [8.0, expected[1]])
+        @test out.gstep == [1.0, 2.0]
+
+        bad = CostFunctionWithGradient(f, x -> Any[2.0, 0.0, 1im])
+        wrapped_bad = nm._wrap_fcn_internal_to_external(bad, params)
+        out_bad = FunctionGradient(zeros(2), zeros(2), zeros(2))
+        @test_throws InexactError nm.numerical_gradient!(
+            out_bad, zeros(2), par, prev, wrapped_bad, Strategy(0))
+        @test out_bad.grad == zeros(2)
+        @test nm.ngrad_calls(bad) == 0
+    end
+
     @testset "Phase F.2 — CostFunctionAD factory (ForwardDiff extension)" begin
         # ForwardDiff is in [extras] / test target, so loading it here
         # triggers the NativeMinuitForwardDiffExt package extension. The

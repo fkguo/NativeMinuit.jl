@@ -153,6 +153,46 @@ end
 #
 # Fixed parameters never appear in the int vector; their gradient
 # components from g_ext are dropped here.
+struct _BoundedGradient{G,P,B} <: Function
+    g::G
+    params::P
+    scratch::B
+    n_active::Int
+end
+
+function (g::_BoundedGradient)(int_vec::AbstractVector{<:Real})
+    return _bounded_gradient(g, int_vec, nothing)
+end
+
+function _fit_gradient(g::_BoundedGradient, int_vec::Vector{Float64},
+                       destination::Vector{Float64})
+    return _bounded_gradient(g, int_vec, destination)
+end
+
+function _bounded_gradient(g::_BoundedGradient, int_vec, destination)
+    params = g.params
+    n_active = g.n_active
+    return _with_owned_buffer(g.scratch) do ext_full
+        int_to_ext_vector!(ext_full, params, int_vec)
+        g_ext = _fit_gradient(g.g, ext_full)
+        # Only an ordinary dense gradient can be read without conversion or
+        # user indexing methods. The allocating path preserves those methods'
+        # exception behavior and keeps results of callable invocations owned.
+        g_int = if destination !== nothing && g_ext isa Vector{Float64} &&
+                   length(g_ext) == length(ext_full) && g_ext !== destination
+            destination
+        else
+            Vector{Float64}(undef, n_active)
+        end
+        @inbounds for int_idx in 1:n_active
+            ext_idx = params.ext_of_int[int_idx]
+            d = dint2ext_value(params, int_idx, Float64(int_vec[int_idx]))
+            g_int[int_idx] = d * Float64(g_ext[ext_idx])
+        end
+        return g_int
+    end
+end
+
 function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
                                           params::Parameters)
     f = cf.f
@@ -171,21 +211,7 @@ function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
             end
         end
     end
-    wrapped_g = let scratch = scratch_g, p_ref = p_ref, g = g, n_active = n_active
-        function (int_vec::AbstractVector{<:Real})
-            return _with_owned_buffer(scratch) do ext_full
-                int_to_ext_vector!(ext_full, p_ref, int_vec)
-                g_ext = _fit_gradient(g, ext_full)
-                g_int = Vector{Float64}(undef, n_active)
-                @inbounds for int_idx in 1:n_active
-                    ext_idx = p_ref.ext_of_int[int_idx]
-                    d = dint2ext_value(p_ref, int_idx, Float64(int_vec[int_idx]))
-                    g_int[int_idx] = d * Float64(g_ext[ext_idx])
-                end
-                return g_int
-            end
-        end
-    end
+    wrapped_g = _BoundedGradient(g, p_ref, scratch_g, n_active)
     # The FCN call counter is FRESH per wrapped run, exactly like the
     # numerical wrapper above: the run's `FunctionMinimum.nfcn` and its
     # `maxfcn` budget are then its own calls, not the user cost function's
