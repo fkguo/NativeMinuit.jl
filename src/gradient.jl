@@ -177,7 +177,7 @@ the user FCN may allocate at its discretion — that's measured separately
 by `bench_long_fit.jl`). The FCN call counter (`cf.nfcn[]`) advances
 2× per cycle per coordinate, capped at `2·n·ncycle` for a full call.
 On the threaded branch the calls are made through `_evaluate_uncounted`,
-tallied per coordinate, and added to `cf.nfcn[]` / `cf.n_nonfinite[]`
+tallied per work unit, and added to `cf.nfcn[]` / `cf.n_nonfinite[]`
 once after the parallel loop — the counters are plain `Ref`s, and
 incrementing them from several threads at once loses counts. The
 counters therefore end at exactly the value the serial branch leaves.
@@ -223,65 +223,71 @@ function numerical_gradient!(
     step_tol = strategy.grad_step_tolerance
     grad_tol = strategy.grad_tolerance
 
-    if threaded && Threads.nthreads() > 1
-        # Each work unit owns its coordinate vector, even when the objective
-        # yields and the task migrates or a caller already runs on a worker.
-        # Each coordinate writes disjoint gradient and call-count slots.
-        ncalls_i = zeros(Int, n)        # FCN calls made for coordinate i
-        nnonfinite_i = zeros(Int, n)    # … of which returned NaN / ±Inf
+    if threaded && Threads.nthreads() > 1 && n > 0
+        # A dense borrowed coordinate vector belongs to one work unit, not
+        # to the thread that happens to run it. Callbacks can yield or nest
+        # fits. Leave the copy behavior of structured coordinate types alone.
+        dense = x_work isa Vector{Float64}
+        nchunks = dense ? min(n, Threads.nthreads()) : n
+        chunk_size, remainder = divrem(n, nchunks)
+        counts = fill((0, 0), nchunks)
         try
-            Threads.@threads :dynamic for i in 1:n
-                xw = copy(x_work)
-                xtf = xw[i]
-                epspri = eps2 + abs(out.grad[i] * eps2)
-                stepb4 = 0.0
-                ncall = 0     # attempted evaluations, including a throwing objective
-                nnf = 0       # non-finite returns among them
+            Threads.@threads :dynamic for chunk in 1:nchunks
+                first_coord = 1 + (chunk - 1) * chunk_size + min(chunk - 1, remainder)
+                last_coord = chunk * chunk_size + min(chunk, remainder)
+                buffer = dense ? similar(x_work) : nothing
+                ncall = 0
+                nnf = 0
                 try
-                    @inbounds for _ in 1:ncycle
-                        optstp = sqrt(dfmin / (abs(out.g2[i]) + epspri))
-                        step = max(optstp, abs(0.1 * out.gstep[i]))
-                        if has_limits !== nothing && has_limits[i]
-                            step = min(step, 0.5)
-                        end
-                        stpmax = 10.0 * abs(out.gstep[i])
-                        if step > stpmax; step = stpmax; end
-                        stpmin = max(vrysml, 8.0 * abs(eps2 * xw[i]))
-                        if step < stpmin; step = stpmin; end
-                        if abs((step - stepb4) / step) < step_tol
-                            break
-                        end
-                        out.gstep[i] = step
-                        stepb4 = step
+                    for i in first_coord:last_coord
+                        xw = buffer === nothing ? copy(x_work) : copyto!(buffer, x_work)
+                        xtf = xw[i]
+                        epspri = eps2 + abs(out.grad[i] * eps2)
+                        stepb4 = 0.0
+                        @inbounds for _ in 1:ncycle
+                            optstp = sqrt(dfmin / (abs(out.g2[i]) + epspri))
+                            step = max(optstp, abs(0.1 * out.gstep[i]))
+                            if has_limits !== nothing && has_limits[i]
+                                step = min(step, 0.5)
+                            end
+                            stpmax = 10.0 * abs(out.gstep[i])
+                            if step > stpmax; step = stpmax; end
+                            stpmin = max(vrysml, 8.0 * abs(eps2 * xw[i]))
+                            if step < stpmin; step = stpmin; end
+                            if abs((step - stepb4) / step) < step_tol
+                                break
+                            end
+                            out.gstep[i] = step
+                            stepb4 = step
 
-                        xw[i] = xtf + step
-                        ncall += 1
-                        fs1 = _evaluate_uncounted(cf, xw)
-                        isfinite(fs1) || (nnf += 1)
-                        xw[i] = xtf - step
-                        ncall += 1
-                        fs2 = _evaluate_uncounted(cf, xw)
-                        isfinite(fs2) || (nnf += 1)
-                        xw[i] = xtf
+                            xw[i] = xtf + step
+                            ncall += 1
+                            fs1 = _evaluate_uncounted(cf, xw)
+                            isfinite(fs1) || (nnf += 1)
+                            xw[i] = xtf - step
+                            ncall += 1
+                            fs2 = _evaluate_uncounted(cf, xw)
+                            isfinite(fs2) || (nnf += 1)
+                            xw[i] = xtf
 
-                        grdb4 = out.grad[i]
-                        out.grad[i] = 0.5 * (fs1 - fs2) / step
-                        out.g2[i] = (fs1 + fs2 - 2.0 * fcnmin) / (step * step)
+                            grdb4 = out.grad[i]
+                            out.grad[i] = 0.5 * (fs1 - fs2) / step
+                            out.g2[i] = (fs1 + fs2 - 2.0 * fcnmin) / (step * step)
 
-                        if abs(grdb4 - out.grad[i]) / (abs(out.grad[i]) + dfmin / step) < grad_tol
-                            break
+                            if abs(grdb4 - out.grad[i]) / (abs(out.grad[i]) + dfmin / step) < grad_tol
+                                break
+                            end
                         end
                     end
                 finally
-                    @inbounds ncalls_i[i] = ncall
-                    @inbounds nnonfinite_i[i] = nnf
+                    @inbounds counts[chunk] = (ncall, nnf)
                 end
             end
         finally
-            # @threads joins every task before throwing; preserve partial
-            # counts even when a user objective raises an exception.
-            cf.nfcn[] += sum(ncalls_i)
-            cf.n_nonfinite[] += sum(nnonfinite_i)
+            # Join every task before reading the counts, including after a
+            # callback throws. Count attempted calls and nonfinite returns.
+            cf.nfcn[] += sum(first, counts)
+            cf.n_nonfinite[] += sum(last, counts)
         end
         return out
     end
