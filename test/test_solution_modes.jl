@@ -50,6 +50,38 @@ _fixed_matrix(nrow::Int, ncol::Int) =
     # since Δχ²=1 at 1 unit), covariance ≈ I — a simple whitening metric.
     fq(x) = (x[1] - 1.0)^2 + (x[2] - 2.0)^2
 
+    @testset "components follow threshold edges and input order" begin
+        # The last member of a chain is reachable only through its middle
+        # member. Interleaving points also changes the order of the labels.
+        groups = repeat([11.0, 0.0, 10.0, 2.0, 1.0, 12.0], 30)
+        Z = vcat(zeros(1, length(groups)), permutedims(groups))
+        labels, count = NativeMinuit._connected_components(Z, 1.0)
+        @test count == 2
+        @test labels == ifelse.(groups .>= 10.0, 1, 2)
+
+        # Squaring a nonzero coordinate difference and the positive radius
+        # can underflow to zero. Those pairs are linked by the original test.
+        tiny = sqrt(nextfloat(0.0)) / 4
+        subnormal = permutedims(repeat([0.0, tiny, 1.0], 60))
+        @test NativeMinuit._connected_components(subnormal, nextfloat(0.0)) ==
+              (repeat([1, 1, 2], 60), 2)
+
+        # Every pair fits a one-coordinate window, yet distinct even-parity
+        # words differ in at least two coordinates and hence have no edge.
+        words = filter(w -> iseven(count_ones(w)), 0:2047)
+        cube = [iszero(w & (1 << k)) ? -0.4 : 0.4 for k in 0:10, w in words]
+        @test NativeMinuit._connected_components(cube, 0.9) ==
+              (collect(eachindex(words)), length(words))
+
+        rng = MersenneTwister(137)
+        for d in (1, 3, 11), threshold in (0.015, 0.75, 4.0)
+            X = randn(rng, d, 257)
+            # The ordinary matrix view retains direct pair traversal.
+            @test NativeMinuit._connected_components(X, threshold) ==
+                  NativeMinuit._connected_components(view(X, :, :), threshold)
+        end
+    end
+
     @testset "bimodal toy → 2 modes; unimodal → 1" begin
         m = Minuit(fq, [0.0, 0.0]; names = ["a", "b"], errors = [0.1, 0.1])
         migrad!(m)
