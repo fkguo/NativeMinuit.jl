@@ -1,5 +1,43 @@
 # Matched MIGRAD measurements
 
+## NativeMinuit 0.8.0 on macOS
+
+The [0.8.0 measurement record](results/readme_080_macos.json) gives the
+tested commits, process order, timing-block medians and terminal results.
+Each measured process uses two seconds of continuous warmup and six timing
+blocks of at least 100 ms per objective. The process statistic is the median
+of its block medians. The README gives the median and observed range of the
+ratios calculated within each Julia/C++ process pair.
+
+The quadratic and Gaussian cases use the strict numerical comparison.
+Rosenbrock comparisons use the same stopping settings and require both
+results to be valid and pass the recorded diagnostic tolerances. Final
+objective values and call counts are reported for these two cases. A row
+marked **Variable** has a largest-to-smallest spread above 10% in the
+paired ratios or in the block medians of at least one implementation.
+
+To reproduce the macOS run, use the package commit and the collector commit
+from the measurement record in a separate checkout. Copy the fixed-duration
+collectors and their protocol into that checkout:
+
+```sh
+git worktree add --detach ../nativeminuit-benchmark d6f0cdb03c12a4d0e586d6b1a7f30f88651cd352
+git archive 39e7dd5dd99dfed795e86db658bc827f9dea2452 \
+  benchmark/check_readme_evidence.jl benchmark/compare_readme.py \
+  benchmark/cpp/cpp_readme_bench.cxx benchmark/readme_julia_bench.jl \
+  benchmark/readme_protocol.json | tar -x -C ../nativeminuit-benchmark
+cd ../nativeminuit-benchmark
+```
+
+Set `julia_commit` in the copied protocol to the package commit from the
+measurement record. Establish the pinned C++ reference and use the build and
+collection commands below. For a second session, reverse the two languages
+in each process pair. The collectors retain all completed observations.
+Their historical strict verdicts remain available alongside the endpoint
+comparison used in the README.
+
+## Archived 0.7.5 measurements
+
 The [recorded measurements and environment](results/readme_075.json) include all five process-pair medians, numerical comparisons and source hashes.
 
 The five standard objectives are compared using numerical-gradient MIGRAD,

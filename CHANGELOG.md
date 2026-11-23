@@ -25,6 +25,9 @@ and [Semantic Versioning](https://semver.org/).
 
 - Reuse private inverse-Hessian storage in dense MIGRAD and skip redundant
   finite-difference convergence checks while preserving evaluation order.
+- Reuse fit-owned work vectors, combine Davidon matrix traversals and skip
+  the eigensolve when a two-parameter covariance meets a sufficient
+  spectral bound.
 - Reuse dense SIMPLEX vertices and reduce matrix copying during MINOS covariance
   squeezing. HESSE reuses its finite-matrix check.
 - Write transformed covariances directly into their external coordinates and
@@ -37,9 +40,9 @@ and [Semantic Versioning](https://semver.org/).
   configuration, reject incomplete comparisons, and validate the actual BLAS
   thread count. Historical cross-language timings do not establish a current
   performance comparison.
-- Replaced the README's historical timing table with matched core-MIGRAD
-  measurements, raw samples and per-process variation. Cases failing strict
-  final-output comparisons are retained without an admitted timing ratio.
+- Report matched core-MIGRAD timings and observed variation on an Apple M3
+  MacBook, with terminal objectives and call counts for the two Rosenbrock
+  cases.
 
 ### Documentation
 
