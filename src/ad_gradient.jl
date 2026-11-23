@@ -153,7 +153,10 @@ informative error.
 
 - `f` — user FCN. Must be generic over element type (i.e. avoid
   `function f(x::Vector{Float64}) ...`; write `function f(x) ...`) so
-  ForwardDiff can promote inputs to `ForwardDiff.Dual`.
+  ForwardDiff can promote inputs to `ForwardDiff.Dual`. Parameter arrays
+  passed to the objective during a fit are borrowed workspace. Copy them
+  if you need to retain them. Calling the gradient directly as `cf.g(x)`
+  returns a fresh result.
 - `up::Real=1.0` — error definition (1 for χ², 0.5 for NLL).
 - `chunk_size::Union{Int,Nothing}=nothing` — ForwardDiff chunk size.
   `nothing` lets ForwardDiff pick automatically. For n > 12 a smaller
@@ -211,6 +214,10 @@ end
 # Analytical-gradient evaluation
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Fit callbacks borrow their inputs. Extensions can reuse private work storage
+# for this entry point while keeping direct calls to the user-facing gradient.
+@inline _fit_gradient(g, x) = g(x)
+
 """
     analytical_gradient!(out::FunctionGradient, par::MinimumParameters,
                           cf::CostFunctionWithGradient,
@@ -243,7 +250,7 @@ function analytical_gradient!(
     length(prev) == n ||
         throw(DimensionMismatch("prev length $(length(prev)) != par length $n"))
 
-    grad_vec = cf.g(par.x)
+    grad_vec = _fit_gradient(cf.g, par.x)
     cf.ngrad[] += 1
     Base.require_one_based_indexing(grad_vec)
     length(grad_vec) == n ||

@@ -175,7 +175,7 @@ function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
         function (int_vec::AbstractVector{<:Real})
             return _with_owned_buffer(scratch) do ext_full
                 int_to_ext_vector!(ext_full, p_ref, int_vec)
-                g_ext = g(ext_full)
+                g_ext = _fit_gradient(g, ext_full)
                 g_int = Vector{Float64}(undef, n_active)
                 @inbounds for int_idx in 1:n_active
                     ext_idx = p_ref.ext_of_int[int_idx]

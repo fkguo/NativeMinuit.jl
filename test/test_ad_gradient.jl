@@ -145,6 +145,34 @@ _has_checkgrad_warning(logs) =
         @test cf_default.up == 1.0
     end
 
+    @testset "ForwardDiff fit workspace ownership" begin
+        fit_gradient = NativeMinuit._fit_gradient
+        gradient = Ref{Any}()
+        fail = Ref(false)
+        function objective(x)
+            fail[] && error("objective failed")
+            if ForwardDiff.value(x[1]) == 1.0
+                before = copy(x)
+                @test fit_gradient(gradient[], [3.0, 4.0]) == [6.0, 8.0]
+                child = Threads.@spawn fit_gradient(gradient[], [5.0, 6.0])
+                @test fetch(child) == [10.0, 12.0]
+                @test Tuple(ForwardDiff.value.(x)) == Tuple(ForwardDiff.value.(before))
+                @test ForwardDiff.partials.(x) == ForwardDiff.partials.(before)
+            end
+            return sum(abs2, x)
+        end
+        g = CostFunctionAD(objective; chunk_size=1).g
+        gradient[] = g
+        old_result = fit_gradient(g, [1.0, 2.0])
+        @test old_result == [2.0, 4.0]
+        fail[] = true
+        @test_throws ErrorException fit_gradient(g, [1.0, 2.0])
+        fail[] = false
+        @test fit_gradient(g, [2.0, 5.0, 7.0]) == [4.0, 10.0, 14.0]
+        @test fit_gradient(g, [2.0, 5.0]) == [4.0, 10.0]
+        @test old_result == [2.0, 4.0]
+    end
+
     @testset "CheckGradient discrepancy check (audit §8/§9)" begin
         # C++ MnSeedGenerator.cxx:124-144 — validate the user/AD gradient
         # against a numerical 2-point estimate at the seed; warn (never crash)

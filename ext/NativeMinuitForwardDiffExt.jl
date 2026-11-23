@@ -25,6 +25,59 @@ module NativeMinuitForwardDiffExt
 using NativeMinuit
 using ForwardDiff
 
+mutable struct _ForwardDiffWorkspace
+    config::Union{Nothing,ForwardDiff.GradientConfig}
+    busy::Bool
+end
+
+struct _ForwardDiffGradient{F,C}
+    objective::F
+    chunk::C
+    owner::Task
+    workspace::_ForwardDiffWorkspace
+end
+
+function (g::_ForwardDiffGradient{F,Nothing})(x) where {F}
+    return ForwardDiff.gradient(g.objective, x)
+end
+
+function (g::_ForwardDiffGradient)(x)
+    cfg = ForwardDiff.GradientConfig(g.objective, x, g.chunk)
+    return ForwardDiff.gradient(g.objective, x, cfg)
+end
+
+function NativeMinuit._fit_gradient(g::_ForwardDiffGradient, x::Vector{Float64})
+    workspace = g.workspace
+    # Only the creating task accesses the mutable cache. A recursive call
+    # from a yielding or reentrant objective gets fresh ForwardDiff buffers.
+    if current_task() !== g.owner || workspace.busy
+        return g(x)
+    end
+    chunk = g.chunk === nothing ? ForwardDiff.Chunk(x) : g.chunk
+    return _cached_gradient(g, x, chunk)
+end
+
+function _cached_gradient(g::_ForwardDiffGradient{F}, x::Vector{Float64},
+                          chunk::ForwardDiff.Chunk{N}) where {F,N}
+    workspace = g.workspace
+    workspace.busy = true
+    try
+        # For a dense Float64 input the tag and dual workspace type follow
+        # from the objective and chunk. Refine the cached type before the call.
+        Tag = ForwardDiff.Tag{F,Float64}
+        DenseConfig = ForwardDiff.GradientConfig{Tag,Float64,N,Vector{ForwardDiff.Dual{Tag,Float64,N}}}
+        cfg = workspace.config
+        if cfg isa DenseConfig && length(cfg.duals) == length(x)
+            return ForwardDiff.gradient(g.objective, x, cfg)
+        end
+        fresh = ForwardDiff.GradientConfig(g.objective, x, chunk)
+        workspace.config = fresh
+        return ForwardDiff.gradient(g.objective, x, fresh)
+    finally
+        workspace.busy = false
+    end
+end
+
 """
     NativeMinuit.CostFunctionAD(f, up=1.0; chunk_size=nothing)
 
@@ -59,20 +112,8 @@ on `julia -t N` instead. See README "Beyond C++ Minuit2" section.
 function NativeMinuit.CostFunctionAD(f, up::Real = 1.0;
                                    chunk_size::Union{Integer,Nothing} = nothing,
                                    check_gradient::Bool = true)
-    g = if chunk_size === nothing
-        x -> ForwardDiff.gradient(f, x)
-    else
-        # Build a per-call GradientConfig with the chunk size pinned.
-        # The config can in principle be cached across calls, but FCN
-        # call-site x-types may vary (Float64 / Dual chains), and
-        # mismatched cached configs throw. Fresh config is safer; the
-        # alloc is small (a few hundred bytes).
-        n_chunk = Int(chunk_size)
-        x -> begin
-            cfg = ForwardDiff.GradientConfig(f, x, ForwardDiff.Chunk{n_chunk}())
-            ForwardDiff.gradient(f, x, cfg)
-        end
-    end
+    chunk = chunk_size === nothing ? nothing : ForwardDiff.Chunk{Int(chunk_size)}()
+    g = _ForwardDiffGradient(f, chunk, current_task(), _ForwardDiffWorkspace(nothing, false))
     return NativeMinuit.CostFunctionWithGradient(f, g, Float64(up);
                                              check_gradient = check_gradient)
 end
