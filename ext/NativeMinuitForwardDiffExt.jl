@@ -33,9 +33,13 @@ end
 struct _ForwardDiffGradient{F,C} <: Function
     objective::F
     chunk::C
-    owner::Task
+    owner::Base.RefValue{Nothing}
     workspace::_ForwardDiffWorkspace
 end
+
+# Keep a task's identity without storing the running Task in a callable
+# that users may serialize or share with other workers.
+const _gradient_owner_key = gensym(:forwarddiff_owner)
 
 function (g::_ForwardDiffGradient{F,Nothing})(x) where {F}
     return ForwardDiff.gradient(g.objective, x)
@@ -50,7 +54,7 @@ function NativeMinuit._fit_gradient(g::_ForwardDiffGradient, x::Vector{Float64})
     workspace = g.workspace
     # Only the creating task accesses the mutable cache. A recursive call
     # from a yielding or reentrant objective gets fresh ForwardDiff buffers.
-    if current_task() !== g.owner || workspace.busy
+    if get(task_local_storage(), _gradient_owner_key, nothing) !== g.owner || workspace.busy
         return g(x)
     end
     chunk = g.chunk === nothing ? ForwardDiff.Chunk(x) : g.chunk
@@ -113,7 +117,8 @@ function NativeMinuit.CostFunctionAD(f, up::Real = 1.0;
                                    chunk_size::Union{Integer,Nothing} = nothing,
                                    check_gradient::Bool = true)
     chunk = chunk_size === nothing ? nothing : ForwardDiff.Chunk{Int(chunk_size)}()
-    g = _ForwardDiffGradient(f, chunk, current_task(), _ForwardDiffWorkspace(nothing, false))
+    owner = get!(() -> Ref(nothing), task_local_storage(), _gradient_owner_key)
+    g = _ForwardDiffGradient(f, chunk, owner, _ForwardDiffWorkspace(nothing, false))
     return NativeMinuit.CostFunctionWithGradient(f, g, Float64(up);
                                              check_gradient = check_gradient)
 end

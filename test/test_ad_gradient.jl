@@ -2,6 +2,7 @@
 
 using ForwardDiff
 using Logging
+using Serialization
 
 # Run `thunk` capturing all log records (used by the CheckGradient tests to
 # assert presence/absence of the discrepancy warning without being brittle to
@@ -172,6 +173,13 @@ _has_checkgrad_warning(logs) =
         @test fit_gradient(g, [2.0, 5.0, 7.0]) == [4.0, 10.0, 14.0]
         @test fit_gradient(g, [2.0, 5.0]) == [4.0, 10.0]
         @test old_result == [2.0, 4.0]
+
+        serializable = CostFunctionAD(x -> sum(abs2, x); chunk_size=1).g
+        @test fit_gradient(serializable, [1.0, 2.0]) == [2.0, 4.0]
+        io = IOBuffer()
+        serialize(io, serializable)
+        restored = deserialize(seekstart(io))
+        @test fit_gradient(restored, [2.0, 3.0]) == [4.0, 6.0]
     end
 
     @testset "CheckGradient discrepancy check (audit §8/§9)" begin
