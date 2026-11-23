@@ -357,6 +357,15 @@ function int_to_ext_vector!(ext::AbstractVector{<:Real}, p::Parameters,
         throw(DimensionMismatch("int_vec length $(length(int_vec)) != n_free $(n_free(p))"))
     length(ext) == n_pars(p) ||
         throw(DimensionMismatch("ext length $(length(ext)) != n_pars $(n_pars(p))"))
+    if p isa Parameters{Vector{Float64},true} && ext isa Vector{Float64} &&
+       int_vec isa Vector{Float64}
+        # The constructor checked that all coordinates are free and unbounded.
+        # Keep ascending writes, including for overlapping input and output.
+        @inbounds for i in eachindex(ext)
+            ext[i] = int_vec[i]
+        end
+        return ext
+    end
     metadata = getfield(p, :metadata)
     values = getfield(p, :values)
     int_of_ext = getfield(p, :int_of_ext)
