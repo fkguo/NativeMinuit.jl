@@ -218,6 +218,29 @@ end
 
 @testset "contour_grid — iminuit-style 2D FCN grid slice" begin
 
+    @testset "callback replacement takes effect at the next grid point" begin
+        fit = Ref{Minuit}()
+        seen = Tuple{Int,Float64,Float64}[]
+        replacement = Ref{Any}()
+        objective(label) = function (x)
+            push!(seen, (label, x[1], x[2]))
+            if length(seen) == 1
+                fit[].fcn = replacement[]
+            end
+            return Float64(label)
+        end
+        m = Minuit(objective(1), [0.0, 0.0])
+        fit[] = m
+        first = m.fcn
+        replacement[] = CostFunction(objective(2), 0.5)
+        @test typeof(first) == typeof(replacement[])
+        g = contour_grid(m, 1, 2; grid = ([3.0, 4.0], [5.0, 6.0]))
+        @test seen == [(1, 3.0, 5.0), (2, 4.0, 5.0),
+                       (2, 3.0, 6.0), (2, 4.0, 6.0)]
+        @test g.fval == [1.0 2.0; 2.0 2.0]
+        @test (ncalls(first), ncalls(m.fcn), g.up) == (1, 3, 0.5)
+    end
+
     @testset "values, orientation, destructuring" begin
         # 2 free params: F[i,j] must be EXACTLY fcn(xs[i], ys[j]).
         f2(p) = (p[1] - 1.0)^2 + 2.0 * (p[2] + 0.5)^2 + 0.3 * p[1] * p[2]

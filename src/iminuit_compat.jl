@@ -668,18 +668,26 @@ function contour_grid(m::Minuit, par1, par2;
     end
 
     F = Matrix{Float64}(undef, length(xs), length(ys))
-    x0 = copy(base)
-    @inbounds for (j, yv) in enumerate(ys), (i, xv) in enumerate(xs)
-        x0[ix] = xv
-        x0[iy] = yv
-        F[i, j] = m.fcn(x0)
-    end
+    _fill_contour_grid!(F, m, m.fcn, copy(base), ix, iy, xs, ys)
     subtract_min && (F .-= minimum(F))
 
     return ContourGrid(ix, iy,
                         m.params.pars[ix].name, m.params.pars[iy].name,
                         xs, ys, F, base[ix], base[iy],
                         Float64(m.fcn.up), subtract_min)
+end
+
+# Specialize once on the coordinate container and the initial objective.
+# A callback may replace the fit's objective, including with another instance
+# of the same type. Read the current one for every point, as in a direct scan.
+function _fill_contour_grid!(F, m::Minuit, initial, x0, ix, iy, xs, ys)
+    @inbounds for (j, yv) in enumerate(ys), (i, xv) in enumerate(xs)
+        x0[ix] = xv
+        x0[iy] = yv
+        cf = m.fcn
+        F[i, j] = cf === initial ? initial(x0) : cf(x0)
+    end
+    return F
 end
 
 """
