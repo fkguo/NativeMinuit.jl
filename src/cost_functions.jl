@@ -274,26 +274,49 @@ function (c::ExtendedUnbinnedNLL)(par)
            (@views _nll_logsum(c.density, c.x[c.active], par, c.log))
 end
 
-# Evaluate the cdf at every bin edge once (nb+1 calls) into a fresh
-# buffer, so each bin's two edges are computed once (not once per adjacent
-# bin) — important when `cdf` is expensive (the HEP norm). The buffer is
-# fresh per call ⇒ thread-safe under `threaded_gradient` (a pooled/cached
-# buffer would race); and it lets the multinomial path do its two passes
-# (normalise to `ptot`, then accumulate) without re-evaluating the cdf.
-# The cost is one small `O(nb)` array per FCN call — measured negligible
-# (≈0.5 KB for 50 bins; a full 50-bin MIGRAD allocates ~0.02 MB total).
-#
-# The buffer element type promotes against `eltype(par)` instead of being
-# pinned to `Float64`, so ForwardDiff `Dual`s flow through unbroken — this is
-# what makes `BinnedNLL` / `ExtendedBinnedNLL` auto-differentiable (e.g. the
-# `sampler = :nuts` posterior path), provided the user's `cdf` is itself
-# AD-generic. On the ordinary `Vector{Float64}` call path
-# `promote_type(Float64, Float64) == Float64`, so the buffer stays
-# `Vector{Float64}` and the result is bit-identical to the old `Float64(cdf(…))`
-# coercion (storing into a `Float64` array converts exactly as `Float64(…)` did).
-@inline function _edge_cdf(cdf::F, xe, par, nb::Int) where {F}
-    v = Vector{promote_type(Float64, eltype(par))}(undef, nb + 1)
-    @inbounds for k in 1:(nb + 1)
+# Keep the primal vector and one promoted vector per cost. The exclusive
+# lease covers the whole evaluation, including a CDF callback that yields.
+# An overlapping call uses its own vector. Reference-bearing values take
+# the allocating path so the cost does not retain objects returned by a CDF.
+mutable struct _BinnedWorkspace
+    busy::Threads.Atomic{Bool}
+    real::Vector{Float64}
+    promoted::Any
+end
+
+_BinnedWorkspace() = _BinnedWorkspace(Threads.Atomic{Bool}(false), Float64[], nothing)
+
+@inline function _cached_edge_buffer!(work::_BinnedWorkspace, ::Type{T}, size::Int) where {T}
+    if T === Float64
+        v = work.real
+    else
+        slot = work.promoted
+        if slot isa Vector{T}
+            v = slot
+        else
+            v = Vector{T}(undef, size)
+            work.promoted = v
+            return v
+        end
+    end
+    length(v) == size || resize!(v, size)
+    return v
+end
+
+@inline function _with_edge_buffer(f::F, work::_BinnedWorkspace, ::Type{T}, size::Int) where {F,T}
+    if !isbitstype(T) || Threads.atomic_cas!(work.busy, false, true)
+        return f(Vector{T}(undef, size))
+    end
+    try
+        return f(_cached_edge_buffer!(work, T, size))
+    finally
+        work.busy[] = false
+    end
+end
+
+# Evaluate all edges, in order, before consuming counts or applying the mask.
+@inline function _edge_cdf!(v, cdf::F, xe, par) where {F}
+    @inbounds for k in eachindex(v)
         v[k] = cdf(xe[k], par)
     end
     return v
@@ -359,7 +382,16 @@ struct BinnedNLL{F} <: AbstractCost
     mask::Union{Nothing,BitVector}
     active::Union{Nothing,Vector{Int}}
     pnames::Union{Nothing,Vector{Symbol}}
+    _edge_workspace::_BinnedWorkspace
+
+    function BinnedNLL{F}(n, xe, cdf, mask, active, pnames) where {F}
+        return new{F}(n, xe, cdf, mask, active, pnames, _BinnedWorkspace())
+    end
 end
+
+BinnedNLL(n::Vector{Float64}, xe::Vector{Float64}, cdf::F, mask::Union{Nothing,BitVector},
+          active::Union{Nothing,Vector{Int}}, pnames::Union{Nothing,Vector{Symbol}}) where {F} =
+    BinnedNLL{F}(n, xe, cdf, mask, active, pnames)
 
 function BinnedNLL(n, xe, cdf::F; mask = nothing, name = nothing) where {F}
     nn = collect(Float64, n)
@@ -370,13 +402,7 @@ function BinnedNLL(n, xe, cdf::F; mask = nothing, name = nothing) where {F}
     return BinnedNLL{F}(nn, ee, cdf, bm, _active_from_mask(bm), _to_pnames(name))
 end
 
-function (c::BinnedNLL)(par)
-    nb = length(c.n)
-    cdfv = _edge_cdf(c.cdf, c.xe, par, nb)
-    return c.active === nothing ?
-           _binned_multinomial(c.n, cdfv, Base.OneTo(nb)) :
-           _binned_multinomial(c.n, cdfv, c.active)
-end
+(c::BinnedNLL)(par) = _eval_binned(c, par, _binned_multinomial)
 
 """
     ExtendedBinnedNLL(n, xe, scaled_cdf; mask=nothing, name=nothing)
@@ -396,7 +422,16 @@ struct ExtendedBinnedNLL{F} <: AbstractCost
     mask::Union{Nothing,BitVector}
     active::Union{Nothing,Vector{Int}}
     pnames::Union{Nothing,Vector{Symbol}}
+    _edge_workspace::_BinnedWorkspace
+
+    function ExtendedBinnedNLL{F}(n, xe, cdf, mask, active, pnames) where {F}
+        return new{F}(n, xe, cdf, mask, active, pnames, _BinnedWorkspace())
+    end
 end
+
+ExtendedBinnedNLL(n::Vector{Float64}, xe::Vector{Float64}, cdf::F, mask::Union{Nothing,BitVector},
+                  active::Union{Nothing,Vector{Int}}, pnames::Union{Nothing,Vector{Symbol}}) where {F} =
+    ExtendedBinnedNLL{F}(n, xe, cdf, mask, active, pnames)
 
 function ExtendedBinnedNLL(n, xe, cdf::F; mask = nothing, name = nothing) where {F}
     nn = collect(Float64, n)
@@ -407,12 +442,17 @@ function ExtendedBinnedNLL(n, xe, cdf::F; mask = nothing, name = nothing) where 
     return ExtendedBinnedNLL{F}(nn, ee, cdf, bm, _active_from_mask(bm), _to_pnames(name))
 end
 
-function (c::ExtendedBinnedNLL)(par)
+(c::ExtendedBinnedNLL)(par) = _eval_binned(c, par, _binned_poisson)
+
+@inline function _eval_binned(c, par, reduce::F) where {F}
     nb = length(c.n)
-    cdfv = _edge_cdf(c.cdf, c.xe, par, nb)
-    return c.active === nothing ?
-           _binned_poisson(c.n, cdfv, Base.OneTo(nb)) :
-           _binned_poisson(c.n, cdfv, c.active)
+    # Retain the same conversion, including ForwardDiff's tagged Duals.
+    T = promote_type(Float64, eltype(par))
+    return _with_edge_buffer(c._edge_workspace, T, nb + 1) do cdfv
+        _edge_cdf!(cdfv, c.cdf, c.xe, par)
+        idx = c.active === nothing ? Base.OneTo(nb) : c.active
+        return reduce(c.n, cdfv, idx)
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
