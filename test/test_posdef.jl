@@ -2,6 +2,20 @@
 
 @testset "posdef.jl — MnPosDef" begin
 
+    @testset "Two-parameter spectral shortcut preserves LAPACK decision" begin
+        for offdiag in (0.5, nextfloat(0.5), 2.0, 2.5)
+            M = Float64[4.0 offdiag; -3.0 1.0]
+            original = copy(M)
+            reference = Symmetric(copy(M), :U)
+            made_posdef = NativeMinuit.make_posdef!(reference)
+            out = make_posdef(MinimumError(Symmetric(M, :U), 0.125))
+            @test isequal(M, original)
+            @test isequal(parent(out.inv_hessian), parent(reference))
+            @test out.status == (made_posdef ? MnMadePosDef : MnHesseValid)
+            @test out.dcovar == (made_posdef ? 1.0 : 0.125)
+        end
+    end
+
     @testset "Already pos-def: returns same matrix" begin
         # Strongly diagonal-dominant matrix — should pass through
         M = Float64[4.0 1.0 0.0;
@@ -146,11 +160,18 @@
         end
         cases = Dict(
             "already-posdef" => Float64[4.0 1.0 0.0; 1.0 5.0 0.5; 0.0 0.5 6.0],
+            "large-row-radius" => Float64[1.0 0.99 0.99; 0.99 1.0 -0.99; 0.99 -0.99 1.0],
             "negative-diag"  => Float64[-0.5 0.1; 0.1 2.0],
             "indefinite"     => Float64[1.0 5.0; 5.0 1.0],
             "n1-ok"          => fill(2.5, 1, 1),
             "n1-clamp"       => fill(1e-20, 1, 1),
         )
+        # Moderate total radius, spread over several upper-triangle entries.
+        weakly_coupled = fill(0.02, 8, 8)
+        for i in 1:8
+            weakly_coupled[i, i] = 1.0
+        end
+        cases["weakly-coupled"] = weakly_coupled
         for (name, M) in cases
             r = parity(M)
             @test r.m1 == r.ref        # bit-identical matrix (self-scratch)

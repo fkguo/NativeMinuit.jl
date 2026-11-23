@@ -5,7 +5,7 @@ and [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.7.5] — 2026-10-14
+## [0.8.0]
 
 ### Fixed
 
@@ -23,18 +23,35 @@ and [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Reuse private inverse-Hessian storage in dense MIGRAD and skip redundant
+  finite-difference convergence checks while preserving evaluation order.
+- Reuse fit-owned work vectors, combine Davidon matrix traversals and skip
+  the eigensolve when a two-parameter covariance meets a sufficient
+  spectral bound.
+- Reuse dense SIMPLEX vertices and reduce matrix copying during MINOS covariance
+  squeezing. HESSE reuses its finite-matrix check.
+- Write transformed covariances directly into their external coordinates and
+  streamline unbounded coordinate conversion and contour grid evaluation.
+- Reduce redundant sample copies in confidence regions and posterior quantiles.
+  Skip impossible connections in single-linkage mode clustering while retaining
+  cluster membership and representatives.
+
 - Benchmark tools record fixed inputs, raw timings, allocations and runtime
   configuration, reject incomplete comparisons, and validate the actual BLAS
   thread count. Historical cross-language timings do not establish a current
   performance comparison.
-- Replaced the README's historical timing table with matched core-MIGRAD
-  measurements, raw samples and per-process variation. Cases failing strict
-  final-output comparisons are retained without an admitted timing ratio.
+- Report matched core-MIGRAD timings and observed variation on an Apple M3
+  MacBook, with terminal objectives and call counts for the two Rosenbrock
+  cases.
+- Reuse the two-parameter Gaussian likelihood's width-dependent terms across
+  observations in both benchmark objectives.
 
 ### Documentation
 
 - Corrected gradient, retry-budget, HESSE and MINOS behavior descriptions and
   refreshed executable examples.
+- Clarified likelihood error definitions for custom objectives and comparisons
+  of unweighted binned likelihoods with iminuit.
 - Clarified `m.covariance` versus `m.matrix`
   ([#49](https://github.com/fkguo/NativeMinuit.jl/issues/49)): `m.covariance`
   is the full `n_total × n_total` matrix with zero rows/columns for fixed

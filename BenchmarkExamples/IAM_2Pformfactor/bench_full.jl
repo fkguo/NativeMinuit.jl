@@ -152,8 +152,8 @@ println("│  jm_num     migrad+hesse: med=", fmt_ms(r.med),
 
 # (b) IMinuit
 function build_iminuit()
-    m = IMinuit.Minuit(chi2_iam, paras0; error=errs0)
-    m.fixed["x5"] = true          # L6 fixed (0-based index 5; matches NativeMinuit fix!(m,6))
+    m = IMinuit.Minuit(chi2_iam, paras0; error=errs0, fix_x5=true)
+    @assert Int(m.nfit) == 7 && IMinuit.args(m)[6] === paras0[6]
     IMinuit.migrad(m)
     IMinuit.hesse(m)
     return m
@@ -161,6 +161,7 @@ end
 r = time_runs(build_iminuit; n_rounds=3)
 results["iminuit"] = r
 fits["iminuit"] = build_iminuit()
+@assert Int(fits["iminuit"].nfit) == 7 && IMinuit.args(fits["iminuit"])[6] === paras0[6]
 println("│  iminuit    migrad+hesse: med=", fmt_ms(r.med),
         "  fval=", round(fits["iminuit"].fval; sigdigits=6),
         "  is_valid=", fits["iminuit"].valid)

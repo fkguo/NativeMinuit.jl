@@ -153,6 +153,46 @@ end
 #
 # Fixed parameters never appear in the int vector; their gradient
 # components from g_ext are dropped here.
+struct _BoundedGradient{G,P,B} <: Function
+    g::G
+    params::P
+    scratch::B
+    n_active::Int
+end
+
+function (g::_BoundedGradient)(int_vec::AbstractVector{<:Real})
+    return _bounded_gradient(g, int_vec, nothing)
+end
+
+function _fit_gradient(g::_BoundedGradient, int_vec::Vector{Float64},
+                       destination::Vector{Float64})
+    return _bounded_gradient(g, int_vec, destination)
+end
+
+function _bounded_gradient(g::_BoundedGradient, int_vec, destination)
+    params = g.params
+    n_active = g.n_active
+    return _with_owned_buffer(g.scratch) do ext_full
+        int_to_ext_vector!(ext_full, params, int_vec)
+        g_ext = _fit_gradient(g.g, ext_full)
+        # Only an ordinary dense gradient can be read without conversion or
+        # user indexing methods. The allocating path preserves those methods'
+        # exception behavior and keeps results of callable invocations owned.
+        g_int = if destination !== nothing && g_ext isa Vector{Float64} &&
+                   length(g_ext) == length(ext_full) && g_ext !== destination
+            destination
+        else
+            Vector{Float64}(undef, n_active)
+        end
+        @inbounds for int_idx in 1:n_active
+            ext_idx = params.ext_of_int[int_idx]
+            d = dint2ext_value(params, int_idx, Float64(int_vec[int_idx]))
+            g_int[int_idx] = d * Float64(g_ext[ext_idx])
+        end
+        return g_int
+    end
+end
+
 function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
                                           params::Parameters)
     f = cf.f
@@ -171,21 +211,7 @@ function _wrap_fcn_internal_to_external(cf::CostFunctionWithGradient,
             end
         end
     end
-    wrapped_g = let scratch = scratch_g, p_ref = p_ref, g = g, n_active = n_active
-        function (int_vec::AbstractVector{<:Real})
-            return _with_owned_buffer(scratch) do ext_full
-                int_to_ext_vector!(ext_full, p_ref, int_vec)
-                g_ext = g(ext_full)
-                g_int = Vector{Float64}(undef, n_active)
-                @inbounds for int_idx in 1:n_active
-                    ext_idx = p_ref.ext_of_int[int_idx]
-                    d = dint2ext_value(p_ref, int_idx, Float64(int_vec[int_idx]))
-                    g_int[int_idx] = d * Float64(g_ext[ext_idx])
-                end
-                return g_int
-            end
-        end
-    end
+    wrapped_g = _BoundedGradient(g, p_ref, scratch_g, n_active)
     # The FCN call counter is FRESH per wrapped run, exactly like the
     # numerical wrapper above: the run's `FunctionMinimum.nfcn` and its
     # `maxfcn` budget are then its own calls, not the user cost function's
@@ -276,14 +302,21 @@ function _internal_to_external_results(
         # where D = diag(dint2ext) and C_int = 2·up·V_int (per C++; see
         # result.jl::covariance).
         c_int_scale = 2.0 * up
-        cov_free = zeros(Float64, n_active, n_active)
-        @inbounds for i in 1:n_active, j in 1:n_active
-            cov_free[i, j] = c_int_scale * V_int[i, j] *
-                              dint2ext_diag[i] * dint2ext_diag[j]
+        # Write directly to the full external matrix. Fixed rows and columns
+        # stay zero. Compute both triangles: interchanging the two Jacobian
+        # factors can change the last bit of an off-diagonal entry.
+        cov_full = zeros(Float64, n_total, n_total)
+        @inbounds for j in 1:n_active
+            ej = params.ext_of_int[j]
+            for i in 1:n_active
+                ei = params.ext_of_int[i]
+                cov_full[ei, ej] = c_int_scale * V_int[i, j] *
+                                   dint2ext_diag[i] * dint2ext_diag[j]
+            end
         end
 
         # Set diagonal external errors. For unbounded parameters the
-        # Jacobian-diagonal sqrt(cov_free[i,i]) is exact. For bounded
+        # Jacobian-diagonal sqrt(cov_full[ext_idx,ext_idx]) is exact. For bounded
         # parameters near the boundary the Jacobian shrinks (the sin
         # transform's derivative goes to 0 at the limit) — use the C++
         # `Int2extError` two-sided formula instead (parallel-review #4 D5).
@@ -302,17 +335,10 @@ function _internal_to_external_results(
                 ext_errors_vec[ext_idx] = int2ext_error(
                     kind, int_x[int_idx], int_err, par.lower, par.upper)
             else
-                ext_errors_vec[ext_idx] = sqrt(max(cov_free[int_idx, int_idx], 0.0))
+                ext_errors_vec[ext_idx] = sqrt(max(cov_full[ext_idx, ext_idx], 0.0))
             end
         end
 
-        # Promote to n_total × n_total covariance (fixed params get 0 row/col)
-        cov_full = zeros(Float64, n_total, n_total)
-        @inbounds for i in 1:n_active, j in 1:n_active
-            ei = params.ext_of_int[i]
-            ej = params.ext_of_int[j]
-            cov_full[ei, ej] = cov_free[i, j]
-        end
         ext_cov_mat = cov_full
     else
         # No covariance available — fall back to user's initial errors

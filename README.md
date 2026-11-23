@@ -91,43 +91,49 @@ Each is detailed in the sections below.
 
 ## Performance
 
-Measured on **2026-10-14**, using NativeMinuit **0.7.5** at
-[`68de553c`](https://github.com/fkguo/NativeMinuit.jl/tree/68de553cbccf1dd4f83949cea7b9e6d83df982fb)
-and C++ Minuit2 **6.24.0**: Apple M3, macOS 15.6.1, Julia 1.12.6,
-OpenBLAS 0.3.33, Apple clang 17 (`-O3 -DNDEBUG`), one Julia thread and one
-actual BLAS thread. Both use the same fixed inputs, numerical gradients,
-`Strategy(0)`, tolerance 0.1, at most 10000 calls, and storage level 0.
+NativeMinuit **0.8.0** and C++ Minuit2 **6.24.0** were measured on 23 November
+2026 on an Apple M3 MacBook running macOS 15.6.1. The toolchain
+was Julia 1.13.2 and Apple clang 17 (`-O3 -DNDEBUG`).
+The benchmark uses one Julia thread and one BLAS thread. Both implementations
+use the same fixed inputs, numerical gradients, `Strategy(0)`, tolerance 0.1,
+a limit of 10,000 objective calls and storage level 0.
 
-The timed operation constructs a fresh callback and solver state, runs full
-**core MIGRAD**, and materializes parameters, errors, covariance and status.
-Immutable data preparation, compilation and optional global correlations are
-excluded on both sides. This compares Julia `migrad` with C++
-`VariableMetricMinimizer::Minimize`, rather than the additional work performed
-by the C++ `MnMigrad` application.
+Each timed fit creates a fresh callback and solver state, runs core MIGRAD,
+and returns parameters, errors, covariance and fit status. Timing starts after
+compilation and data preparation. The C++ entry point is
+`VariableMetricMinimizer::Minimize`. The workload excludes optional global
+correlation coefficients.
 
-Five alternating process pairs each collect 50 warmed samples per objective.
-Times below are medians of the five process medians; the ratio is the median
-of the five **paired** ratios, so it need not equal the quotient of the displayed
-times. The range preserves the smallest and largest paired ratios observed.
+For the two-parameter Gaussian likelihood, both callbacks compute the log of
+the fitted width and its square once per evaluation and reuse them for all
+observations.
 
-| Benchmark | Julia (μs) | C++ (μs) | Paired Julia / C++ | Observed range |
+The table reports medians over 10 pairs of fresh Julia and C++ processes.
+Each process contributes the median of six timing blocks after warmup. The
+ratio is calculated within each pair, then summarized by its median and
+observed range. Values below 1 indicate shorter Julia times.
+
+| Benchmark | Julia (μs) | C++ (μs) | Median Julia/C++ | Observed ratio range |
 |---|---:|---:|---:|---:|
-| `quad_4d` | 1.666 | 6.792 | 0.242 | 0.177–0.250 |
-| `rosenbrock_2d` | — | — | Not admitted | Strict output comparison failed |
-| `rosenbrock_10d` | — | — | Not admitted | Strict output comparison failed |
-| `gauss_ll_10_1000` | 50.834 | 64.334 | 0.790 | 0.688–0.793 |
-| `gauss_ll_2_100` | 31.667 | 27.605 | 1.150 | 0.874–1.855 |
+| `quad_4d` | 0.93 | 4.2 | 0.22 | 0.21–0.24 |
+| `rosenbrock_2d` | 8.3 | 48 | 0.17 | 0.17–0.19 |
+| `rosenbrock_10d` | 54 | 200 | 0.27 | 0.24–0.30 |
+| `gauss_ll_2_100` | 5.8 | 16 | 0.35 | 0.31–0.44 |
+| `gauss_ll_10_1000` | 31 | 38 | 0.82 | 0.80–0.84 |
 
-Only cases passing the predeclared strict parameter, objective, EDM, error and
-covariance checks receive timing ratios. Both Rosenbrock results are valid and
-pass the existing diagnostic checks, but their terminal outputs fail the strict
-comparison; all raw results are retained. The small Gaussian case's range crosses
-1, so these measurements do not support a stable faster/slower conclusion for it.
-Ranges describe this single-machine measurement, not confidence intervals or
-general speed guarantees. See the [protocol and reproduction commands](benchmark/readme_comparison.md)
-and [numerical results, raw timings and environment](benchmark/results/readme_075.json).
-The previous table used unmatched Gaussian inputs and timing boundaries and has
-been replaced rather than reused as a current comparison.
+Timing varied by more than 10% for the quadratic, both Rosenbrock cases,
+and the two-parameter Gaussian.
+
+The quadratic and both Gaussian fits passed the strict output comparison.
+Both Rosenbrock cases passed the diagnostic checks at the same stopping
+settings. The final objectives were:
+
+- Two dimensions: $3.3546 \times 10^{-6}$ in Julia (194 calls) and $3.3539 \times 10^{-6}$ in C++ (194 calls).
+- Ten dimensions: $3.7471 \times 10^{-5}$ in Julia (1625 calls) and $4.8277 \times 10^{-5}$ in C++ (1607 calls).
+
+See the [measurement record](benchmark/results/readme_080_macos.json) for the
+per-pair timings, numerical results and source versions, and the
+[benchmark protocol](benchmark/readme_comparison.md) for reproduction.
 
 The objectives (the user FCN that MIGRAD minimizes — these are standard
 optimization test problems, not Minuit operations) are:

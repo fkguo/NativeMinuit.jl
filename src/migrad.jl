@@ -82,26 +82,31 @@ end
 
 MigradScratch(n::Integer) = MigradScratch(Vector{Float64}(undef, Int(n)))
 
-function MigradScratch(active::AbstractVector{Float64})
+MigradScratch(active::AbstractVector{Float64}) = MigradScratch(active, false)
+
+function MigradScratch(active::AbstractVector{Float64}, fit_private::Bool)
     n_ = length(active)
     n_ >= 1 ||
         throw(ArgumentError("MigradScratch n must be ≥ 1, got $n_"))
     makevec() = similar(active, Float64)
+    step = makevec()
+    V_a = Symmetric(Matrix{Float64}(undef, n_, n_), :U)
+    V_b = fit_private ? V_a : Symmetric(Matrix{Float64}(undef, n_, n_), :U)
     MigradScratch(
         n_,
-        makevec(),
+        step,
         makevec(),
         makevec(),
         makevec(),
         Symmetric(Matrix{Float64}(undef, n_, n_), :U),
+        # The Davidon update runs after the search direction's last use.
+        fit_private ? step : makevec(),
         makevec(),
-        makevec(),
         makevec(), makevec(),
         makevec(), makevec(),
         makevec(), makevec(),
         makevec(), makevec(),
-        Symmetric(Matrix{Float64}(undef, n_, n_), :U),
-        Symmetric(Matrix{Float64}(undef, n_, n_), :U),
+        V_a, V_b,
     )
 end
 
@@ -530,6 +535,17 @@ _migrad_second_pass_invalid(ipass::Integer, s0::MinimumState,
     ipass > 0 && (!is_valid(s0) ||
                   _migrad_inner_above_max(s0, edm_corrected, edmval, prec))
 
+# One normally representable square guarantees that the sum of squares is
+# positive or NaN. Tiny leading entries keep the original underflow behavior.
+@inline _zero_gradient_norm(g::AbstractVector{Float64}) = dot(g, g) <= 0
+@inline _zero_gradient_norm(g::Vector{Float64}) =
+    isempty(g) || (abs(first(g)) < sqrt(floatmin(Float64)) && dot(g, g) <= 0)
+
+@inline function _migrad_gradient!(out, work, par, prev, cf, strategy, prec,
+                                   threaded, has_limits)
+    return numerical_gradient!(out, work, par, prev, cf, strategy, prec; threaded, has_limits)
+end
+
 """
     _migrad_loop(seed, cf, strategy, tol, maxfcn, prec;
                  scratch=nothing) -> FunctionMinimum
@@ -742,7 +758,15 @@ function _migrad_loop(
             "the active container $(typeof(seed.parameters.x)); construct it " *
             "from the active vector."))
     end
-    s_eff = scratch === nothing ? MigradScratch(seed.parameters.x) : scratch
+    # The incoming Hessian remains live through the trial EDM check. Once
+    # accepted, the Davidon update may overwrite a fit-private Hessian:
+    # the seed is separate and every retained state has its own matrix.
+    # Caller-supplied pools retain their original two-buffer behavior.
+    s_eff = if scratch === nothing
+        MigradScratch(seed.parameters.x, seed.parameters.x isa Vector{Float64})
+    else
+        scratch
+    end
     step      = s_eff.step
     ls_work   = s_eff.ls_work
     grad_work = s_eff.grad_work
@@ -757,6 +781,7 @@ function _migrad_loop(
     V_a   = s_eff.V_a
     V_b   = s_eff.V_b
     use_a = true   # next iter writes to set A; s0 ends up wrapping A
+    no_steps = nothing
 
     made_pos_def_flag = false
     hessian_computed = false
@@ -821,7 +846,7 @@ function _migrad_loop(
             sym_mul!(step, s0.error.inv_hessian, s0.gradient.grad, -1.0, 0.0)
 
             # ── Check zero gradient (C++ line 247-250)
-            if dot(s0.gradient.grad, s0.gradient.grad) <= 0
+            if _zero_gradient_norm(s0.gradient.grad)
                 break
             end
 
@@ -873,15 +898,23 @@ function _migrad_loop(
             nV_buf  = use_a ? V_a  : V_b
 
             @inbounds @. nx_buf = s0.parameters.x + pp.x * step
-            new_par = MinimumParameters(nx_buf, pp.y)
+            if nx_buf isa Vector{Float64} && cf isa CostFunction
+                # Trial points have no step sizes. Keep their zero vector local
+                # to this fit, since it can escape in the returned state.
+                if no_steps === nothing
+                    no_steps = zeros(Float64, n)
+                end
+                new_par = MinimumParameters(nx_buf, no_steps, pp.y, true, false)
+            else
+                new_par = MinimumParameters(nx_buf, pp.y)
+            end
             # numerical_gradient! does copyto!(out.*, prev.*) internally,
             # so we don't need to zero-init ng_*. The ping-pong guarantees
             # `out` (= new_grad) and `prev` (= s0.gradient) reference
             # disjoint buffer sets, so the copyto! is well-defined.
             new_grad = FunctionGradient(ng_buf, ng2_buf, ngs_buf)
-            numerical_gradient!(new_grad, grad_work, new_par, s0.gradient,
-                                 cf, strategy, prec;
-                                 threaded = threaded_gradient, has_limits = has_limits)
+            _migrad_gradient!(new_grad, grad_work, new_par, s0.gradient,
+                              cf, strategy, prec, threaded_gradient, has_limits)
 
             # ── Step 6: EDM using OLD error matrix (C++ line 300).
             # `estimate_edm!` reuses vg_work; the allocating `estimate_edm`
@@ -918,23 +951,8 @@ function _migrad_loop(
             @inbounds @. dx_buf = new_par.x - s0.parameters.x
             @inbounds @. dg_buf = new_grad.grad - s0.gradient.grad
 
-            # Copy s0's V into nV_buf's storage, then mutate in place.
-            # `parent(...)` strips the Symmetric wrapper to the underlying
-            # Matrix; we only need to copy the upper triangle but copyto!
-            # on the full storage is faster (no branches) and the lower
-            # half is unused by Symmetric(:U) semantics anyway.
-            #
-            # Self-copy guard (Phase D): when `scratch` is reused across
-            # `MnFunctionCross` probes AND the previous probe's final
-            # write landed on the same ping-pong slot the new iter just
-            # selected, `s0.error.inv_hessian` (wrapping prev's final
-            # V_a/V_b) can ALIAS `nV_buf`. `copyto!(M, M)` on plain
-            # `Matrix{Float64}` is a well-defined no-op today, but
-            # treating the storage identity check as the invariant
-            # protects against any future move to view-based / sparse
-            # inv_hessian storage where `copyto!` overlap is UB.
-            # (Phase A reviewer's NICE-TO-HAVE; cost = one pointer
-            # comparison per inner iter, ~ns.)
+            # Copy in the seed or any replacement from HESSE or MnPosDef.
+            # Later private updates already have the accepted Hessian here.
             dst_M = parent(nV_buf)
             src_M = parent(s0.error.inv_hessian)
             if dst_M !== src_M

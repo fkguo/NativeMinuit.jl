@@ -100,10 +100,13 @@ NativeMinuit names both accepted):
 | `threaded_gradient` | `false` | `true` / `:auto` to parallelize numerical gradient (needs `julia -t N`) |
 | `print_level` | `0` | verbosity |
 
-> **Likelihood fits need `up = 0.5`.** A bare `−lnL` FCN must be built with
-> `Minuit(negloglike, x0; up = 0.5)` — the default `up = 1.0` is for χ², and a wrong
-> `up` makes **every HESSE/MINOS error come out √2 too small, silently**. The cost
-> objects (`UnbinnedNLL`, …) set the right `up` for you.
+> **Match `up` to the objective's normalization.** For a custom $-\log L$
+> objective, use `Minuit(negloglike, x0; up = 0.5)`. For χ² or $-2\log L$,
+> use `up = 1.0`. Using `up = 1.0` with $-\log L$ makes HESSE standard
+> errors larger by $\sqrt{2}$ at the same Hessian and doubles the default
+> MINOS profile threshold from $0.5$ to $1$. For a quadratic profile this
+> increases both endpoint displacements by $\sqrt{2}$. For a general profile
+> the changes depend on its shape. Built-in costs supply their own `up`.
 
 Per-parameter keywords also work: `error_a = 0.2`, `fix_b = true`,
 `limit_mass = (0, nothing)`, etc. Override budgets per run on `migrad!`:
@@ -140,6 +143,13 @@ m = Minuit(joint, [1.0,0.0,0.0]); migrad!(m)
 `UnbinnedNLL(samples, f; log=true)` if `f` already returns `log(pdf)`. Pass
 `mask=<BitVector>` to fit a subset without copying. IMinuit.jl `chisq`/`Data`/
 `model_fit` remain available and give bit-identical results to `LeastSquares`.
+
+When comparing unweighted histogram fits with iminuit, keep the default
+error definition supplied by each built-in cost. NativeMinuit's `BinnedNLL`
+and `ExtendedBinnedNLL` return half the deviance with `up = 0.5`. The
+corresponding iminuit costs return the full deviance with `errordef = 1`.
+Use the same bins and expected counts, and compare objective differences
+on the common scale $\Delta\mathrm{FCN}/\mathrm{up}$.
 
 ## Bounds & fixed parameters
 

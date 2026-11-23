@@ -393,7 +393,9 @@ function hesse(
         end
         return _hesse_diagonal_failure(state, g2, prec, ncalls(cf), MnHesseFailed)
     end
-    made_pd = make_posdef!(Symmetric(vhmat, :U), prec)
+    # HESSE owns this square upper-triangular buffer and already checked
+    # it for non-finite entries so the positivity check can use it directly.
+    made_pd = _make_posdef_finite_upper!(vhmat, n, prec, nothing, nothing)
 
     # ── Symmetric invert (in place) ───────────────────────────────
     # Invert `vhmat` in its own storage → it now holds V = H⁻¹. The

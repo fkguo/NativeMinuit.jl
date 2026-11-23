@@ -954,13 +954,21 @@ function _conditional_prior_cov(err::MinimumError, idxs;
                                 prec::MachinePrecision = MachinePrecision())
     is_available(err) || return nothing
     e = err
-    for i in sort!(Int[idxs...]; rev = true)
+    ordered = idxs isa Tuple{Int} ? idxs : sort!(Int[idxs...]; rev = true)
+    for i in ordered
         e = squeeze_error(e, i; prec = prec)
         e.status == MnInvertFailed && return nothing
     end
-    # Materialise the full symmetric matrix (the `Symmetric` wrapper only
-    # carries the upper triangle, which `seed_state`'s symmetry check rejects).
-    return Matrix(e.inv_hessian)
+    # With no squeeze, the input's storage still belongs to the caller.
+    isempty(ordered) && return Matrix(e.inv_hessian)
+
+    # A squeeze returns a new upper-triangular matrix. Complete its lower
+    # triangle in place for seed_state's symmetry check.
+    V = parent(e.inv_hessian)
+    @inbounds for j in axes(V, 2), i in (j + 1):size(V, 1)
+        V[i, j] = V[j, i]
+    end
+    return V
 end
 
 function function_cross_multi(
@@ -1600,6 +1608,10 @@ function function_cross_external(
         other_param_seed_ext === nothing ? nothing :
             Float64[Float64(other_param_seed_ext[i]) for i in 1:n_total])
     prev_probe_ext_ref = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    # The fixed coordinate, index maps, names, and bounds stay constant
+    # across probes. Save the first dense configuration after construction.
+    # Later probes supply fresh coordinates with the same private metadata.
+    dense_probe_config = Ref{Union{Nothing,Parameters{Vector{Float64},false}}}(nothing)
 
     # Build probe closure. At each alpha, set par to `ext_min + aopt *
     # step_ext` (clamped against the bound if aopt > aulim), copy ALL
@@ -1623,7 +1635,8 @@ function function_cross_external(
         ext_values = bfm.ext_values,
         inner_strategy = inner_strategy,
         pre_seed_ext_ref = pre_seed_ext_ref,
-        prev_probe_ext_ref = prev_probe_ext_ref
+        prev_probe_ext_ref = prev_probe_ext_ref,
+        dense_probe_config = dense_probe_config
         probe = function (aopt::Float64, budget::Integer)
             # `_cross_core` already clamps α to `aulim` (C++ `limset`);
             # record that the walk touched the bound so a failed search
@@ -1658,37 +1671,52 @@ function function_cross_external(
             prev_ext = prev_probe_ext_ref[]
             pre_shift = pre_seed_ext_ref[]
             pre_seed_ext_ref[] = nothing
-            inner_pars = MinuitParameter[]
-            sizehint!(inner_pars, length(all_pars))
-            for (i, p) in enumerate(all_pars)
-                converged_v = if i == par_idx
-                    ext_values[i]   # scanned slot — overridden below
-                elseif prev_ext !== nothing
-                    prev_ext[i]     # priority 1
-                elseif pre_shift !== nothing
-                    pre_shift[i]    # priority 2
-                else
-                    ext_values[i]   # priority 3
+            config = dense_probe_config[]
+            inner_params = if config === nothing
+                inner_pars = MinuitParameter[]
+                sizehint!(inner_pars, length(all_pars))
+                for (i, p) in enumerate(all_pars)
+                    converged_v = if i == par_idx
+                        ext_values[i]   # scanned slot — overridden below
+                    elseif prev_ext !== nothing
+                        prev_ext[i]     # priority 1
+                    elseif pre_shift !== nothing
+                        pre_shift[i]    # priority 2
+                    else
+                        ext_values[i]   # priority 3
+                    end
+                    lo = isnan(p.lower) ? NaN : p.lower
+                    hi = isnan(p.upper) ? NaN : p.upper
+                    if i == par_idx
+                        push!(inner_pars, MinuitParameter(p.name, ext_val,
+                                                           p.error;
+                                                           lower = lo, upper = hi,
+                                                           fixed = true))
+                    else
+                        push!(inner_pars, MinuitParameter(p.name, converged_v,
+                                                           p.error;
+                                                           lower = lo, upper = hi,
+                                                           fixed = p.fixed))
+                    end
                 end
-                lo = isnan(p.lower) ? NaN : p.lower
-                hi = isnan(p.upper) ? NaN : p.upper
-                if i == par_idx
-                    push!(inner_pars, MinuitParameter(p.name, ext_val,
-                                                       p.error;
-                                                       lower = lo, upper = hi,
-                                                       fixed = true))
-                else
-                    push!(inner_pars, MinuitParameter(p.name, converged_v,
-                                                       p.error;
-                                                       lower = lo, upper = hi,
-                                                       fixed = p.fixed))
+                # Seed from `params` so the inner bounded MIGRAD keeps the outer
+                # fit's coordinate container: its external workspaces are built
+                # with `similar(values)`, and they are what the user's objective
+                # and gradient are called with.
+                first_config = Parameters(inner_pars, params)
+                if params.values isa Vector{Float64}
+                    dense_probe_config[] = first_config
                 end
+                first_config
+            else
+                origin = prev_ext !== nothing ? prev_ext :
+                         pre_shift !== nothing ? pre_shift : ext_values
+                coords = copy(origin)
+                coords[par_idx] = ext_val
+                Parameters{Vector{Float64},false}(
+                    config.metadata, config.ext_of_int, config.int_of_ext,
+                    config.name_to_ext, config.prec, coords, config.errors)
             end
-            # Seed from `params` so the inner bounded MIGRAD keeps the outer
-            # fit's coordinate container: its external workspaces are built
-            # with `similar(values)`, and they are what the user's objective
-            # and gradient are called with.
-            inner_params = Parameters(inner_pars, params)
             inner_bfm = migrad(cf_inner, inner_params;
                                 tol = 0.5 * tlr, maxfcn = Int(budget),
                                 strategy = inner_strategy, prec = prec,
@@ -1700,17 +1728,16 @@ function function_cross_external(
             # Only update on valid probes — an invalid converged x would
             # propagate the bad state.
             if inner_bfm.internal.is_valid
-                prev_probe_ext_ref[] = copy(inner_bfm.ext_values)
+                snapshot = copy(inner_bfm.ext_values)
+                prev_probe_ext_ref[] = snapshot
                 err_in = inner_bfm.internal.state.error
                 prior_cov_ref[] = is_available(err_in) ?
                                   Matrix(err_in.inv_hessian) : nothing
-            end
-            # M4: snapshot the converged ext values so the caller can
-            # publish them on `MinosError.{upper,lower}_state`. Only
-            # update when the inner MIGRAD reached a valid minimum —
-            # invalid probes' ext vectors are not physically meaningful.
-            if inner_bfm.internal.is_valid
-                last_ext_state[] = copy(inner_bfm.ext_values)
+                # Dense probes only read the snapshot when seeding their
+                # next Parameters. The crossing can publish that same
+                # owned vector. Preserve custom container copy semantics.
+                last_ext_state[] = inner_bfm.ext_values isa Vector{Float64} ?
+                                   snapshot : copy(inner_bfm.ext_values)
             end
             # nfcn correctly = the inner bounded migrad's call count
             # (NOT ncalls(cf), which is the OUTER cf and never gets

@@ -2,6 +2,38 @@
 
 @testset "migrad.jl — MIGRAD loop" begin
 
+    @testset "Step-less trial vectors are owned by each fit" begin
+        f(x) = sum(abs2, x)
+        x = [1.0, 2.0]
+        steps = [0.1, 0.1]
+        for scratch in (nothing, NativeMinuit.MigradScratch(x))
+            first = migrad(CostFunction(f), x, steps; scratch, storage_level=1)
+            saved = first.state.parameters.dirin
+            @test !first.state.parameters.has_step_size
+            @test all(iszero, saved)
+            @test first.seed.parameters.dirin == steps
+            @test !isempty(first.states)
+            @test all(s -> !Base.mightalias(s.parameters.dirin, saved), first.states)
+
+            next = migrad(CostFunction(f), [-3.0, 1.0], steps; scratch)
+            @test !next.state.parameters.has_step_size
+            next.state.parameters.dirin[1] = 1.0
+            @test all(iszero, saved)
+        end
+    end
+
+    @testset "seed and recorded Hessians remain independent" begin
+        rosen(x) = (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2
+        for level in (0, 1)
+            m = migrad(CostFunction(rosen), [-1.2, 1.0], [0.1, 0.1];
+                       strategy = Strategy(level), storage_level = 1)
+            @test length(m.states) > 2
+            matrices = [parent(s.error.inv_hessian) for s in [m.seed; m.states; m.state]]
+            @test all(i == j || !Base.mightalias(matrices[i], matrices[j])
+                      for i in eachindex(matrices), j in eachindex(matrices))
+        end
+    end
+
     @testset "Quad-1D: f(x) = x²" begin
         cf = CostFunction(x -> x[1]^2)
         m = migrad(cf, [3.0], [0.1])

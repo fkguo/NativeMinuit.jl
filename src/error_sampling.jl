@@ -296,19 +296,14 @@ function _mvnormal_factor(Σ::AbstractMatrix{<:Real})
     end
 end
 
-# Per-parameter (min,max) over the columns 1:m of an n×m sample buffer.
-function _column_bounds(buf::Matrix{Float64}, n::Int, m::Int)
+# Extend the bounds through a nonempty batch in acceptance order.
+function _extend_column_bounds(buf::Matrix{Float64}, previous)
+    n, m = size(buf)
     bounds = Vector{Tuple{Float64,Float64}}(undef, n)
-    if m == 0
-        @inbounds for i in 1:n
-            bounds[i] = (NaN, NaN)
-        end
-        return bounds
-    end
+    start = previous === nothing ? 2 : 1
     @inbounds for i in 1:n
-        lo = buf[i, 1]
-        hi = buf[i, 1]
-        for j in 2:m
+        lo, hi = previous === nothing ? (buf[i, 1], buf[i, 1]) : previous[i]
+        for j in start:m
             v = buf[i, j]
             v < lo && (lo = v)
             v > hi && (hi = v)
@@ -414,9 +409,11 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
             center[k] = 0.5 * (lo + hi)
             halfw[k] = 0.5 * (hi - lo)
         end
+        widths = similar(halfw)
         draw! = function (buf, m, infl)
+            @. widths = infl * halfw
             @inbounds for j in 1:m, k in 1:n
-                buf[k, j] = center[k] + infl * halfw[k] * (2.0 * rand(rng) - 1.0)
+                buf[k, j] = center[k] + widths[k] * (2.0 * rand(rng) - 1.0)
             end
             return buf
         end
@@ -426,7 +423,7 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
 
     propbuf = Matrix{Float64}(undef, n, nsamples)   # this round's proposals
     dfvals = Vector{Float64}(undef, nsamples)        # this round's Δ = χ² − fmin
-    accepted = Matrix{Float64}(undef, n, 0)          # cumulative accepted (grown)
+    accepted_batches = Matrix{Float64}[]
     acc_deltas = Float64[]                            # cumulative accepted Δ (FCN units)
     n_acc = 0
     n_total = 0
@@ -449,8 +446,8 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
         end
         n_total += nsamples
 
-        # This round's accepted columns + extents, and grow the cumulative
-        # accepted buffer.
+        # Keep this round's accepted columns in their original order. The
+        # proposal buffer will be overwritten on the next round.
         round_acc = 0
         @inbounds for j in 1:nsamples
             (isfinite(dfvals[j]) && dfvals[j] <= thr) && (round_acc += 1)
@@ -467,8 +464,11 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
                     push!(acc_deltas, dfvals[j])
                 end
             end
-            accepted = hcat(accepted, newcols)
+            push!(accepted_batches, newcols)
+            cum_bounds = _extend_column_bounds(newcols, n_acc == 0 ? nothing : prev_bounds)
             n_acc += round_acc
+        else
+            cum_bounds = prev_bounds === nothing ? fill((NaN, NaN), n) : prev_bounds
         end
 
         # Under-coverage detector: per-parameter, how much of the PROPOSED
@@ -484,14 +484,12 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
                     v < plo && (plo = v); v > phi && (phi = v)
                 end
                 alo = ahi = NaN
-                for j in 1:nsamples
-                    if isfinite(dfvals[j]) && dfvals[j] <= thr
-                        v = propbuf[k, j]
-                        if isnan(alo)
-                            alo = ahi = v
-                        else
-                            v < alo && (alo = v); v > ahi && (ahi = v)
-                        end
+                for j in 1:round_acc
+                    v = newcols[k, j]
+                    if isnan(alo)
+                        alo = ahi = v
+                    else
+                        v < alo && (alo = v); v > ahi && (ahi = v)
                     end
                 end
                 pext = phi - plo
@@ -499,7 +497,6 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
             end
         end
 
-        cum_bounds = _column_bounds(accepted, n, n_acc)
         extent_converged = prev_bounds !== nothing &&
                            _bounds_rel_change(cum_bounds, prev_bounds) < extent_tol
         prev_bounds = cum_bounds
@@ -530,7 +527,13 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
         widen_rounds += 1
     end
 
-    bounds = _column_bounds(accepted, n, n_acc)
+    samples = Matrix{Float64}(undef, n_acc, n)
+    offset = 0
+    for batch in accepted_batches
+        next_offset = offset + size(batch, 2)
+        permutedims!(@view(samples[(offset+1):next_offset, :]), batch, (2, 1))
+        offset = next_offset
+    end
 
     # Optional Mahalanobis diagnostic (NEVER the acceptance criterion —
     # included only to reproduce the X(3872) notebook's diagnostic plots).
@@ -550,7 +553,7 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
         d = Vector{Float64}(undef, n)
         @inbounds for j in 1:n_acc
             for k in 1:n
-                d[k] = accepted[k, j] - best[k]
+                d[k] = samples[j, k] - best[k]
             end
             acc = 0.0
             for k in 1:n, l in 1:n
@@ -560,8 +563,8 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
         end
     end
 
-    return (; samples = permutedims(accepted),   # n_accepted × n_free (row = sample)
-              bounds,                             # Vector{(min,max)} per free param
+    return (; samples,                            # n_accepted × n_free (row = sample)
+              bounds = prev_bounds,               # Vector{(min,max)} per free param
               best = copy(best),
               deltas = acc_deltas,                # accepted Δ = χ² − fmin (FCN units)
               n_accepted = n_acc,
@@ -681,7 +684,8 @@ function get_contours_samples(m::Minuit;
         throw(ArgumentError("Call `migrad(m)` before `get_contours_samples(m)`"))
 
     ntot = n_pars(m.params)
-    free_idx = [i for i in 1:ntot if !is_fixed(m.params.pars[i])]
+    params = _init_params(m).pars
+    free_idx = [i for i in 1:ntot if !is_fixed(params[i])]
     nfree = length(free_idx)
     nfree >= 1 || throw(ArgumentError("no free parameters to sample"))
 
@@ -705,8 +709,8 @@ function get_contours_samples(m::Minuit;
     # reject such draws (Δ = +Inf) BEFORE calling the user FCN rather than
     # evaluating it on an illegal argument. Rejection (not clamping) keeps
     # the true-Δχ² region unbiased.
-    lo_free = [m.params.pars[i].lower for i in free_idx]
-    hi_free = [m.params.pars[i].upper for i in free_idx]
+    lo_free = [params[i].lower for i in free_idx]
+    hi_free = [params[i].upper for i in free_idx]
     has_bounds = any(isfinite, lo_free) || any(isfinite, hi_free)
 
     # χ² closure over a FREE-parameter vector: expand to full external,

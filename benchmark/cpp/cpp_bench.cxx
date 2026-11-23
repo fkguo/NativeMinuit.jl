@@ -72,10 +72,12 @@ public:
     double operator()(const std::vector<double>& p) const override {
         const double mu = p[0], sigma = p[1];
         if (sigma <= 0) return 1e30;
+        const double log_sigma = std::log(sigma);
+        const double sigma_squared = sigma * sigma;
         double s = 0.0;
         for (double x : fData) {
             const double d = x - mu;
-            s += std::log(sigma) + 0.5 * (d * d) / (sigma * sigma);
+            s += log_sigma + 0.5 * (d * d) / sigma_squared;
         }
         return s;
     }

@@ -184,6 +184,51 @@ import ForwardDiff
         @test ge[2] ≈ fdpart(ce, [1.1, 1900.0], 2) rtol = 1e-5
     end
 
+    @testset "Binned CDF workspace stays private during a call" begin
+        edges = [0.0, 1.0, 2.0, 3.0]
+        counts = [1.0, 2.0, 1.0]
+        outer = [0.4, 0.2]
+        inner = [1.3, 0.1]
+        cdf(x, p) = p[1] * x + p[2] * x^2
+        for cost in (BinnedNLL, ExtendedBinnedNLL)
+            reference = cost(counts, edges, cdf)
+            target = Ref{Any}()
+            nested = Ref(NaN)
+            fail = Ref(false)
+            target[] = cost(counts, edges, (x, p) -> begin
+                if x == 2.0 && p === outer
+                    fail[] && error("failed CDF edge")
+                    nested[] = target[](inner)
+                end
+                cdf(x, p)
+            end)
+            @test target[](outer) === reference(outer)
+            @test nested[] === reference(inner)
+            fail[] = true
+            @test_throws ErrorException target[](outer)
+            fail[] = false
+            @test target[](outer) === reference(outer)
+
+            paused = Channel{Nothing}(1)
+            resume = Channel{Nothing}(1)
+            yielding = cost(counts, edges, (x, p) -> begin
+                if x == 2.0 && p === outer
+                    put!(paused, nothing)
+                    take!(resume)
+                end
+                cdf(x, p)
+            end)
+            task = Threads.@spawn yielding(outer)
+            take!(paused)
+            try
+                @test yielding(inner) === reference(inner)
+            finally
+                put!(resume, nothing)
+            end
+            @test fetch(task) === reference(outer)
+        end
+    end
+
     @testset "ExtendedUnbinnedNLL: extended MLE (N̂=n, λ̂=n/Σx)" begin
         xexp = [0.2, 0.5, 0.9, 1.3, 2.1, 0.7, 1.8, 0.4, 1.1, 0.6, 0.3, 1.5]
         density(x, p) = p[2] * p[1] * exp(-p[1] * x)   # p=[λ,N]; ρ=N·λe^{-λx}

@@ -2,6 +2,19 @@
 
 @testset "parameters.jl — MinuitParameter + Parameters" begin
 
+    @testset "all-free identity coordinates preserve Float64 representations" begin
+        x = [0.0, -0.0, Inf, -Inf, nextfloat(0.0),
+             reinterpret(Float64, 0x7ff8000000000042)]
+        p = Parameters(string.(eachindex(x)), zeros(length(x)), ones(length(x)))
+        destination = similar(x)
+        @test NativeMinuit.int_to_ext_vector!(destination, p, x) === destination
+        @test reinterpret(UInt64, destination) == reinterpret(UInt64, x)
+        @test NativeMinuit.int_to_ext_vector!(x, p, x) === x
+        @test reinterpret(UInt64, x) == reinterpret(UInt64, destination)
+        @test_throws DimensionMismatch NativeMinuit.int_to_ext_vector!(zeros(1), p, x)
+        @test_throws DimensionMismatch NativeMinuit.int_to_ext_vector!(destination, p, Float64[])
+    end
+
     @testset "MinuitParameter construction" begin
         p = MinuitParameter("x", 1.0, 0.1)
         @test p.name == "x"

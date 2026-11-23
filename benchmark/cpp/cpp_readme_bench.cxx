@@ -41,7 +41,12 @@ public:
         } else if(c_.kind==3) {
             const double mu=p[0],sigma=p[1];
             if(sigma<=0) return 1e30;
-            for(double x:*c_.data) { double d=x-mu; s+=std::log(sigma)+0.5*(d*d)/(sigma*sigma); }
+            const double log_sigma = std::log(sigma);
+            const double sigma_squared = sigma * sigma;
+            for (double x : *c_.data) {
+                const double d = x - mu;
+                s += log_sigma + 0.5 * (d * d) / sigma_squared;
+            }
         } else {
             for(unsigned i=0;i<10;++i) for(unsigned j=0;j<100;++j) {
                 double d=(*c_.data)[100*i+j]-p[i]; s+=0.5*d*d;

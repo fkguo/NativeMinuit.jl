@@ -2,6 +2,7 @@
 
 using ForwardDiff
 using Logging
+using Serialization
 
 # Run `thunk` capturing all log records (used by the CheckGradient tests to
 # assert presence/absence of the discrepancy warning without being brittle to
@@ -95,6 +96,49 @@ _has_checkgrad_warning(logs) =
         @test out.gstep == prev.gstep
     end
 
+    @testset "Bounded analytical gradient destination" begin
+        nm = NativeMinuit
+        params = Parameters(["lower", "fixed", "both"], [0.3, -0.2, 0.1], fill(0.1, 3);
+            limits=[(0.0, NaN), (NaN, NaN), (-0.5, 1.0)], fixed=[false, true, false])
+        x = nm.initial_int_values(params)
+        f = x -> sum(abs2, x)
+        function g!(x)
+            yield()
+            x .*= 2
+            return x
+        end
+        cf = nm._wrap_fcn_internal_to_external(CostFunctionWithGradient(f, g!), params)
+        expected = cf.g(x)
+        dest = zeros(2)
+        @test nm._fit_gradient(cf.g, x, dest) === dest
+        @test isequal(dest, expected)
+        @test cf.g(x) !== expected
+        @test isequal(cf.g(x), expected)
+        points = [x .+ 0.1i for i in 1:4]
+        expected_points = map(cf.g, points)
+        tasks = [@async nm._fit_gradient(cf.g, point, zeros(2)) for point in points]
+        @test isequal(fetch.(tasks), expected_points)
+
+        # The public entry still reads and writes each component in sequence.
+        # The g2 source overlaps the destination at different offsets.
+        shared = [8.0, 9.0, 10.0]
+        out = FunctionGradient(@view(shared[2:3]), zeros(2), zeros(2))
+        prev = FunctionGradient(zeros(2), @view(shared[1:2]), [1.0, 2.0])
+        par = MinimumParameters(x, 0.0)
+        analytical_gradient!(out, par, cf, prev)
+        @test isequal(out.grad, expected)
+        @test isequal(out.g2, [8.0, expected[1]])
+        @test out.gstep == [1.0, 2.0]
+
+        bad = CostFunctionWithGradient(f, x -> Any[2.0, 0.0, 1im])
+        wrapped_bad = nm._wrap_fcn_internal_to_external(bad, params)
+        out_bad = FunctionGradient(zeros(2), zeros(2), zeros(2))
+        @test_throws InexactError nm.numerical_gradient!(
+            out_bad, zeros(2), par, prev, wrapped_bad, Strategy(0))
+        @test out_bad.grad == zeros(2)
+        @test nm.ngrad_calls(bad) == 0
+    end
+
     @testset "Phase F.2 — CostFunctionAD factory (ForwardDiff extension)" begin
         # ForwardDiff is in [extras] / test target, so loading it here
         # triggers the NativeMinuitForwardDiffExt package extension. The
@@ -108,6 +152,7 @@ _has_checkgrad_warning(logs) =
         f = x -> (x[1] - 1)^2 + 4 * (x[2] - 2)^2
         cf = CostFunctionAD(f, 1.0)
         @test cf isa CostFunctionWithGradient
+        @test cf.g isa Function
         # Gradient matches manual: ∇f = [2(x[1]-1), 8(x[2]-2)]
         @test cf.g([0.0, 0.0]) ≈ [-2.0, -16.0] atol = 1e-12
         @test cf.g([1.0, 2.0]) ≈ [0.0, 0.0] atol = 1e-12
@@ -143,6 +188,41 @@ _has_checkgrad_warning(logs) =
         # Default up=1.0 path
         cf_default = CostFunctionAD(f)
         @test cf_default.up == 1.0
+    end
+
+    @testset "ForwardDiff fit workspace ownership" begin
+        fit_gradient = NativeMinuit._fit_gradient
+        gradient = Ref{Any}()
+        fail = Ref(false)
+        function objective(x)
+            fail[] && error("objective failed")
+            if ForwardDiff.value(x[1]) == 1.0
+                before = copy(x)
+                @test fit_gradient(gradient[], [3.0, 4.0]) == [6.0, 8.0]
+                child = Threads.@spawn fit_gradient(gradient[], [5.0, 6.0])
+                @test fetch(child) == [10.0, 12.0]
+                @test Tuple(ForwardDiff.value.(x)) == Tuple(ForwardDiff.value.(before))
+                @test ForwardDiff.partials.(x) == ForwardDiff.partials.(before)
+            end
+            return sum(abs2, x)
+        end
+        g = CostFunctionAD(objective; chunk_size=1).g
+        gradient[] = g
+        old_result = fit_gradient(g, [1.0, 2.0])
+        @test old_result == [2.0, 4.0]
+        fail[] = true
+        @test_throws ErrorException fit_gradient(g, [1.0, 2.0])
+        fail[] = false
+        @test fit_gradient(g, [2.0, 5.0, 7.0]) == [4.0, 10.0, 14.0]
+        @test fit_gradient(g, [2.0, 5.0]) == [4.0, 10.0]
+        @test old_result == [2.0, 4.0]
+
+        serializable = CostFunctionAD(x -> sum(abs2, x); chunk_size=1).g
+        @test fit_gradient(serializable, [1.0, 2.0]) == [2.0, 4.0]
+        io = IOBuffer()
+        serialize(io, serializable)
+        restored = deserialize(seekstart(io))
+        @test fit_gradient(restored, [2.0, 3.0]) == [4.0, 6.0]
     end
 
     @testset "CheckGradient discrepancy check (audit §8/§9)" begin

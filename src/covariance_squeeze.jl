@@ -110,26 +110,27 @@ function squeeze_error(err::MinimumError, n::Integer;
     # Step 2: squeeze the Hessian
     Hs = squeeze_symmetric(Hsym, n)
 
-    # Step 3: invert squeezed Hessian back to error matrix
-    Hs_mat = copy(parent(Hs))
-    Hs_sym = Symmetric(Hs_mat, :U)
+    # Step 3: squeeze_symmetric allocated Hs, so its storage can hold
+    # the inverse. The full Hessian still carries the original diagonal.
     inv_ok_2 = true
     try
-        sym_invert!(Hs_sym)
+        sym_invert!(Hs)
     catch
         inv_ok_2 = false
     end
 
     if !inv_ok_2
-        # Inversion of squeezed Hessian failed: diagonal of 1/H_squeezed[i,i]
+        # A failed factorization may already have overwritten Hs's diagonal.
+        # Read the same pre-inversion entries from the untouched full Hessian.
         n_out = LinearAlgebra.checksquare(parent(Hs))
         diag = zeros(Float64, n_out, n_out)
         for i in 1:n_out
-            diag[i, i] = 1.0 / Hs[i, i]
+            source = i < n ? i : i + 1
+            diag[i, i] = 1.0 / Hsym[source, source]
         end
         return MinimumError(Symmetric(diag, :U), MnInvertFailed)
     end
 
     # Preserve dcovar from the input error (C++ line 86).
-    return MinimumError(Hs_sym, err.dcovar)
+    return MinimumError(Hs, err.dcovar)
 end

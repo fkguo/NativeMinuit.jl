@@ -153,7 +153,10 @@ informative error.
 
 - `f` — user FCN. Must be generic over element type (i.e. avoid
   `function f(x::Vector{Float64}) ...`; write `function f(x) ...`) so
-  ForwardDiff can promote inputs to `ForwardDiff.Dual`.
+  ForwardDiff can promote inputs to `ForwardDiff.Dual`. Parameter arrays
+  passed to the objective during a fit are borrowed workspace. Copy them
+  if you need to retain them. Calling the gradient directly as `cf.g(x)`
+  returns a fresh result.
 - `up::Real=1.0` — error definition (1 for χ², 0.5 for NLL).
 - `chunk_size::Union{Int,Nothing}=nothing` — ForwardDiff chunk size.
   `nothing` lets ForwardDiff pick automatically. For n > 12 a smaller
@@ -211,6 +214,11 @@ end
 # Analytical-gradient evaluation
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Fit callbacks borrow their inputs. Extensions can reuse private work storage
+# for this entry point while keeping direct calls to the user-facing gradient.
+@inline _fit_gradient(g, x) = g(x)
+@inline _fit_gradient(g, x, destination) = _fit_gradient(g, x)
+
 """
     analytical_gradient!(out::FunctionGradient, par::MinimumParameters,
                           cf::CostFunctionWithGradient,
@@ -237,13 +245,19 @@ function analytical_gradient!(
     prev::FunctionGradient,
     prec::MachinePrecision = MachinePrecision(),
 )
+    return _analytical_gradient!(out, par, cf, prev, nothing)
+end
+
+# The solver has private, disjoint buffers. Direct callers of the exported
+# mutating API may use overlapping arrays, so keep their existing write order.
+function _analytical_gradient!(out, par, cf, prev, destination)
     n = length(par)
     length(out) == n ||
         throw(DimensionMismatch("out length $(length(out)) != par length $n"))
     length(prev) == n ||
         throw(DimensionMismatch("prev length $(length(prev)) != par length $n"))
 
-    grad_vec = cf.g(par.x)
+    grad_vec = _fit_gradient(cf.g, par.x, destination)
     cf.ngrad[] += 1
     Base.require_one_based_indexing(grad_vec)
     length(grad_vec) == n ||
@@ -273,7 +287,7 @@ function analytical_gradient(
     out = FunctionGradient(_zero_vector_like(par.x),
                            _zero_vector_like(par.x),
                            _zero_vector_like(par.x))
-    return analytical_gradient!(out, par, cf, seed, prec)
+    return _analytical_gradient!(out, par, cf, seed, out.grad)
 end
 
 # Make `initial_gradient(par, errs, cf::CostFunctionWithGradient)` work
@@ -456,6 +470,11 @@ function numerical_gradient!(
     # call (the AD library handles its own parallelism if any), so
     # there's no per-parameter loop here to thread.
     return analytical_gradient!(out, par, cf, prev, prec)
+end
+
+@inline function _migrad_gradient!(out, work, par, prev, cf::CostFunctionWithGradient,
+                                   strategy, prec, threaded, has_limits)
+    return _analytical_gradient!(out, par, cf, prev, out.grad)
 end
 
 # negative_g2_line_search on the analytical-gradient (AD) path.

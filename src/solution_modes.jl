@@ -77,10 +77,8 @@
 #     `Clustering.jl`); errors with a helpful message if Clustering isn't
 #     loaded.
 #
-# Complexity. The built-in connected-components clusterer is O(N²·d) in the
-# number of samples N (all-pairs). That is fine for the hundreds-to-few-
-# thousand samples a Δχ² scan produces; for very large N prefer
-# `method=:dbscan` (Clustering.jl uses a spatial tree → ~O(N·log N)).
+# The built-in connected-components search prunes distant and already
+# connected samples. Its worst case remains O(N²·d).
 #
 # FCN cost. Unless told otherwise, `find_solution_modes` evaluates the user
 # FCN at EVERY sample (to pick min-χ² representatives and report Δχ²). On
@@ -304,6 +302,88 @@ end
     return root
 end
 
+# Test an edge with the original coordinate order and rounded squared radius.
+@inline function _within_component_radius(Z, i::Int, j::Int, d::Int, thr2::Float64)
+    s = 0.0
+    @inbounds for k in 1:d
+        δ = Float64(Z[k, i]) - Float64(Z[k, j])
+        s += δ * δ
+        s > thr2 && return false
+    end
+    return s <= thr2
+end
+
+# The box diagonal bounds every pair distance. Accumulate its squared
+# components in the same order as the edge test, including overflow.
+function _component_box(Z::Matrix{Float64})
+    axis, widest, diagonal2 = 0, -1.0, 0.0
+    for k in axes(Z, 1)
+        lo, hi = extrema(@view Z[k, :])
+        isfinite(lo) && isfinite(hi) || return 0, 0.0, Inf
+        width = hi - lo
+        diagonal2 += width * width
+        if width > widest
+            axis, widest = k, width
+        end
+    end
+    return axis, widest * widest, diagonal2
+end
+
+function _sweep_components(Z::Matrix{Float64}, thr2::Float64, axis::Int)
+    d, N = size(Z)
+    order = sortperm(@view Z[axis, :])
+    position = invperm(order)
+    # Rounding can make x ± threshold exclude an actual edge. Compare the
+    # squared coordinate difference exactly as in the full distance instead.
+    windows = Vector{UnitRange{Int}}(undef, N)
+    lo, hi = 1, 1
+    @inbounds for p in 1:N
+        x = Z[axis, order[p]]
+        while (x - Z[axis, order[lo]])^2 > thr2
+            lo += 1
+        end
+        while hi < N && (Z[axis, order[hi + 1]] - x)^2 <= thr2
+            hi += 1
+        end
+        windows[p] = lo:hi
+    end
+
+    # Flood-fill from the first input member of each component. A discovered
+    # point need never be tested as a neighbour again. Successor links skip
+    # it in every later window; N+1 is the end sentinel.
+    remaining = collect(1:(N + 1))
+    queue = Vector{Int}(undef, N)
+    labels = zeros(Int, N)
+    nraw = 0
+    @inbounds for seed in 1:N
+        labels[seed] == 0 || continue
+        nraw += 1
+        labels[seed] = nraw
+        first_pos = position[seed]
+        remaining[first_pos] = _uf_find!(remaining, first_pos + 1)
+        queue[1] = first_pos
+        head, tail = 1, 1
+        while head <= tail
+            p = queue[head]
+            head += 1
+            window = windows[p]
+            j = _uf_find!(remaining, first(window))
+            while j <= last(window)
+                next = _uf_find!(remaining, j + 1)
+                target = order[j]
+                if _within_component_radius(Z, order[p], target, d, thr2)
+                    labels[target] = nraw
+                    remaining[j] = next
+                    tail += 1
+                    queue[tail] = j
+                end
+                j = next
+            end
+        end
+    end
+    return labels, nraw
+end
+
 """
     _connected_components(Z, threshold) -> (labels, nraw)
 
@@ -315,22 +395,26 @@ whitened space is `≤ threshold`, then label connected components `1:nraw`.
 """
 function _connected_components(Z::AbstractMatrix{<:Real}, threshold::Real)
     d, N = size(Z)
-    parent = collect(1:N)
     thr2 = Float64(threshold)^2
+    if Z isa Matrix{Float64} && N >= 128 && d > 0 && isfinite(thr2)
+        axis, span2, diagonal2 = _component_box(Z)
+        diagonal2 <= thr2 && return fill(1, N), 1
+        # Use direct pairs if every point fits the same coordinate window.
+        span2 > thr2 && return _sweep_components(Z, thr2, axis)
+    end
+    parent = collect(1:N)
+    components = N
     @inbounds for i in 1:(N - 1)
         ri = _uf_find!(parent, i)
         for j in (i + 1):N
-            # squared whitened distance, with early exit once it exceeds thr².
-            s = 0.0
-            for k in 1:d
-                δ = Float64(Z[k, i]) - Float64(Z[k, j])
-                s += δ * δ
-                s > thr2 && break
-            end
-            if s <= thr2
+            if _within_component_radius(Z, i, j, d, thr2)
                 rj = _uf_find!(parent, j)
                 if rj != ri
                     parent[rj] = ri          # attach j's root under i's root
+                    if Z isa Matrix{Float64}
+                        components -= 1
+                        components == 1 && return fill(1, N), 1
+                    end
                 end
             end
         end
@@ -453,8 +537,12 @@ function _dbscan_labels end
 # polluted. Parallelized across samples when `parallel` (same Phase-G/H
 # thread-safety contract as threaded gradients).
 function _eval_fvals(m::Minuit, Xfull::Matrix{Float64}, parallel::Bool)
+    return _eval_fvals(m.fcn.f, _init_params(m).values, Xfull, parallel)
+end
+
+function _eval_fvals(f::F, template::V, Xfull::Matrix{Float64},
+                     parallel::Bool) where {F,V<:AbstractVector{Float64}}
     N = size(Xfull, 1)
-    f = m.fcn.f
     out = Vector{Float64}(undef, N)
     # Rows are rebuilt onto the fit's coordinate container rather than passed
     # as a `SubArray` of the sample matrix, so an objective written against
@@ -476,7 +564,6 @@ function _eval_fvals(m::Minuit, Xfull::Matrix{Float64}, parallel::Bool)
     #
     # The failure mode is a silent wrong value, so the parallel branch is
     # pinned against the serial one by an equality test.
-    template = _init_params(m).values
     npar = size(Xfull, 2)
     if parallel
         Threads.@threads :dynamic for i in 1:N

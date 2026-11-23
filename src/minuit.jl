@@ -712,21 +712,18 @@ function migrad!(m::Minuit;
     # own inner `_migrad_loop`; `_migrad_into!` suppresses the per-pass
     # warning via `warn_nonfinite = false`).
     nf_total = _nonfinite_calls(bfm)
-    # The user's per-parameter step on m.params is the stable, pass-invariant
-    # length scale for both the fixed-point tolerance and the growth ceiling.
-    # Use the raw config (NOT the fit-overlaid `m.params`): on a re-`migrad!`
-    # the overlay would yield the prior fit's Hesse errors, drifting the scale.
-    # Function barrier (issue #45): `m.params` is an abstractly-typed field,
-    # so an inline comprehension over it dispatches dynamically per element;
-    # `_config_step_vector` specializes once on the concrete `Parameters`
-    # and reads the canonical `errors` store directly.
-    base_errs = _config_step_vector(_init_params(m))
-    visited = Tuple{Vector{Float64},Float64}[_visited_entry(bfm)]
     # Every FCN call of this invocation (all MIGRAD passes and Simplex
     # passes); the surplus over the published pass goes to `m.nfcn` below.
     total_calls = nfcn(bfm)
+    local base_errs, visited
     for _pass in 2:Int(iterate)
         _retry_stop_early(bfm) && break
+        if _pass == 2
+            # Use the configured steps, which stay fixed across the retry
+            # sequence. The fit-overlaid property reports HESSE errors.
+            base_errs = _config_step_vector(_init_params(m))
+            visited = Tuple{Vector{Float64},Float64}[_visited_entry(bfm)]
+        end
 
         prior_cov = nothing
         factor = 1.0
@@ -1132,11 +1129,11 @@ function minos!(m::Minuit, par::Integer;
                 threaded_gradient::Union{Bool,Symbol} = m.threaded_gradient,
                 print_level::Integer = m.print_level,
                 kwargs...)
-    1 <= par <= n_pars(m.params) ||
+    1 <= par <= n_pars(_init_params(m)) ||
         throw(ArgumentError("par index $par out of bounds"))
     # Fixed parameters carry no MINOS error — skip silently and return `m`
     # so `minos!(m)` (all-params) and method chaining keep working.
-    is_fixed(m.params.pars[Int(par)]) && return m
+    is_fixed(_init_params(m), Int(par)) && return m
     m.minos_errors[Int(par)] = _minos_error(m, Int(par);
                                               threaded_gradient = threaded_gradient,
                                               print_level = print_level, kwargs...)
@@ -1179,9 +1176,9 @@ function _minos_error(m::Minuit, par::Int;
             "MINOS requires a covariance matrix. The last fit produced " *
             "no inverse Hessian (likely simplex/scan, or HESSE didn't " *
             "run). Call `hesse(m)` first."))
-    1 <= par <= n_pars(m.params) ||
+    1 <= par <= n_pars(_init_params(m)) ||
         throw(ArgumentError("par index $par out of bounds"))
-    is_fixed(m.params.pars[par]) &&
+    is_fixed(_init_params(m), par) &&
         throw(ArgumentError("MINOS is undefined for fixed parameter $par"))
 
     # iminuit / C++ MnMinos control-name translation. `maxcall` (iminuit,
@@ -1196,7 +1193,7 @@ function _minos_error(m::Minuit, par::Int;
     if maxcall > 0
         fwd = merge(fwd, (; maxcalls = Int(maxcall)))
     else
-        fwd = merge(fwd, (; maxcalls = _minos_default_maxcalls(n_free(m.params))))
+        fwd = merge(fwd, (; maxcalls = _minos_default_maxcalls(n_free(_init_params(m)))))
     end
     if toler !== nothing
         fwd = merge(fwd, (; tlr = Float64(toler)))
@@ -1211,15 +1208,14 @@ function _minos_error(m::Minuit, par::Int;
     fwd = merge(fwd, (; strategy = m.strategy))
     fwd = merge(fwd, (; kwargs...))
 
-    p = m.params.pars[par]
-    has_any_bound = has_limits(p) || has_lower_limit(p) || has_upper_limit(p)
-    me = _minos_error_dispatch(m, par, p, has_any_bound, _tg, print_level, fwd)
+    has_any_bound = has_limits(_init_params(m).metadata[par])
+    me = _minos_error_dispatch(m, par, has_any_bound, _tg, print_level, fwd)
     # Account the calls on `m.nfcn` (iminuit: `self._fcn._nfcn` accumulates).
     getfield(m, :_extra_nfcn)[] += me.nfcn
     return me
 end
 
-function _minos_error_dispatch(m::Minuit, par::Int, p, has_any_bound::Bool,
+function _minos_error_dispatch(m::Minuit, par::Int, has_any_bound::Bool,
                                _tg::Bool, print_level::Integer, fwd)
     if has_any_bound
         # Bound-aware EXT-coord MINOS (mirrors C++ MnMinos.cxx:119-131
@@ -1251,11 +1247,12 @@ function _minos_error_dispatch(m::Minuit, par::Int, p, has_any_bound::Bool,
         # `minos()` operates in internal coords. For bounded "other"
         # params it must additionally Int2ext + EXT clamp + Ext2int so
         # the pre-shifted internal value stays inside the valid
-        # transform range (±π/2 for doubly-bounded). Pass `pars=m.params`
-        # so `minos()` has the bound information to do that clamp.
+        # transform range (±π/2 for doubly-bounded). MINOS only needs
+        # the configured bounds and index maps for this calculation.
+        cfg = _init_params(m)
         me = minos(m.fmin.internal, m.fmin.internal_cf,
-                   m.params.int_of_ext[par];
-                   pars = m.params,
+                   cfg.int_of_ext[par];
+                   pars = cfg,
                    threaded_gradient = _tg,
                    print_level = print_level, fwd...)
         # The low-level result is INTERNAL-frame: `par_idx` is the free-
@@ -1464,7 +1461,7 @@ function _minos_external_via_function_cross(
                        upper_state, lower_state)
 end
 function minos!(m::Minuit, par_name::AbstractString; kwargs...)
-    par_idx = ext_index(m.params, String(par_name))
+    par_idx = ext_index(_init_params(m), String(par_name))
     return minos!(m, par_idx; kwargs...)
 end
 
@@ -1474,8 +1471,8 @@ end
 Run MINOS on all free parameters.
 """
 function minos!(m::Minuit; kwargs...)
-    for ext_idx in 1:n_pars(m.params)
-        is_fixed(m.params.pars[ext_idx]) && continue
+    for ext_idx in 1:n_pars(_init_params(m))
+        is_fixed(_init_params(m), ext_idx) && continue
         minos!(m, ext_idx; kwargs...)
     end
     return m
@@ -1509,7 +1506,7 @@ function minos_upper(m::Minuit, par::Integer; kwargs...)
     return _minos_error(m, Int(par); kwargs...).upper
 end
 minos_upper(m::Minuit, par::AbstractString; kwargs...) =
-    minos_upper(m, ext_index(m.params, String(par)); kwargs...)
+    minos_upper(m, ext_index(_init_params(m), String(par)); kwargs...)
 minos_upper(m::Minuit, par::Symbol; kwargs...) =
     minos_upper(m, String(par); kwargs...)
 
@@ -1529,7 +1526,7 @@ function minos_lower(m::Minuit, par::Integer; kwargs...)
     return _minos_error(m, Int(par); kwargs...).lower
 end
 minos_lower(m::Minuit, par::AbstractString; kwargs...) =
-    minos_lower(m, ext_index(m.params, String(par)); kwargs...)
+    minos_lower(m, ext_index(_init_params(m), String(par)); kwargs...)
 minos_lower(m::Minuit, par::Symbol; kwargs...) =
     minos_lower(m, String(par); kwargs...)
 
@@ -1556,8 +1553,9 @@ function contour_ellipse(m::Minuit, par_x::Integer, par_y::Integer;
         throw(ArgumentError("Call `migrad!(m)` before `contour_ellipse(m, ...)`"))
     _tg = _use_threads(m, threaded_gradient)
     npts = bins === nothing ? Int(npoints) : Int(bins)
-    ix = m.params.int_of_ext[par_x]
-    iy = m.params.int_of_ext[par_y]
+    cfg = _init_params(m)
+    ix = cfg.int_of_ext[par_x]
+    iy = cfg.int_of_ext[par_y]
     # Use the internal-coord-wrapped CostFunction (parallel-review #4
     # A7/B4 — see minos! for the rationale).
     ce = contour_ellipse(m.fmin.internal, m.fmin.internal_cf, ix, iy;
@@ -1571,8 +1569,8 @@ end
 
 function contour_ellipse(m::Minuit, px::AbstractString, py::AbstractString;
                   kwargs...)
-    return contour_ellipse(m, ext_index(m.params, String(px)),
-                      ext_index(m.params, String(py)); kwargs...)
+    return contour_ellipse(m, ext_index(_init_params(m), String(px)),
+                      ext_index(_init_params(m), String(py)); kwargs...)
 end
 
 # 0.5.0 rename (rationale at the low-level deprecation in src/contours.jl).
@@ -2066,7 +2064,7 @@ fix!(m, "alpha")
 ```
 """
 fix!(m::Minuit, par::AbstractString) =
-    fix!(m, ext_index(m.params, String(par)))
+    fix!(m, ext_index(_init_params(m), String(par)))
 function fix!(m::Minuit, i::Integer)
     _check_par_index(m, i)
     return _replace_one_param!(p -> _build_fixed_par(p, true), m, Int(i))
@@ -2091,7 +2089,7 @@ fix!(m, "alpha"); migrad!(m); release!(m, "alpha"); migrad!(m)
 ```
 """
 release!(m::Minuit, par::AbstractString) =
-    release!(m, ext_index(m.params, String(par)))
+    release!(m, ext_index(_init_params(m), String(par)))
 function release!(m::Minuit, i::Integer)
     _check_par_index(m, i)
     return _replace_one_param!(p -> _build_fixed_par(p, false), m, Int(i))
@@ -2114,7 +2112,7 @@ to bounds at minimization time, so no value-vs-limits check is done
 here (matches C++).
 """
 set_value!(m::Minuit, par::AbstractString, v::Real) =
-    set_value!(m, ext_index(m.params, String(par)), v)
+    set_value!(m, ext_index(_init_params(m), String(par)), v)
 function set_value!(m::Minuit, i::Integer, v::Real)
     _check_par_index(m, i)
     return _replace_one_param!(p -> _build_value_par(p, v), m, Int(i))
@@ -2132,7 +2130,7 @@ Set parameter `par`'s step size to `e`. Mirrors C++
 gradient floor and could silently poison the seed.
 """
 set_error!(m::Minuit, par::AbstractString, e::Real) =
-    set_error!(m, ext_index(m.params, String(par)), e)
+    set_error!(m, ext_index(_init_params(m), String(par)), e)
 function set_error!(m::Minuit, i::Integer, e::Real)
     _check_par_index(m, i)
     return _replace_one_param!(p -> _build_error_par(p, e), m, Int(i))
@@ -2152,7 +2150,7 @@ two are stored as `NaN` (the "absent bound" sentinel), so passing
 both are finite Reals, `lo < up` is required (else `ArgumentError`).
 """
 set_limits!(m::Minuit, par::AbstractString, lo, up) =
-    set_limits!(m, ext_index(m.params, String(par)), lo, up)
+    set_limits!(m, ext_index(_init_params(m), String(par)), lo, up)
 function set_limits!(m::Minuit, i::Integer, lo, up)
     _check_par_index(m, i)
     return _replace_one_param!(p -> _build_limits_par(p, lo, up), m, Int(i))
@@ -2168,7 +2166,7 @@ Clear both bounds on parameter `par`. Mirrors C++
 After the call, `m.params.pars[par].lower` and `.upper` are both `NaN`.
 """
 remove_limits!(m::Minuit, par::AbstractString) =
-    remove_limits!(m, ext_index(m.params, String(par)))
+    remove_limits!(m, ext_index(_init_params(m), String(par)))
 function remove_limits!(m::Minuit, i::Integer)
     _check_par_index(m, i)
     return _replace_one_param!(p -> _build_limits_par(p, nothing, nothing),
@@ -2192,7 +2190,7 @@ finite (NaN / ±Inf throw `ArgumentError`); use [`remove_limits!`](@ref)
 to drop a bound.
 """
 set_upper_limit!(m::Minuit, par::AbstractString, hi::Real) =
-    set_upper_limit!(m, ext_index(m.params, String(par)), hi)
+    set_upper_limit!(m, ext_index(_init_params(m), String(par)), hi)
 function set_upper_limit!(m::Minuit, i::Integer, hi::Real)
     _check_par_index(m, i)
     isfinite(Float64(hi)) ||
@@ -2219,7 +2217,7 @@ finite (NaN / ±Inf throw `ArgumentError`); use [`remove_limits!`](@ref)
 to drop a bound.
 """
 set_lower_limit!(m::Minuit, par::AbstractString, lo::Real) =
-    set_lower_limit!(m, ext_index(m.params, String(par)), lo)
+    set_lower_limit!(m, ext_index(_init_params(m), String(par)), lo)
 function set_lower_limit!(m::Minuit, i::Integer, lo::Real)
     _check_par_index(m, i)
     isfinite(Float64(lo)) ||
@@ -2928,5 +2926,5 @@ end
 
 # Short one-line repr for `print` / inline display in Vector etc.
 Base.show(io::IO, m::Minuit) =
-    print(io, "Minuit(", n_pars(m.params), " params, ",
+    print(io, "Minuit(", n_pars(_init_params(m)), " params, ",
               m.fmin === nothing ? "not minimized" : "fval=$(m.fval)", ")")

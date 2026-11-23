@@ -3,6 +3,25 @@
 using LinearAlgebra
 
 @testset "davidon.jl — DFP update" begin
+    @testset "Fused update preserves triangle sums and storage bits" begin
+        # Entries span several magnitudes so changing either summation
+        # order can change the result. The unused triangle must be untouched.
+        original = [1e16 -0.0 3.0; -1.0 1.0 -2.0; 8.0 4.0 1.0]
+        delta = [-1e16 -0.0 1e-12; 2.0 -0.25 3.0; -1e-12 -2.0 1.0]
+        bits(A) = reinterpret(UInt64, vec(parent(A)))
+        for triangle in (:U, :L), shared in (false, true)
+            reference = Symmetric(copy(original), triangle)
+            actual = Symmetric(copy(original), triangle)
+            delta_ref = shared ? reference : Symmetric(copy(delta), triangle)
+            delta_actual = shared ? actual : Symmetric(copy(delta), triangle)
+            sum_delta = NativeMinuit.sum_sym(delta_ref)
+            NativeMinuit.add_sym!(reference, delta_ref)
+            sum_final = NativeMinuit.sum_sym(reference)
+            result = NativeMinuit._davidon_add_and_sum!(actual, delta_actual, 3)
+            @test map(bitstring, result) == map(bitstring, (sum_delta, sum_final))
+            @test bits(actual) == bits(reference)
+        end
+    end
 
     # ─────────────────────────────────────────────────────────
     @testset "Additive rank-1 semantic (NOT branched)" begin

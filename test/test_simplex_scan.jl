@@ -1,5 +1,22 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
+@testset "simplex vertex storage keeps trial and retained points independent" begin
+    vertices = [(1.0, [1.0]), (4.0, [2.0])]
+    sp = NativeMinuit.SimplexParameters(vertices, 2, 1)
+    old = sp[2][2]
+    trial = [3.0]
+    NativeMinuit.update!(sp, 9.0, trial; reuse_vertex = true)
+    @test sp[2][2] === old
+    trial[1] = 7.0
+    @test sp[2][2] == [3.0]
+    NativeMinuit.update!(sp, 9.0, [4.0, 5.0]; reuse_vertex = true)
+    @test sp[2][2] == [4.0, 5.0]
+    @test old == [3.0]
+    prior = sp[2][2]
+    NativeMinuit.update!(sp, 9.0, [6.0, 8.0])
+    @test prior == [4.0, 5.0]
+end
+
 using NativeMinuit
 using Test
 

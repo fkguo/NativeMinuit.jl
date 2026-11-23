@@ -112,6 +112,14 @@ function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecisio
         dg = 0.5 + epspdf - dgmin
     end
 
+    if n == 2
+        diagonal = _sufficient_posdef_diagonal_2d(err_M, dg, epspdf)
+        if diagonal !== nothing
+            err_M[1, 1], err_M[2, 2] = diagonal
+            return MinimumError(Symmetric(err_M, :U), err.dcovar, MnHesseValid, true)
+        end
+    end
+
     # Build the normalized correlation matrix p and apply diagonal add
     # (MnPosDef.cxx:67-77). Both p and err_M are upper-triangle authoritative.
     p_M = zeros(n, n)
@@ -135,7 +143,7 @@ function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecisio
     p_sym = Symmetric(p_M, :U)
 
     # Eigenvalue gate (MnPosDef.cxx:80-86)
-    eval_ = sym_eigvals(p_sym)
+    eval_ = sym_eigvals!(p_sym)
     pmin = eval_[1]                 # eigvals returns sorted ascending
     pmax = eval_[end]
     pmax = max(abs(pmax), 1.0)      # MnPosDef.cxx:84
@@ -220,9 +228,6 @@ function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
             throw(ArgumentError("make_posdef!: s_buf must not alias parent(S)"))
     end
 
-    eps = prec.eps
-    eps2 = prec.eps2
-
     # P6 guard — same rationale as the allocating `make_posdef(err)`
     # above: never feed a non-finite matrix to LAPACK eigvals. Leave `S`
     # untouched and report `true` (the MnMadePosDef tag would apply);
@@ -232,7 +237,55 @@ function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
             return true
         end
     end
+    return _make_posdef_finite_upper!(M, n, prec, p_buf, s_buf)
+end
 
+# A sufficient check for the same normalized eigenvalue gate used below.
+# These Gershgorin row bounds place the eigenvalues in [0.5, 1.5],
+# leaving a margin over epspdf * max(abs(pmax), 1) ≤ 0.375.
+@inline function _sufficient_posdef_diagonal_2d(M, dg, epspdf)
+    epspdf <= 0.25 || return nothing
+    d1 = M[1, 1] + dg
+    d2 = M[2, 2] + dg
+    s1 = 1.0 / sqrt(d1)
+    s2 = 1.0 / sqrt(d2)
+    p11 = d1 * s1 * s1
+    p22 = d2 * s2 * s2
+    p12 = M[1, 2] * s2 * s1
+    return 0.75 <= p11 <= 1.25 && 0.75 <= p22 <= 1.25 &&
+           abs(p12) <= 0.25 ? (d1, d2) : nothing
+end
+
+# Use the same normalized entries as the eigenvalue gate. Diagonals in
+# [0.75, 1.25] and row radii at most 0.25 bound the spectrum to [0.5, 1.5].
+# The gap to the worst permitted gate (0.25 * 1.5) is much larger than
+# rounding in at most 127 nonnegative terms per radius. A failed check
+# leaves M untouched for the general eigensolve.
+function _sufficient_posdef_upper(M::Matrix{Float64}, s::Vector{Float64})
+    n = length(s)
+    @inbounds for i in 1:n
+        s[i] = 1.0 / sqrt(M[i, i])
+        0.75 <= M[i, i] * s[i] * s[i] <= 1.25 || return false
+    end
+    @inbounds for i in 1:n
+        radius = 0.0
+        si = s[i]
+        for j in 1:(i - 1)
+            radius += abs(M[j, i] * si * s[j])
+        end
+        for j in (i + 1):n
+            radius += abs(M[i, j] * s[j] * si)
+        end
+        radius <= 0.25 || return false
+    end
+    return true
+end
+
+function _make_posdef_finite_upper!(M::Matrix{Float64}, n::Int, prec::MachinePrecision,
+                                  p_buf::Union{Nothing,Matrix{Float64}},
+                                  s_buf::Union{Nothing,Vector{Float64}})
+    eps = prec.eps
+    eps2 = prec.eps2
     # n=1 fast path (MnPosDef.cxx:37-43) — mutate in place.
     if n == 1
         if M[1, 1] < eps
@@ -259,10 +312,26 @@ function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
         dg = 0.5 + epspdf - dgmin
     end
 
+    if n == 2 && p_buf === nothing && s_buf === nothing
+        diagonal = _sufficient_posdef_diagonal_2d(M, dg, epspdf)
+        if diagonal !== nothing
+            M[1, 1], M[2, 2] = diagonal
+            return false
+        end
+    end
+
+    # For modest matrices with an already positive diagonal, try a
+    # sufficient check before allocating the correlation matrix. Caller
+    # scratch still receives the original eigensolve's writes.
+    s = s_buf === nothing ? Vector{Float64}(undef, n) : s_buf
+    if 3 <= n <= 128 && dgmin > 0.0 && epspdf <= 0.25 &&
+       p_buf === nothing && s_buf === nothing && _sufficient_posdef_upper(M, s)
+        return false
+    end
+
     # Normalized correlation matrix p and diagonal add (MnPosDef.cxx:67-77),
     # written in place into M (diagonal) and the upper triangle of p_buf.
     p_M = p_buf === nothing ? Matrix{Float64}(undef, n, n) : p_buf
-    s = s_buf === nothing ? Vector{Float64}(undef, n) : s_buf
     @inbounds for i in 1:n
         M[i, i] += dg
         if M[i, i] < 0

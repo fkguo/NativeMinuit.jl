@@ -416,7 +416,7 @@ function minos(
                 # internal index k corresponds to ext_of_int[k]. Map
                 # to ext, clamp, map back to int.
                 ext_idx = pars.ext_of_int[k]
-                p_ext = pars.pars[ext_idx]
+                p_ext = pars.metadata[ext_idx]
                 if has_limits(p_ext)
                     kind = bound_kind(p_ext)
                     # For BothBounds (sin transform), saturate INT to
