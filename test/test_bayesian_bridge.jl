@@ -11,6 +11,18 @@ function _bayes_var(v::AbstractVector)
     return sum((x - μ)^2 for x in v) / (length(v) - 1)
 end
 
+struct _PosteriorTaskProbe
+    tasks::Set{Task}
+    lock::ReentrantLock
+end
+
+function (probe::_PosteriorTaskProbe)(x)
+    lock(probe.lock) do
+        push!(probe.tasks, current_task())
+    end
+    return sum(abs2, x)
+end
+
 @testset "Bayesian bridge — posterior_sample / bayesian" begin
     @test !isdefined(NativeMinuit, Symbol("bayesian!"))
 
@@ -444,6 +456,33 @@ end
         @test isequal(NativeMinuit._posterior_ess(samples, rows, columns), expected)
         task = Threads.@spawn NativeMinuit._posterior_ess(samples, rows, columns)
         @test isequal(fetch(task), expected)
+    end
+
+    @testset "Threaded Metropolis preserves seeded chains and their order" begin
+        objective = _PosteriorTaskProbe(Set{Task}(), ReentrantLock())
+        m = Minuit(objective, fill(0.2, 6); limits = fill((-1.0, 1.0), 6))
+        migrad!(m)
+        empty!(objective.tasks)
+        p = PosteriorProblem(m)
+        setup = (; sampler = :metropolis, nsteps = 160, burn = 80, thin = 2,
+                   nchains = 4, seed = 517, target_accept = 0.35, adapt_every = 20, warn = false)
+        serial = posterior_sample(p; setup...)
+        callback_tasks = p.fcn.tasks
+        empty!(callback_tasks)
+        threaded = posterior_sample(p; setup..., threaded = true)
+        @test (length(callback_tasks) > 1) == (Threads.threadpoolsize() > 1)
+        @test isequal(threaded.ensemble.samples, serial.ensemble.samples)
+        @test isequal(threaded.ensemble.fvals, serial.ensemble.fvals)
+        @test threaded.ensemble.acceptance === serial.ensemble.acceptance
+        @test threaded.ensemble.scale === serial.ensemble.scale
+        @test threaded.chain_ids == serial.chain_ids
+        @test isequal(threaded.loglik_kept, serial.loglik_kept)
+        @test isequal(threaded.logpost_kept, serial.logpost_kept)
+        @test isequal(threaded.rhat, serial.rhat)
+        @test isequal(threaded.ess, serial.ess)
+        @test_throws ArgumentError posterior_sample(p; sampler = :metropolis, threaded = true,
+                                                     rng = MersenneTwister(517))
+        @test_throws ArgumentError posterior_sample(p; sampler = :stretch, threaded = true, seed = 517)
     end
 
     @testset "PosteriorSample constructor validates diagnostic shapes" begin

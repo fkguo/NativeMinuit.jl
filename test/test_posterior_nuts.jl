@@ -15,6 +15,26 @@ using AdvancedHMC, LogDensityProblems, LogDensityProblemsAD, TransformVariables,
     @test Base.get_extension(NativeMinuit, :NativeMinuitAdvancedHMCExt) !== nothing
     @test isdefined(NativeMinuit, :_posterior_sample_nuts)
 
+    @testset "Threaded NUTS owns its per-chain AD work and RNG" begin
+        f(x) = ((x[1] - 0.33) / 0.5)^2 + ((x[2] + 0.28) / 0.37)^2
+        m = Minuit(f, [0.0, 0.0]; names = ["x", "y"], limits = [(-1.0, 1.0), nothing])
+        migrad!(m)
+        p = PosteriorProblem(m; prior = normal_prior(m, :x, 0.45, 0.6))
+        setup = (; sampler = :nuts, nsteps = 160, burn = 80, thin = 2, nchains = 4,
+                   seed = 1273, warn = false)
+        serial = posterior_sample(p; setup...)
+        task = Threads.@spawn posterior_sample(p; setup..., threaded = true)
+        threaded = fetch(task)
+        @test isequal(threaded.ensemble.samples, serial.ensemble.samples)
+        @test isequal(threaded.ensemble.fvals, serial.ensemble.fvals)
+        @test threaded.ensemble.acceptance === serial.ensemble.acceptance
+        @test threaded.chain_ids == serial.chain_ids
+        @test isequal(threaded.loglik_kept, serial.loglik_kept)
+        @test isequal(threaded.logpost_kept, serial.logpost_kept)
+        @test isequal(threaded.ess, serial.ess)
+        @test isequal(threaded.rhat, serial.rhat)
+    end
+
     @testset "unbounded posterior recovery" begin
         f(x) = ((x[1] - 1.0) / 0.5)^2 + ((x[2] + 0.5) / 0.3)^2
         m = Minuit(f, [0.0, 0.0]; names = ["a", "b"]); migrad!(m); hesse!(m)

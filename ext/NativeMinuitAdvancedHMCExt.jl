@@ -30,8 +30,8 @@ using ForwardDiff
 using Random
 using Statistics
 
-import NativeMinuit: PosteriorProblem, PosteriorSample, LikelihoodEnsemble,
-                 _posterior_diagnostics, _boundary_flags, _chain_seed
+import NativeMinuit: PosteriorProblem, _PosteriorChainBatch, _posterior_run_chains,
+                     _posterior_from_chains, _chain_seed
 
 # Build the unconstraining transform from the per-free-coordinate limits
 # (`NaN` ⇒ unbounded on that side). The effective support already folds in the
@@ -111,7 +111,7 @@ end
 function _nuts_impl(prob::PosteriorProblem; nsteps::Integer,
                     burn::Integer, thin::Integer, nchains::Integer,
                     target_accept::Real, diagnostics::Bool,
-                    seed, rng, warn::Bool)
+                    seed, rng, threaded::Bool = false, warn::Bool)
     nfree = length(prob.free_idx)
     ntot = length(prob.best)
     t = _build_transform(prob.lo_free, prob.hi_free)
@@ -140,21 +140,16 @@ function _nuts_impl(prob::PosteriorProblem; nsteps::Integer,
             "ForwardDiff only — use the gradient-free sampler = :stretch instead."))
     end
 
-    sample_batches = Vector{Matrix{Float64}}(undef, Int(nchains))
-    all_fvals = Float64[]
-    all_loglik = Float64[]
-    all_logpost = Float64[]
-    chain_ids = Int[]
-    accs = Float64[]
     fbest = first(_eval_constrained(ℓ, pbest))
-
-    for ch in 1:nchains
+    batches = _posterior_run_chains(Int(nchains), threaded) do ch
         rng_ch = seed !== nothing ? Random.MersenneTwister(_chain_seed(UInt64(seed), ch)) :
                  rng !== nothing ? rng : Random.default_rng()
         init = ch == 1 ? collect(Float64, y0) :
                collect(Float64, y0) .+ randn(rng_ch, nfree)   # over-dispersed start
         metric = DiagEuclideanMetric(nfree)
-        ham = Hamiltonian(metric, ∂ℓ)
+        # ForwardDiff's configuration contains mutable buffers.
+        gradient = threaded ? LogDensityProblemsAD.ADgradient(:ForwardDiff, ℓ) : ∂ℓ
+        ham = Hamiltonian(metric, gradient)
         # Pass the per-chain RNG: the no-RNG overload would draw the trial momenta
         # from the global default RNG, breaking same-seed reproducibility and
         # consuming global RNG state.
@@ -169,6 +164,9 @@ function _nuts_impl(prob::PosteriorProblem; nsteps::Integer,
         thin > 1 && (ys = ys[thin:thin:end])      # honor `thin` (NUTS rarely needs it)
         nkept = length(ys)
         block = Matrix{Float64}(undef, nkept, ntot)
+        fvals = Vector{Float64}(undef, nkept)
+        loglik = similar(fvals)
+        logpost = similar(fvals)
         for (r, y) in enumerate(ys)
             θ, _ = TransformVariables.transform_and_logjac(t, y)
             for i in 1:ntot
@@ -178,26 +176,15 @@ function _nuts_impl(prob::PosteriorProblem; nsteps::Integer,
                 block[r, i] = θ[j]
             end
             c, lp = _eval_constrained(ℓ, ntuple(j -> θ[j], nfree))
-            push!(all_fvals, c)
-            push!(all_loglik, -c / (2 * prob.up))
-            push!(all_logpost, -c / (2 * prob.up) + lp)
-            push!(chain_ids, ch)
+            fvals[r] = c
+            loglik[r] = -c / (2 * prob.up)
+            logpost[r] = -c / (2 * prob.up) + lp
         end
-        sample_batches[ch] = block
-        push!(accs, acc)
+        return _PosteriorChainBatch(block, fvals, loglik, logpost, acc, NaN, NaN)
     end
 
-    free = falses(length(prob.names)); free[prob.free_idx] .= true
-    ens = LikelihoodEnsemble(reduce(vcat, sample_batches), all_fvals, prob.names, collect(free),
-                             prob.best, fbest, prob.up, mean(accs),
-                             Int(nsteps), Int(burn), Int(thin), NaN,   # no proposal scale
-                             :nuts, seed === nothing ? nothing : UInt64(seed))
-    rh, es = _posterior_diagnostics(ens.samples, chain_ids, prob.free_idx, Int(nchains), diagnostics)
-    boundary = _boundary_flags(ens.samples, prob.free_idx, prob.lo_free, prob.hi_free)
-    warns = String[]
-    any(boundary) && push!(warns, "posterior mass is near at least one active parameter limit")
-    return PosteriorSample(ens, prob.prior, :nuts, nchains, chain_ids,
-                           all_loglik, all_logpost, rh, es, boundary, warns)
+    return _posterior_from_chains(prob, batches, :nuts, fbest, NaN, :nuts;
+                                  nsteps, burn, thin, diagnostics, seed)
 end
 
 end # module

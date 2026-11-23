@@ -314,6 +314,17 @@ posterior_sample(m; sampler = :nuts,       prior = pr)   # NUTS (needs the Advan
 | options | `nwalkers`, `stretch` | `proposal`, `scale`, `target_accept`, `overdisperse` | `target_accept`, `nchains` |
 | availability | built in | built in | extension (see below) |
 
+Metropolis and NUTS can run independent chains on multiple Julia threads.
+Pass `threaded=true` and an explicit `seed` when the objective and prior can
+be called concurrently. Each chain keeps its serial seeded random stream,
+and the returned rows stay in chain order. Callback and warning order may
+vary.
+
+~~~julia
+posterior_sample(m; sampler = :metropolis, prior = pr, nchains = 4,
+                 seed = 22, threaded = true)
+~~~
+
 The default is **`:stretch`**, the affine-invariant ensemble (the emcee algorithm).
 It needs no gradients, so it works for *any* FCN — including the complex-amplitude
 χ² common in hadron physics, which is typically not auto-differentiable — and its

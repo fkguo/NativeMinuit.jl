@@ -425,6 +425,57 @@ function _dispersed_start(best, rng, steps_vec, Sfac, lo, hi, disp, isvalid = _ 
     return nothing
 end
 
+struct _PosteriorChainBatch
+    samples::Matrix{Float64}
+    fvals::Vector{Float64}
+    loglik::Vector{Float64}
+    logpost::Vector{Float64}
+    acceptance::Float64
+    scale::Float64
+    fstart::Float64
+end
+
+function _posterior_run_chains(run_chain::F, nchains::Int, threaded::Bool) where {F}
+    batches = Vector{_PosteriorChainBatch}(undef, nchains)
+    if threaded
+        Threads.@threads :dynamic for ch in eachindex(batches)
+            batches[ch] = run_chain(ch)
+        end
+    else
+        for ch in eachindex(batches)
+            batches[ch] = run_chain(ch)
+        end
+    end
+    return batches
+end
+
+function _posterior_from_chains(prob, batches, sampler, fbest, scale, proposal;
+                                nsteps, burn, thin, diagnostics, seed)
+    samples = reduce(vcat, map(batch -> batch.samples, batches))
+    fvals = reduce(vcat, map(batch -> batch.fvals, batches))
+    loglik = reduce(vcat, map(batch -> batch.loglik, batches))
+    logpost = reduce(vcat, map(batch -> batch.logpost, batches))
+    chain_ids = Vector{Int}(undef, size(samples, 1))
+    start = 1
+    for (ch, batch) in enumerate(batches)
+        stop = start + size(batch.samples, 1) - 1
+        fill!(@view(chain_ids[start:stop]), ch)
+        start = stop + 1
+    end
+    free = fill(false, length(prob.names))
+    free[prob.free_idx] .= true
+    ens = LikelihoodEnsemble(samples, fvals, prob.names, free,
+                             prob.best, fbest, prob.up, mean(map(batch -> batch.acceptance, batches)),
+                             Int(nsteps), Int(burn), Int(thin), scale,
+                             proposal, seed === nothing ? nothing : UInt64(seed))
+    rh, es = _posterior_diagnostics(ens.samples, chain_ids, prob.free_idx, length(batches), diagnostics)
+    boundary = _boundary_flags(ens.samples, prob.free_idx, prob.lo_free, prob.hi_free)
+    warns = String[]
+    any(boundary) && push!(warns, "posterior mass is near at least one active parameter limit")
+    return PosteriorSample(ens, prob.prior, sampler, length(batches), chain_ids,
+                           loglik, logpost, rh, es, boundary, warns)
+end
+
 """
     posterior_sample(m::Minuit; prior=:flat, kwargs...) -> PosteriorSample
     posterior_sample(prob::PosteriorProblem; kwargs...) -> PosteriorSample
@@ -466,6 +517,12 @@ complex-buffer χ²) and mixes well on strongly correlated posteriors:
   (e.g. a complex-buffer χ²) still needs the gradient-free `:stretch`. Defaults
   `nsteps=2000` (per chain, incl. warmup), `burn=1000`, `target_accept=0.8`.
 
+For `:metropolis` and `:nuts`, pass `threaded=true` with an explicit `seed`
+to run independent chains concurrently when multiple Julia threads are
+available. The objective and prior must be safe to call concurrently.
+Each chain uses the same seeded stream as in serial execution, and the
+result is stored in chain order. Callback and warning order may vary.
+
 The reported `rhat` is the basic split-R̂ (not rank-normalized / folded); for
 skewed or boundary-truncated marginals also check `effective_sample_size` and the
 trace rather than trusting `R̂ < 1.01` alone. Bayesian credibility levels are
@@ -487,6 +544,7 @@ function posterior_sample(prob::PosteriorProblem;
                           diagnostics::Bool = true,
                           seed::Union{Nothing,Integer} = nothing,
                           rng::Union{Nothing,Random.AbstractRNG} = nothing,
+                          threaded::Bool = false,
                           warn::Bool = true)
     sampler in (:metropolis, :stretch, :nuts) ||
         throw(ArgumentError("posterior_sample supports sampler ∈ (:metropolis, :stretch, :nuts), got :$sampler"))
@@ -518,6 +576,12 @@ function posterior_sample(prob::PosteriorProblem;
     seed !== nothing && !(0 <= seed <= typemax(UInt64)) &&
         throw(ArgumentError("seed must be in [0, typemax(UInt64)], got $seed"))
 
+    if threaded
+        sampler === :stretch && throw(ArgumentError("threaded chains require sampler = :metropolis or :nuts"))
+        seed === nothing && throw(ArgumentError("threaded chains require an explicit seed"))
+    end
+    do_threads = threaded && nchains > 1 && Threads.threadpoolsize() > 1
+
     sampler === :stretch && return _posterior_sample_stretch(
         prob; nwalkers = nwalkers, niter = Int(nsteps), burn = Int(burn),
         thin = Int(thin), stretch = stretch, diagnostics = diagnostics,
@@ -528,7 +592,7 @@ function posterior_sample(prob::PosteriorProblem;
         0 < ta < 1 || throw(ArgumentError("target_accept must be in (0, 1) for :nuts, got $ta"))
         return _posterior_sample_nuts(prob; nsteps = Int(nsteps), burn = Int(burn),
             thin = Int(thin), nchains = Int(nchains), target_accept = ta,
-            diagnostics = diagnostics, seed = seed, rng = rng, warn = warn)
+            diagnostics = diagnostics, seed = seed, rng = rng, threaded = do_threads, warn = warn)
     end
 
     # ── :metropolis path. The random-walk-only knobs are validated here (they are
@@ -549,16 +613,7 @@ function posterior_sample(prob::PosteriorProblem;
     isfinite(prob.logprior_free(pbest)) ||
         throw(ArgumentError("best-fit point has non-finite log-prior; re-minimize with the prior or choose a compatible prior"))
 
-    sample_batches = Vector{Matrix{Float64}}(undef, Int(nchains))
-    all_fvals = Float64[]
-    all_loglik = Float64[]
-    all_logpost = Float64[]
-    chain_ids = Int[]
-    accs = Float64[]
-    scales = Float64[]
-    fbest = NaN
-
-    for ch in 1:Int(nchains)
+    batches = _posterior_run_chains(Int(nchains), do_threads) do ch
         rng_ch = if seed !== nothing
             Random.MersenneTwister(_chain_seed(UInt64(seed), ch))
         elseif rng !== nothing
@@ -584,7 +639,7 @@ function posterior_sample(prob::PosteriorProblem;
                 q0
             end
         end
-        kept, fvals, loglik, logpost, acc, scale_final, fstart = _metropolis_chain(
+        result = _metropolis_chain(
             prob.fcn, prob.prior.logdensity,
             p0, prob.best, prob.free_idx, prob.lo_free, prob.hi_free,
             steps_vec, Sfac;
@@ -592,27 +647,12 @@ function posterior_sample(prob::PosteriorProblem;
             scale = scale, target_accept = target_accept,
             adapt_every = adapt_every, rng = rng_ch, warn = warn,
             context = "posterior_sample")
-        ch == 1 && (fbest = fstart)
-        sample_batches[ch] = kept
-        append!(all_fvals, fvals)
-        append!(all_loglik, loglik)
-        append!(all_logpost, logpost)
-        append!(chain_ids, fill(ch, size(kept, 1)))
-        push!(accs, acc)
-        push!(scales, scale_final)
+        return _PosteriorChainBatch(result...)
     end
 
-    free = falses(length(prob.names)); free[prob.free_idx] .= true
-    ens = LikelihoodEnsemble(reduce(vcat, sample_batches), all_fvals, prob.names, collect(free),
-                             prob.best, fbest, prob.up, mean(accs),
-                             Int(nsteps), Int(burn), Int(thin), mean(scales),
-                             prop_used, seed === nothing ? nothing : UInt64(seed))
-    rh, es = _posterior_diagnostics(ens.samples, chain_ids, prob.free_idx, Int(nchains), diagnostics)
-    boundary = _boundary_flags(ens.samples, prob.free_idx, prob.lo_free, prob.hi_free)
-    warns = String[]
-    any(boundary) && push!(warns, "posterior mass is near at least one active parameter limit")
-    return PosteriorSample(ens, prob.prior, :metropolis, nchains, chain_ids,
-                           all_loglik, all_logpost, rh, es, boundary, warns)
+    return _posterior_from_chains(prob, batches, :metropolis, first(batches).fstart,
+                                  mean(map(batch -> batch.scale, batches)), prop_used;
+                                  nsteps, burn, thin, diagnostics, seed)
 end
 
 posterior_sample(m::Minuit; prior = :flat, kwargs...) =
