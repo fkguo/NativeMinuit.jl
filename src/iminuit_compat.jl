@@ -456,7 +456,7 @@ function scan(m::Minuit, par::Integer;
     return points
 end
 function scan(m::Minuit, par::AbstractString; kwargs...)
-    return scan(m, ext_index(m.params, String(par)); kwargs...)
+    return scan(m, ext_index(_init_params(m), String(par)); kwargs...)
 end
 
 # The base Parameters a Minuit-level scan / profile operates on: the current
@@ -568,7 +568,7 @@ function mncontour(m::Minuit, par1, par2;
     σ_scale = sqrt(delta_chisq(_cl, 2))
     # Resolve indices then dispatch into `contour_exact` (real MnContours
     # algorithm) rather than the Phase-1 ellipse approximation.
-    ps = m.params
+    ps = _init_params(m)
     ix = par1 isa Integer ? Int(par1) : ext_index(ps, String(par1))
     iy = par2 isa Integer ? Int(par2) : ext_index(ps, String(par2))
     ix_int = ps.int_of_ext[ix]
@@ -628,16 +628,17 @@ function contour_grid(m::Minuit, par1, par2;
                        bound = 2,
                        grid = nothing,
                        subtract_min::Bool = false)
-    ix = par1 isa Integer ? Int(par1) : ext_index(m.params, String(par1))
-    iy = par2 isa Integer ? Int(par2) : ext_index(m.params, String(par2))
-    n = n_pars(m.params)
+    ix = par1 isa Integer ? Int(par1) : ext_index(_init_params(m), String(par1))
+    iy = par2 isa Integer ? Int(par2) : ext_index(_init_params(m), String(par2))
+    n = n_pars(_init_params(m))
     (1 <= ix <= n && 1 <= iy <= n) ||
         throw(ArgumentError("contour_grid: parameter index out of bounds (got $ix, $iy for n=$n)"))
     ix != iy ||
         throw(ArgumentError("contour_grid requires two distinct parameters"))
     for idx in (ix, iy)
-        is_fixed(m.params.pars[idx]) &&
-            throw(ArgumentError("contour_grid: parameter `$(m.params.pars[idx].name)` is fixed"))
+        md = _init_params(m).metadata[idx]
+        is_fixed(md) &&
+            throw(ArgumentError("contour_grid: parameter `$(md.name)` is fixed"))
     end
     Int(size) >= 2 || throw(ArgumentError("contour_grid: size must be ≥ 2"))
 
@@ -658,7 +659,7 @@ function contour_grid(m::Minuit, par1, par2;
         else
             (Float64(b[1]), Float64(b[2]))
         end
-        p = m.params.pars[idx]
+        p = _init_params(m).metadata[idx]
         has_lower_limit(p) && (lo = max(lo, p.lower))
         has_upper_limit(p) && (hi = min(hi, p.upper))
         lo < hi || throw(ArgumentError("contour_grid: empty scan range for `$(p.name)`"))
@@ -677,8 +678,10 @@ function contour_grid(m::Minuit, par1, par2;
     _fill_contour_grid!(F, m, m.fcn, copy(base), ix, iy, xs, ys)
     subtract_min && (F .-= minimum(F))
 
+    # A callback may have changed the configuration during the scan.
+    metadata = _init_params(m).metadata
     return ContourGrid(ix, iy,
-                        m.params.pars[ix].name, m.params.pars[iy].name,
+                        metadata[ix].name, metadata[iy].name,
                         xs, ys, F, base[ix], base[iy],
                         Float64(m.fcn.up), subtract_min)
 end
@@ -717,7 +720,7 @@ function profile(m::Minuit, par;
     # Pure diagnostic: scan around the CURRENT values (like `scan`, via
     # `_scan_base_params`) but call the low-level scan directly so it does NOT
     # trigger `scan(m, par)`'s best-value retention — `m` is never mutated.
-    idx = par isa Integer ? Int(par) : ext_index(m.params, String(par))
+    idx = par isa Integer ? Int(par) : ext_index(_init_params(m), String(par))
     return scan(m.fcn, _scan_base_params(m), idx;
                  maxsteps = nb, low = low, high = high)
 end
@@ -744,15 +747,15 @@ function mnprofile(m::Minuit, par::Integer;
                     low::Real = 0.0, high::Real = 0.0)
     m.fmin === nothing &&
         throw(ArgumentError("Call `migrad(m)` before `mnprofile(m, par)`"))
-    1 <= par <= n_pars(m.params) ||
+    1 <= par <= n_pars(_init_params(m)) ||
         throw(ArgumentError("mnprofile: par $par out of bounds"))
-    is_fixed(m.params.pars[par]) &&
+    is_fixed(_init_params(m), par) &&
         throw(ArgumentError("Cannot mnprofile fixed parameter $par"))
     nb = size === nothing ? bins : Int(size)
     nb >= 2 || throw(ArgumentError("mnprofile: bins must be ≥ 2"))
 
     central = m.values[par]
-    p_meta = m.params.pars[par]
+    p_meta = _init_params(m).metadata[par]
     low_f, high_f = Float64(low), Float64(high)
     if low_f == 0.0 && high_f == 0.0
         low_f  = central - 2.0 * abs(m.errors[par])
@@ -781,7 +784,8 @@ function mnprofile(m::Minuit, par::Integer;
     cfg = _init_params(m)
     nm  = [p.name for p in cfg.pars]
     er  = [p.error for p in cfg.pars]
-    fx  = [is_fixed(p) for p in cfg.pars]
+    fx  = [is_fixed(p) for p in cfg.metadata]
+    fx[par] = true
     lim = Vector{Any}(undef, n_pars(cfg))
     for (i, p) in enumerate(cfg.pars)
         lo = isnan(p.lower) ? nothing : p.lower
@@ -794,10 +798,8 @@ function mnprofile(m::Minuit, par::Integer;
         xval = low_f + i * stp
         x0_i = copy(m.values)
         x0_i[par] = xval
-        fx_i = copy(fx)
-        fx_i[par] = true
         m_i = Minuit(m.fcn.f, x0_i;
-                      name = nm, error = er, fixed = fx_i, limits = lim,
+                      name = nm, error = er, fixed = fx, limits = lim,
                       up = m.fcn.up, prec = m.prec,
                       grad = grad_fn,
                       strategy = m.strategy, tol = m.tol)
@@ -808,7 +810,7 @@ function mnprofile(m::Minuit, par::Integer;
 end
 
 function mnprofile(m::Minuit, par::AbstractString; kwargs...)
-    return mnprofile(m, ext_index(m.params, String(par)); kwargs...)
+    return mnprofile(m, ext_index(_init_params(m), String(par)); kwargs...)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

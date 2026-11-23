@@ -112,19 +112,10 @@ function make_posdef(err::MinimumError, prec::MachinePrecision = MachinePrecisio
         dg = 0.5 + epspdf - dgmin
     end
 
-    if n == 2 && epspdf <= 0.25
-        d1 = err_M[1, 1] + dg
-        d2 = err_M[2, 2] + dg
-        s1 = 1.0 / sqrt(d1)
-        s2 = 1.0 / sqrt(d2)
-        p11 = d1 * s1 * s1
-        p22 = d2 * s2 * s2
-        p12 = err_M[1, 2] * s2 * s1
-        # These row bounds put both eigenvalues in [0.5, 1.5].
-        # The tolerance times the largest possible eigenvalue is ≤ 0.375.
-        if 0.75 <= p11 <= 1.25 && 0.75 <= p22 <= 1.25 && abs(p12) <= 0.25
-            err_M[1, 1] = d1
-            err_M[2, 2] = d2
+    if n == 2
+        diagonal = _sufficient_posdef_diagonal_2d(err_M, dg, epspdf)
+        if diagonal !== nothing
+            err_M[1, 1], err_M[2, 2] = diagonal
             return MinimumError(Symmetric(err_M, :U), err.dcovar, MnHesseValid, true)
         end
     end
@@ -249,6 +240,22 @@ function make_posdef!(S::Symmetric{Float64,Matrix{Float64}},
     return _make_posdef_finite_upper!(M, n, prec, p_buf, s_buf)
 end
 
+# A sufficient check for the same normalized eigenvalue gate used below.
+# These Gershgorin row bounds place the eigenvalues in [0.5, 1.5],
+# leaving a margin over epspdf * max(abs(pmax), 1) ≤ 0.375.
+@inline function _sufficient_posdef_diagonal_2d(M, dg, epspdf)
+    epspdf <= 0.25 || return nothing
+    d1 = M[1, 1] + dg
+    d2 = M[2, 2] + dg
+    s1 = 1.0 / sqrt(d1)
+    s2 = 1.0 / sqrt(d2)
+    p11 = d1 * s1 * s1
+    p22 = d2 * s2 * s2
+    p12 = M[1, 2] * s2 * s1
+    return 0.75 <= p11 <= 1.25 && 0.75 <= p22 <= 1.25 &&
+           abs(p12) <= 0.25 ? (d1, d2) : nothing
+end
+
 function _make_posdef_finite_upper!(M::Matrix{Float64}, n::Int, prec::MachinePrecision,
                                   p_buf::Union{Nothing,Matrix{Float64}},
                                   s_buf::Union{Nothing,Vector{Float64}})
@@ -278,6 +285,14 @@ function _make_posdef_finite_upper!(M::Matrix{Float64}, n::Int, prec::MachinePre
     dg = 0.0
     if dgmin <= 0
         dg = 0.5 + epspdf - dgmin
+    end
+
+    if n == 2 && p_buf === nothing && s_buf === nothing
+        diagonal = _sufficient_posdef_diagonal_2d(M, dg, epspdf)
+        if diagonal !== nothing
+            M[1, 1], M[2, 2] = diagonal
+            return false
+        end
     end
 
     # Normalized correlation matrix p and diagonal add (MnPosDef.cxx:67-77),
