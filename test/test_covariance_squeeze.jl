@@ -108,5 +108,16 @@ using LinearAlgebra: Symmetric
         @test size(sq) == (2, 2)
         @test invert_failed(sq)
         @test sq.status == MnInvertFailed
+        @test sq.inv_hessian[1, 1] === 1.0
+        @test isinf(sq.inv_hessian[2, 2])
+
+        # Removing index 2 from the exact inverse of this matrix leaves
+        # [1 1; 1 1]. Its factorization overwrites one nonzero diagonal
+        # with zero before reporting failure. The diagonal fallback uses
+        # the original two ones.
+        raw = Float64[1 -1 0; -1 0 1; 0 1 0]
+        sq = squeeze_error(MinimumError(Symmetric(copy(raw)), 0.25), 2; prec)
+        @test sq.status == MnInvertFailed
+        @test Matrix(sq.inv_hessian) == [1.0 0.0; 0.0 1.0]
     end
 end
