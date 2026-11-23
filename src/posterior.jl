@@ -549,7 +549,7 @@ function posterior_sample(prob::PosteriorProblem;
     isfinite(prob.logprior_free(pbest)) ||
         throw(ArgumentError("best-fit point has non-finite log-prior; re-minimize with the prior or choose a compatible prior"))
 
-    all_samples = Matrix{Float64}(undef, 0, length(prob.best))
+    sample_batches = Vector{Matrix{Float64}}(undef, Int(nchains))
     all_fvals = Float64[]
     all_loglik = Float64[]
     all_logpost = Float64[]
@@ -593,7 +593,7 @@ function posterior_sample(prob::PosteriorProblem;
             adapt_every = adapt_every, rng = rng_ch, warn = warn,
             context = "posterior_sample")
         ch == 1 && (fbest = fstart)
-        all_samples = vcat(all_samples, kept)
+        sample_batches[ch] = kept
         append!(all_fvals, fvals)
         append!(all_loglik, loglik)
         append!(all_logpost, logpost)
@@ -603,14 +603,11 @@ function posterior_sample(prob::PosteriorProblem;
     end
 
     free = falses(length(prob.names)); free[prob.free_idx] .= true
-    ens = LikelihoodEnsemble(all_samples, all_fvals, prob.names, collect(free),
+    ens = LikelihoodEnsemble(reduce(vcat, sample_batches), all_fvals, prob.names, collect(free),
                              prob.best, fbest, prob.up, mean(accs),
                              Int(nsteps), Int(burn), Int(thin), mean(scales),
                              prop_used, seed === nothing ? nothing : UInt64(seed))
-    rh = diagnostics ? _posterior_rhat(ens.samples, chain_ids, prob.free_idx, Int(nchains)) :
-                       fill(NaN, length(prob.free_idx))
-    es = diagnostics ? _posterior_ess(ens.samples, chain_ids, prob.free_idx, Int(nchains)) :
-                       fill(NaN, length(prob.free_idx))
+    rh, es = _posterior_diagnostics(ens.samples, chain_ids, prob.free_idx, Int(nchains), diagnostics)
     boundary = _boundary_flags(ens.samples, prob.free_idx, prob.lo_free, prob.hi_free)
     warns = String[]
     any(boundary) && push!(warns, "posterior mass is near at least one active parameter limit")
@@ -670,15 +667,27 @@ function _posterior_sample_stretch(prob::PosteriorProblem; nwalkers, niter, burn
                              prob.best, fbest, prob.up, acceptance,
                              Int(niter), Int(burn), Int(thin), Float64(stretch),
                              :stretch, seed === nothing ? nothing : UInt64(seed))
-    rh = diagnostics ? _posterior_rhat(ens.samples, chain_ids, prob.free_idx, nw) :
-                       fill(NaN, length(prob.free_idx))
-    es = diagnostics ? _posterior_ess(ens.samples, chain_ids, prob.free_idx, nw) :
-                       fill(NaN, length(prob.free_idx))
+    rh, es = _posterior_diagnostics(ens.samples, chain_ids, prob.free_idx, nw, diagnostics)
     boundary = _boundary_flags(ens.samples, prob.free_idx, prob.lo_free, prob.hi_free)
     warns = String[]
     any(boundary) && push!(warns, "posterior mass is near at least one active parameter limit")
     return PosteriorSample(ens, prob.prior, :stretch, nw, chain_ids,
                            loglik, logpost, rh, es, boundary, warns)
+end
+
+function _posterior_chain_rows(chain_ids, nchains)
+    rows = [Int[] for _ in 1:nchains]
+    for i in eachindex(chain_ids)
+        ch = chain_ids[i]
+        1 <= ch <= nchains && push!(rows[ch], i)
+    end
+    return rows
+end
+
+function _posterior_diagnostics(samples, chain_ids, free_idx, nchains, enabled)
+    enabled || return (fill(NaN, length(free_idx)), fill(NaN, length(free_idx)))
+    rows = _posterior_chain_rows(chain_ids, nchains)
+    return _posterior_rhat(samples, rows, free_idx), _posterior_ess(samples, rows, free_idx)
 end
 
 # Split-R̂ (split Gelman–Rubin). Each chain is split into its first and second
@@ -688,14 +697,18 @@ end
 # over the plain between/within statistic. Chains too short to halve (< 4 kept
 # draws) fall back to whole, unsplit chains, which keeps the degenerate-input
 # behavior (constant chains → Inf/NaN) intact.
-function _posterior_rhat(samples, chain_ids, free_idx, nchains)
+_posterior_rhat(samples, chain_ids, free_idx, nchains) =
+    _posterior_rhat(samples, _posterior_chain_rows(chain_ids, nchains), free_idx)
+
+function _posterior_rhat(samples, chain_rows, free_idx)
     nfree = length(free_idx)
-    nchains < 2 && return fill(NaN, nfree)
     out = fill(NaN, nfree)
+    nchains = length(chain_rows)
+    nchains < 2 && return out
+    n = minimum(length, chain_rows)
+    n >= 2 || return out
     for (jj, col) in enumerate(free_idx)
-        chains = [samples[chain_ids .== ch, col] for ch in 1:nchains]
-        n = minimum(length, chains)
-        n >= 2 || continue
+        chains = [samples[rows, col] for rows in chain_rows]
         if n >= 4
             h = n ÷ 2
             subs = Vector{Vector{Float64}}(undef, 2 * nchains)
@@ -746,12 +759,15 @@ function _ess_one(v::Vector{Float64})
     return n / (1 + 2s)
 end
 
-function _posterior_ess(samples, chain_ids, free_idx, nchains)
+_posterior_ess(samples, chain_ids, free_idx, nchains) =
+    _posterior_ess(samples, _posterior_chain_rows(chain_ids, nchains), free_idx)
+
+function _posterior_ess(samples, chain_rows, free_idx)
     out = Vector{Float64}(undef, length(free_idx))
     for (jj, col) in enumerate(free_idx)
         ess = 0.0
-        for ch in 1:nchains
-            ess += _ess_one(collect(samples[chain_ids .== ch, col]))
+        for rows in chain_rows
+            ess += _ess_one(samples[rows, col])
         end
         out[jj] = ess
     end
@@ -769,6 +785,7 @@ function _boundary_flags(samples, free_idx, lo_free, hi_free)
     n == 0 && return out
     @inbounds for (j, col) in enumerate(free_idx)
         lo, hi = lo_free[j], hi_free[j]
+        isnan(lo) && isnan(hi) && continue
         vals = @view samples[:, col]
         μ = sum(vals) / n
         sd = sqrt(max(sum(x -> (x - μ)^2, vals) / max(n - 1, 1), 0.0))

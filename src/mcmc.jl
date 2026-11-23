@@ -268,6 +268,7 @@ function _metropolis_chain(fval_full, logprior_full,
                            adapt_every::Integer,
                            rng::Random.AbstractRNG,
                            warn::Bool,
+                           keep_logdensities::Bool = true,
                            context::AbstractString = "mcmc_sample")
     ntot = length(best_full)
     nfree = length(p0)
@@ -301,8 +302,8 @@ function _metropolis_chain(fval_full, logprior_full,
     nkept = (nsteps - burn) ÷ thin
     kept = Matrix{Float64}(undef, nkept, ntot)
     fvals = Vector{Float64}(undef, nkept)
-    loglik = Vector{Float64}(undef, nkept)
-    logpost = Vector{Float64}(undef, nkept)
+    loglik = keep_logdensities ? Vector{Float64}(undef, nkept) : nothing
+    logpost = keep_logdensities ? Vector{Float64}(undef, nkept) : nothing
 
     q = Vector{Float64}(undef, nfree)       # proposal buffer
     z = Vector{Float64}(undef, nfree)       # N(0,1) draws for :hesse/:matrix
@@ -368,8 +369,10 @@ function _metropolis_chain(fval_full, logprior_full,
                     kept[ikeep, i] = p[j]
                 end
                 fvals[ikeep] = c0
-                loglik[ikeep] = -c0 / (2.0 * Float64(up))
-                logpost[ikeep] = logpost0
+                if keep_logdensities
+                    loglik[ikeep] = -c0 / (2.0 * Float64(up))
+                    logpost[ikeep] = logpost0
+                end
             end
         elseif adapting
             block_n += 1
@@ -838,7 +841,7 @@ parabolic errors are also meaningless (e.g. a parameter at a limit)."""
         lo_free, hi_free, steps_vec, Sfac;
         up = up, nsteps = nsteps, burn = burn, thin = thin, scale = scale,
         target_accept = target_accept, adapt_every = adapt_every, rng = rng_use,
-        warn = warn, context = "mcmc_sample")
+        warn = warn, keep_logdensities = false, context = "mcmc_sample")
 
     names = [p_.name for p_ in m.params.pars]
     free = [!is_fixed(p_) for p_ in m.params.pars]

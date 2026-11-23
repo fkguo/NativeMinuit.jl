@@ -31,7 +31,7 @@ using Random
 using Statistics
 
 import NativeMinuit: PosteriorProblem, PosteriorSample, LikelihoodEnsemble,
-                 _posterior_rhat, _posterior_ess, _boundary_flags, _chain_seed
+                 _posterior_diagnostics, _boundary_flags, _chain_seed
 
 # Build the unconstraining transform from the per-free-coordinate limits
 # (`NaN` ⇒ unbounded on that side). The effective support already folds in the
@@ -49,7 +49,7 @@ end
 # LogDensityProblems target: the posterior in UNCONSTRAINED coordinates, i.e.
 # `log p(θ(y)) + log|det J(y)|`, with `θ(y)` the constrained point. Generic in
 # the number type so ForwardDiff can push Duals through.
-struct PosteriorLogDensity{P,T,B<:AbstractVector{Float64}}
+struct PosteriorLogDensity{P,T,B<:AbstractVector{Float64},F}
     prob::P
     t::T
     nfree::Int
@@ -59,6 +59,7 @@ struct PosteriorLogDensity{P,T,B<:AbstractVector{Float64}}
     # innermost loop of NUTS. Reading it through the abstract field would cost
     # a dynamic dispatch per element.
     best::B
+    logprior::F
 end
 
 LogDensityProblems.dimension(ℓ::PosteriorLogDensity) = ℓ.nfree
@@ -88,7 +89,7 @@ function LogDensityProblems.logdensity(ℓ::PosteriorLogDensity, y)
     # SEPARATE buffers for the prior and the FCN, so a prior that mutates its
     # argument cannot shift the FCN point (mirrors `_eval_posterior!`).
     best = ℓ.best
-    lp = prob.prior.logdensity(_full(prob, best, θ, R, ℓ.nfree))
+    lp = ℓ.logprior(_full(prob, best, θ, R, ℓ.nfree))
     isfinite(lp) || return convert(R, -Inf)
     return -prob.fcn(_full(prob, best, θ, R, ℓ.nfree)) / (2 * prob.up) + lp + logj
 end
@@ -97,11 +98,10 @@ end
 # the kept rows. The reported `logpost` is the CONSTRAINED posterior (no
 # Jacobian); the Jacobian only enters the sampling target above. Separate buffers
 # again, so neither a mutating FCN nor a mutating prior can corrupt the other.
-function _eval_constrained(prob, θfree)
-    nfree = length(prob.free_idx)
-    best = prob.best
-    c = Float64(prob.fcn(_full(prob, best, θfree, Float64, nfree)))
-    lp = Float64(prob.prior.logdensity(_full(prob, best, θfree, Float64, nfree)))
+function _eval_constrained(ℓ::PosteriorLogDensity, θfree)
+    prob = ℓ.prob
+    c = Float64(prob.fcn(_full(prob, ℓ.best, θfree, Float64, ℓ.nfree)))
+    lp = Float64(ℓ.logprior(_full(prob, ℓ.best, θfree, Float64, ℓ.nfree)))
     return c, lp
 end
 
@@ -127,7 +127,7 @@ function _nuts_impl(prob::PosteriorProblem; nsteps::Integer,
         "unconstrained (log/logit) transform is singular. Move off the boundary, " *
         "loosen the limit, or use sampler = :stretch (which handles boundaries)."))
 
-    ℓ = PosteriorLogDensity(prob, t, nfree, prob.best)
+    ℓ = PosteriorLogDensity(prob, t, nfree, prob.best, prob.prior.logdensity)
     ∂ℓ = LogDensityProblemsAD.ADgradient(:ForwardDiff, ℓ)
     # Probe the gradient once: a non-differentiable FCN throws here, and we
     # convert that into a clear, actionable error rather than a deep stack trace.
@@ -140,13 +140,13 @@ function _nuts_impl(prob::PosteriorProblem; nsteps::Integer,
             "ForwardDiff only — use the gradient-free sampler = :stretch instead."))
     end
 
-    all_samples = Matrix{Float64}(undef, 0, ntot)
+    sample_batches = Vector{Matrix{Float64}}(undef, Int(nchains))
     all_fvals = Float64[]
     all_loglik = Float64[]
     all_logpost = Float64[]
     chain_ids = Int[]
     accs = Float64[]
-    fbest = first(_eval_constrained(prob, pbest))
+    fbest = first(_eval_constrained(ℓ, pbest))
 
     for ch in 1:nchains
         rng_ch = seed !== nothing ? Random.MersenneTwister(_chain_seed(UInt64(seed), ch)) :
@@ -177,25 +177,22 @@ function _nuts_impl(prob::PosteriorProblem; nsteps::Integer,
             for (j, i) in enumerate(prob.free_idx)
                 block[r, i] = θ[j]
             end
-            c, lp = _eval_constrained(prob, ntuple(j -> θ[j], nfree))
+            c, lp = _eval_constrained(ℓ, ntuple(j -> θ[j], nfree))
             push!(all_fvals, c)
             push!(all_loglik, -c / (2 * prob.up))
             push!(all_logpost, -c / (2 * prob.up) + lp)
             push!(chain_ids, ch)
         end
-        all_samples = vcat(all_samples, block)
+        sample_batches[ch] = block
         push!(accs, acc)
     end
 
     free = falses(length(prob.names)); free[prob.free_idx] .= true
-    ens = LikelihoodEnsemble(all_samples, all_fvals, prob.names, collect(free),
+    ens = LikelihoodEnsemble(reduce(vcat, sample_batches), all_fvals, prob.names, collect(free),
                              prob.best, fbest, prob.up, mean(accs),
                              Int(nsteps), Int(burn), Int(thin), NaN,   # no proposal scale
                              :nuts, seed === nothing ? nothing : UInt64(seed))
-    rh = diagnostics ? _posterior_rhat(ens.samples, chain_ids, prob.free_idx, Int(nchains)) :
-                       fill(NaN, nfree)
-    es = diagnostics ? _posterior_ess(ens.samples, chain_ids, prob.free_idx, Int(nchains)) :
-                       fill(NaN, nfree)
+    rh, es = _posterior_diagnostics(ens.samples, chain_ids, prob.free_idx, Int(nchains), diagnostics)
     boundary = _boundary_flags(ens.samples, prob.free_idx, prob.lo_free, prob.hi_free)
     warns = String[]
     any(boundary) && push!(warns, "posterior mass is near at least one active parameter limit")

@@ -644,18 +644,18 @@ function _cost_nonparam(c::LeastSquares)
     x, y, e = c.active === nothing ? (d.x, d.y, d.err) :
               (d.x[c.active], d.y[c.active], d.err[c.active])
     return length(x),
-           idx -> LeastSquares(Data(x[idx], y[idx], e[idx]), c.model; name = c.pnames)
+           idx -> LeastSquares(Data(Val(:owned), x[idx], y[idx], e[idx]), c.model; name = c.pnames)
 end
 function _cost_nonparam(c::UnbinnedNLL)
     xx = c.active === nothing ? c.x : c.x[c.active]
     return length(xx),
-           idx -> UnbinnedNLL(xx[idx], c.pdf; log = c.log, name = c.pnames)
+           idx -> UnbinnedNLL(xx[idx], c.pdf, c.log, nothing, nothing, _to_pnames(c.pnames))
 end
 function _cost_nonparam(c::ExtendedUnbinnedNLL)
     xx = c.active === nothing ? c.x : c.x[c.active]
     return length(xx),
-           idx -> ExtendedUnbinnedNLL(xx[idx], c.density, c.integral;
-                                      log = c.log, name = c.pnames)
+           idx -> ExtendedUnbinnedNLL(xx[idx], c.density, c.integral, c.log,
+                                      nothing, nothing, _to_pnames(c.pnames))
 end
 # Resamplability guards — throw a clear error BEFORE any anchor fit is run.
 _assert_resamplable(::Union{LeastSquares,UnbinnedNLL,ExtendedUnbinnedNLL}) = nothing

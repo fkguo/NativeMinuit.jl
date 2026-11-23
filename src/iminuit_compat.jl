@@ -29,9 +29,12 @@ struct Data
     ndata::Int
     function Data(x, y, err)
         _check_data(x, y, err)
-        length(x) == length(y) == length(err) ||
-            throw(ArgumentError("Data: x/y/err length mismatch"))
         return new(Float64.(x), Float64.(y), Float64.(err), length(x))
+    end
+    # Internal transfer of freshly gathered resample columns.
+    function Data(::Val{:owned}, x::Vector{Float64}, y::Vector{Float64}, err::Vector{Float64})
+        _check_data(x, y, err)
+        return new(x, y, err, length(x))
     end
 end
 
@@ -49,6 +52,9 @@ function _check_data(xdata, ydata, errdata)
     if any(iszero, errdata)
         throw(ArgumentError("Data contain 0 in errors"))
     end
+    length(xdata) == length(ydata) == length(errdata) ||
+        throw(ArgumentError("Data: x/y/err length mismatch"))
+    return nothing
 end
 
 Base.vcat(d1::Data, d2::Data) = Data(vcat(d1.x, d2.x), vcat(d1.y, d2.y),

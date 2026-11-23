@@ -409,9 +409,11 @@ function _mc_chisq_region(best::Vector{Float64}, χ², fmin::Real, threshold::Re
             center[k] = 0.5 * (lo + hi)
             halfw[k] = 0.5 * (hi - lo)
         end
+        widths = similar(halfw)
         draw! = function (buf, m, infl)
+            @. widths = infl * halfw
             @inbounds for j in 1:m, k in 1:n
-                buf[k, j] = center[k] + infl * halfw[k] * (2.0 * rand(rng) - 1.0)
+                buf[k, j] = center[k] + widths[k] * (2.0 * rand(rng) - 1.0)
             end
             return buf
         end
@@ -682,7 +684,8 @@ function get_contours_samples(m::Minuit;
         throw(ArgumentError("Call `migrad(m)` before `get_contours_samples(m)`"))
 
     ntot = n_pars(m.params)
-    free_idx = [i for i in 1:ntot if !is_fixed(m.params.pars[i])]
+    params = _init_params(m).pars
+    free_idx = [i for i in 1:ntot if !is_fixed(params[i])]
     nfree = length(free_idx)
     nfree >= 1 || throw(ArgumentError("no free parameters to sample"))
 
@@ -706,8 +709,8 @@ function get_contours_samples(m::Minuit;
     # reject such draws (Δ = +Inf) BEFORE calling the user FCN rather than
     # evaluating it on an illegal argument. Rejection (not clamping) keeps
     # the true-Δχ² region unbiased.
-    lo_free = [m.params.pars[i].lower for i in free_idx]
-    hi_free = [m.params.pars[i].upper for i in free_idx]
+    lo_free = [params[i].lower for i in free_idx]
+    hi_free = [params[i].upper for i in free_idx]
     has_bounds = any(isfinite, lo_free) || any(isfinite, hi_free)
 
     # χ² closure over a FREE-parameter vector: expand to full external,

@@ -537,8 +537,12 @@ function _dbscan_labels end
 # polluted. Parallelized across samples when `parallel` (same Phase-G/H
 # thread-safety contract as threaded gradients).
 function _eval_fvals(m::Minuit, Xfull::Matrix{Float64}, parallel::Bool)
+    return _eval_fvals(m.fcn.f, _init_params(m).values, Xfull, parallel)
+end
+
+function _eval_fvals(f::F, template::V, Xfull::Matrix{Float64},
+                     parallel::Bool) where {F,V<:AbstractVector{Float64}}
     N = size(Xfull, 1)
-    f = m.fcn.f
     out = Vector{Float64}(undef, N)
     # Rows are rebuilt onto the fit's coordinate container rather than passed
     # as a `SubArray` of the sample matrix, so an objective written against
@@ -560,7 +564,6 @@ function _eval_fvals(m::Minuit, Xfull::Matrix{Float64}, parallel::Bool)
     #
     # The failure mode is a silent wrong value, so the parallel branch is
     # pinned against the serial one by an equality test.
-    template = _init_params(m).values
     npar = size(Xfull, 2)
     if parallel
         Threads.@threads :dynamic for i in 1:N
