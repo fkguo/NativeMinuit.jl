@@ -438,11 +438,11 @@ end
     end
 
     @testset "ESS preserves serial arithmetic when scheduled across tasks" begin
-        samples = randn(MersenneTwister(17), 4096, 8)
+        samples = randn(MersenneTwister(17), 8192, 8)
         samples[:, 2] .= 1.0
         samples[3, 4] = NaN
         columns = [8, 1, 4, 3, 5, 6, 7, 2]
-        rows = [collect(i:4:4096) for i in 1:4]
+        rows = [collect(i:4:8192) for i in 1:4]
         expected = map(columns) do col
             ess = 0.0
             for indices in rows
@@ -451,7 +451,7 @@ end
             ess
         end
         @test !NativeMinuit._thread_ess(view(samples, 1:32, :), length(columns))
-        @test !NativeMinuit._thread_ess(samples[1:2048, :], length(columns))
+        @test !NativeMinuit._thread_ess(samples[1:4096, :], length(columns))
         @test !NativeMinuit._thread_ess(samples, 3)
         @test NativeMinuit._thread_ess(samples, length(columns)) == (Threads.threadpoolsize() > 1)
         @test isequal(NativeMinuit._posterior_ess(samples, rows, columns), expected)

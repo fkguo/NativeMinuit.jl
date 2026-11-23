@@ -814,7 +814,7 @@ function _thread_ess(samples, nfree)
     # The work per parameter depends on its autocorrelation as well as row
     # count. Require enough data to amortize scheduling even for short lags.
     return nfree >= 4 && samples isa Matrix{Float64} &&
-           size(samples, 1) >= max(512, cld(32_768, nfree)) &&
+           size(samples, 1) >= max(512, cld(65_536, nfree)) &&
            Threads.threadpoolsize() > 1
 end
 
