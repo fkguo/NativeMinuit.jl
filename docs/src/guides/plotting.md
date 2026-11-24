@@ -44,7 +44,7 @@ plot(m.fmin)                              # parameter values with Hesse error ba
 minos!(m)                                 # run MINOS, fills m.merrors
 plot(collect(values(m.merrors)))          # Vector{MinosError} → multi-parameter error bars
 plot(m.merrors["a"])                      # a single MinosError → one asymmetric error bar
-plot(contour_ellipse(m, 1, 2))            # ContoursError → closed 1σ contour polygon
+plot(contour_ellipse(m, 1, 2))             # approximate contour from MINOS axis offsets and covariance
 plot(contour_grid(m, 1, 2))               # ContourGrid → filled FCN-landscape contour
 ```
 
@@ -103,20 +103,22 @@ parameter with `par` (an index or name; default the first varying parameter).
 # MC-Δχ² sample cloud: 2D scatter of the accepted set, coloured by Δχ².
 r = get_contours_samples(m; nsamples = 20_000, cl = 1, seed = 1)
 plot(r)                          # first two free parameters
-plot(r; vars = ("mass", "g"))    # pick the pair by name
+plot(r; vars = ("a", "b"))       # pick the pair by name
 
 # Bootstrap / jackknife: histogram of one parameter's resampled distribution,
 # with the estimate and the CI / jackknife-mean drawn as reference lines.
 # Its asymmetry about the estimate is exactly what a symmetric error bar hides.
+model(x, p) = p[1] + p[2] * x
+data = Data(xs, ys, fill(σ, length(xs)))
 plot(bootstrap(model, data, m; nresample = 2000, seed = 1))   # first free par
-plot(jackknife(model, data, m); par = "k")
+plot(jackknife(model, data, m); par = "a")
 
 # Multi-modal solutions: one colour per cluster, each representative starred.
 S     = r.samples
 modes = find_solution_modes(S, m)
 plot(modes, S)                   # cluster the point cloud (pass the same matrix)
 plot(modes)                      # no samples → per-mode bounding boxes + reps
-plot(modes; vars = (1, 3))       # project onto a chosen parameter pair
+plot(modes; vars = (2, 1))       # swap the order of the plotted parameters
 ```
 
 | Recipe target | Picture |
@@ -132,11 +134,12 @@ plot(modes; vars = (1, 3))       # project onto a chosen parameter pair
 they never trigger an "unsupported attribute" warning.
 
 For instance, the MC-Δχ² accepted cloud of the fit above, each point coloured by its
-Δχ²:
+Δχ². With two free parameters, `cl=1` maps the one-dimensional one-sigma
+probability to a joint chi-square threshold of about 2.30.
 
 ```@example plotfig
 r = get_contours_samples(m; nsamples = 4000, cl = 1, seed = 1)
-plot(r)                          # 2D scatter over the accepted Δχ² ≤ 1 region
+plot(r)                          # accepted samples, colored by Δχ²
 ```
 
 ## iminuit-style `draw_*` helpers
@@ -176,7 +179,7 @@ draw_mnmatrix(m)                  # triangular matrix of all pairwise MINOS cont
 | [`draw_mncontour`](@ref)`(m, par1, par2; numpoints=100, cl=nothing, kws...)` | [`mncontour`](@ref) | exact joint confidence contour(s); `cl` scalar or vector (default joint 68 %), labelled by coverage |
 | [`draw_profile`](@ref)`(m, par; bins=100, low=0, high=0, kws...)` | [`profile`](@ref) | plain scan, no re-minimisation |
 | [`draw_mnprofile`](@ref)`(m, par; bins=30, low=0, high=0, kws...)` | [`mnprofile`](@ref) | MINOS profile (one inner MIGRAD per point) |
-| [`draw_mnmatrix`](@ref)`(m; numpoints=100, kws...)` | [`mncontour`](@ref) + [`mnprofile`](@ref) | off-diagonal: exact pairwise MINOS contours; needs ≥ 2 free parameters; diagonal shows the 1D profile |
+| [`draw_mnmatrix`](@ref)`(m; numpoints=100, cl=nothing, kws...)` | [`mncontour`](@ref) + [`mnprofile`](@ref) | pairwise contours at a scalar confidence level (joint 68% per pair by default); needs at least two free parameters; diagonal shows the 1D profile |
 
 `par` is a 1-based index or a parameter-name string, and trailing `kws...` flow
 through to the underlying `Plots.plot`.

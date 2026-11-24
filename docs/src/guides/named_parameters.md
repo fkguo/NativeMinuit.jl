@@ -41,7 +41,7 @@ reference_covariance = inv(X' * X) * σ[1]^2 # hide
 
 NativeMinuit has no dependency on ComponentArrays and no extension for it.
 The support is structural: `x0` is used as the **allocation template** for
-every coordinate-shaped workspace, so any `AbstractVector{Float64}` whose
+every coordinate-shaped workspace, so a one-based `AbstractVector{Float64}` whose
 `similar`, `copy`, broadcast and mutation preserve its structure is carried
 along for free. `ComponentVector` is the common case; a `LabelledArrays`
 `LVector`, or your own array type, works on the same terms.

@@ -18,7 +18,7 @@ helpers.
 | [`ExtendedUnbinnedNLL`](@ref) | unbinned, with the total yield as a parameter | `0.5` |
 | [`BinnedNLL`](@ref) | histogram fit from a cumulative model | `0.5` |
 | [`ExtendedBinnedNLL`](@ref) | histogram fit, yield as a parameter | `0.5` |
-| [`CostSum`](@ref) | a joint fit of several costs (`+`) | mixed (rescaled) |
+| [`CostSum`](@ref) | a joint fit of several costs (`+`) | 1.0 |
 
 Each cost is callable on a parameter vector and returns `Float64` for ordinary
 `Float64` parameters. During AD its result carries derivative information.
@@ -134,5 +134,7 @@ available and unchanged. `LeastSquares` is the object-oriented equivalent: it
 shares the same χ² kernel, so a `LeastSquares` fit and the corresponding
 `chisq`-based `model_fit` give bit-identical results. Use whichever style you
 prefer — `chisq` for a quick functional call, the cost objects when you want
-composition (`CostSum`), automatic `errordef`, or the resampling helpers
-([`bootstrap`](@ref) / [`jackknife`](@ref) accept cost objects directly).
+composition (`CostSum`) or an automatic `errordef`.
+[`bootstrap`](@ref) and [`jackknife`](@ref) accept point-level
+`LeastSquares`, `UnbinnedNLL` and `ExtendedUnbinnedNLL` costs directly.
+Parametric bootstrap of a cost object is available for `LeastSquares`.

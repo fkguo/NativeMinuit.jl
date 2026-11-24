@@ -8,12 +8,16 @@ likelihood (re-minimizing all other parameters while one is scanned);
 contours extend the same idea to 2-D confidence regions. This tutorial
 uses the [`Minuit`](@ref) object throughout.
 
-We work with a deliberately non-parabolic example:
+The cubic term gives parameter `a` an asymmetric profile:
 
 ```julia
 using NativeMinuit
 
-fcn(x) = (x[1] - 1.0)^2 + 0.5 * (x[1] - 1.0)^4 + (x[2] - 2.0)^2
+function fcn(x)
+    a = x[1] - 1.0
+    b = x[2] - 2.0
+    return a^2 + 0.5 * a^3 + 0.5 * a^4 + b^2
+end
 m = Minuit(fcn, [0.0, 0.0]; names = ["a", "b"])
 migrad!(m)
 ```
@@ -68,11 +72,10 @@ using a side: on a failed crossing the published value falls back to the
 symmetric Hesse placeholder, while an at-limit side publishes only the
 distance to the bound.
 
-If you only need one side, `minos_upper(m, "a")` /
-`minos_lower(m, "a")` return just that value without storing a result in
-`m.merrors`. Their objective calls still increase `m.nfcn`, and a scalar return
-contains no crossing or limit flags. For uncertainty reporting, use
-`minos!(m, par)` and inspect the stored `MinosError`. The whole-fit alias
+Each of `minos_upper(m, "a")` and `minos_lower(m, "a")` runs both scans and
+returns the requested offset. Its objective calls increase `m.nfcn`. Use a
+single `minos!(m, par)` to obtain both sides and inspect their crossing and
+limit flags in the stored `MinosError`. The whole-fit alias
 `minos!(m; sigma = 2)` widens the scan to the
 2σ crossing.
 
@@ -132,13 +135,11 @@ c.points        # Vector{Tuple{Float64,Float64}} — the boundary in (x, y)
 c.valid         # true if MINOS succeeded on both axes
 ```
 
-The exact algorithm additionally records the **full parameter vector at
-every boundary point** (the two contour coordinates plus the profiled
-rest) at no extra cost. The lower-level [`contour_exact`](@ref) returns a
-`ContoursError` whose [`contour_parameter_sets`](@ref) gives those vectors
-— the native analogue of IMinuit.jl's `get_contours`. The ellipse
-[`contour_ellipse`](@ref) does no inner re-minimization, so it leaves that
-field empty.
+The lower-level [`contour_exact`](@ref) records the full parameter vector at
+each boundary point, including the profiled parameters.
+[`contour_parameter_sets`](@ref) retrieves these vectors from its
+`ContoursError`. [`contour_ellipse`](@ref) uses MINOS scans along both axes
+to construct an approximate contour. Its per-point parameter sets are empty.
 
 ### [Δχ², coverage, and the two contour conventions](@id delta-chisq-conventions)
 
@@ -187,9 +188,10 @@ statement about `NPAR` parameters, James prescribes scaling `up` by the
 | 95 %   | 3.84 | 5.99 | 7.82 |
 | 99 %   | 6.63 | 9.21 | 11.34 |
 
-(For a negative-log-likelihood FCN all values are halved — that is what
-`up = 0.5` already encodes. The general entry is
-[`delta_chisq`](@ref)`(β, NPAR)`.)
+The table gives chi-square-equivalent displacements. For a raw objective
+$F$, the rise above the minimum is $\Delta F = \mathrm{up}\,\Delta\chi^2$.
+Use [`delta_chisq`](@ref)`(β, NPAR)` for the quantile. For a negative log
+likelihood with `up = 0.5`, the raw rise is half that quantile.
 
 **How NativeMinuit maps the two conventions:**
 
@@ -202,8 +204,8 @@ statement about `NPAR` parameters, James prescribes scaling `up` by the
   the low-level [`contour_exact`](@ref)`(fmin, cf, ix, iy)` (`sigma = 1`
   traces `fmin + up` exactly), or through `mncontour` with
   `cl = chisq_cl(1, 2) ≈ 0.3935`.
-- Single-parameter errors themselves come from [`minos!`](@ref)
-  (`Δχ² = up`, any dimension), not from a 2-D contour.
+- [`minos!`](@ref) computes single-parameter errors at the raw objective
+  rise $\Delta F=\mathrm{up}$, corresponding to $\Delta\chi^2=1$.
 
 ```julia
 pts_joint = mncontour(m, "a", "b")                       # 68 % joint region
@@ -236,6 +238,8 @@ parameters pinned** at their best-fit values — the 2-D analogue of
 function near the minimum (valley orientation, hints of secondary minima):
 
 ```julia
+using Plots
+
 xs, ys, F = contour_grid(m, "a", "b"; size = 50, bound = 2)  # iminuit-style
 g = contour_grid(m, "a", "b"; subtract_min = true)
 plot(g)                                       # filled-contour landscape
@@ -251,13 +255,13 @@ plot(g)                                       # filled-contour landscape
 > free parameters slice ≡ profile). For confidence regions use
 > [`mncontour`](@ref).
 >
-> Picking the level itself: `Δχ² = up` (i.e. `m.up`) is the curve whose
-> per-axis **projections** are the single-parameter 68.27 % intervals
-> (the C++ MnContours convention — its joint 2-D coverage is only
-> 39.3 %); the **joint** 2-D 68 % region needs
-> `Δχ² = delta_chisq(0.68, 2) ≈ 2.28` (the [`mncontour`](@ref)
-> default). See the
-> [Δχ² conventions](@ref delta-chisq-conventions) section above.
+> On the absolute-objective grid, the levels for $\Delta\chi^2=1$ and
+> the joint 68 % chi-square threshold are `m.fval + m.up` and
+> `m.fval + m.up * delta_chisq(0.68, 2)`, respectively. With
+> `subtract_min=true`, subtract the smallest objective on the sampled
+> grid from those levels. Slice projections agree with profiled MINOS
+> intervals when the slice and profile agree, as in a fit with just two
+> free parameters.
 
 ## 1-D profiles
 

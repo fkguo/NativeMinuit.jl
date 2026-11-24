@@ -126,8 +126,9 @@ m.values["mass"] = 3.0                # ≡ set_value!(m, "mass", 3.0)
 
 ## How bounds interact with HESSE and MINOS
 
-Both error methods run in internal coordinates and map back, so they
-respect the bounds — but two effects are worth knowing.
+HESSE computes the covariance in internal coordinates and maps it back to
+physical coordinates. MINOS scans a bounded parameter in physical coordinates
+and uses the internal-coordinate search for an unbounded profile parameter.
 
 **The error at a bound is asymmetric and Jacobian-distorted.** Because the
 transform's slope vanishes at the boundary, a naive `√(V[i,i])` would

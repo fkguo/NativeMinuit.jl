@@ -86,13 +86,10 @@ re-minimization at each boundary point, so the full state is captured for
 free (IMinuit.jl re-fit each point only because PyCall could not return
 the inner `MinimumState` across the Python boundary).
 
-Each vector is in the **same coordinate frame as `ce.points`**: physical
-(external) coordinates when the `ContoursError` came from the high-level
-[`contour`](@ref)`(m, …)` (which externalizes its output), and internal
-(sin/√-transformed) coordinates when it came from the low-level
-[`contour_exact`](@ref)`(fmin, cf, …)` on a bounded fit (identical to external
-for unbounded fits). Empty when `ce` came from the ellipse [`contour`](@ref)
-or when the contour was invalid.
+Each vector uses the coordinate frame of `ce.points` and the supplied
+objective. For `contour_exact` on a transformed minimum, this is the internal
+coordinate frame. The parameter-set vector is empty for ellipse results.
+The high-level [`mncontour`](@ref) returns pairs of physical coordinates.
 
 # Example
 

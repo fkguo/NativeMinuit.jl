@@ -619,9 +619,10 @@ and plots directly (`plot(g)` → filled contour; or `draw_contour(m, ...)`).
     parameters slice ≡ profile and the levels are exact. Use
     [`mncontour`](@ref) for confidence regions; use `contour_grid` to
     inspect the FCN landscape (valley orientation, secondary minima).
-    For level lines: `Δχ² = m.up` projects to the single-parameter 68.27 %
-    intervals; the joint-2D 68.27 % level is `delta_chisq(0.68, 2) ≈ 2.30`
-    (× `m.up`).
+    For raw objective values, the levels for a chi-square-equivalent rise
+    of one and the 68% two-parameter threshold are `m.fval + m.up` and
+    `m.fval + m.up * delta_chisq(0.68, 2)`. With `subtract_min=true`,
+    subtract the smallest value on the sampled grid from these levels.
 """
 function contour_grid(m::Minuit, par1, par2;
                        size::Integer = 50,
@@ -910,13 +911,14 @@ hatch, powered by **Optim.jl** instead of Python's `scipy.optimize`. Load
 
 Minimises the FCN with the chosen Optim optimizer starting from `m`'s current
 parameter values, honours fixed parameters and box limits (via Optim's
-`Fminbox`), writes the optimum back into `m` (so `m.values` / `m.fval` update),
-and returns `m`. Run [`hesse`](@ref)`(m)` afterwards for the covariance —
-matching iminuit's scipy-then-hesse flow. Use this when MIGRAD struggles
-(stiff / ill-conditioned problems where a trust-region or derivative-free
-method does better).
+`Fminbox`), writes the returned point and objective value into `m`, and
+returns `m`. Use `m.valid` to check convergence. The initial covariance is
+based on the seed at the returned point. Run [`hesse`](@ref)`(m)` after a
+valid fit to refine the covariance.
 
-# `method` mapping (case / dash / underscore insensitive)
+# `method` mapping
+
+Names are lowercased and spaces and dashes are mapped to underscores.
 
 | `method`                                   | Optim optimizer        |
 |:-------------------------------------------|:-----------------------|

@@ -103,8 +103,9 @@ available. Other iminuit aliases are present too: `m.is_valid`, `m.ncalls`,
 
 IMinuit.jl's small functional accessors are exported unchanged:
 [`args`](@ref)`(m)` (a copy of the current external values, preserving supported named containers)
-and [`matrix`](@ref)`(m; correlation=false)` (the covariance or correlation
-matrix). `reset(m)` drops cached MIGRAD/MINOS results and
+and [`matrix`](@ref)`(m; correlation=false)` (the free-parameter covariance
+or correlation block). `m.covariance` includes all external parameters, with
+zero rows and columns for fixed parameters. `reset(m)` drops cached MIGRAD/MINOS results and
 [`set_precision`](@ref)`(m, p)` overrides the machine precision.
 
 ## Contours and profiles: `m.mncontour(a,b)` → `mncontour(m, a, b)`
@@ -217,9 +218,8 @@ either gives a clear "load Optim" message rather than a `MethodError`.
 - **algorithm helpers take `m` as an argument** — `mncontour(m, a, b)`,
   `profile(m, a)`, `mnprofile(m, a)` instead of `m.mncontour(a, b)` etc.;
 - **generic Julia FCNs** — your `f(x::AbstractVector)` can be any callable;
-  load ForwardDiff and pass `grad = x -> ForwardDiff.gradient(f, x)`, or
-  construct a `CostFunctionAD`. Loading ForwardDiff alone does not switch
-  an existing numerical fit to AD;
+  pass `grad = x -> ForwardDiff.gradient(f, x)` to `Minuit` for a ForwardDiff
+  fit, or construct a `CostFunctionAD` for the low-level API;
 - **package extensions** — alternative minimizers (`using Optim`) and plotting
   (`using Plots`) load on demand rather than as hard dependencies.
 

@@ -33,8 +33,8 @@ fm = migrad(cf, [0.0, 0.0, 0.0, 0.0], [0.1, 0.1, 0.1, 0.1])   # a FunctionMinimu
 show(stdout, MIME"text/plain"(), fm)
 ```
 
-Or the iminuit / IMinuit.jl-style front end, with named parameters, limits,
-and asymmetric MINOS errors:
+The iminuit / IMinuit.jl-style interface supports named parameters and
+asymmetric MINOS errors:
 
 ```julia
 m = Minuit(x -> sum(abs2, x .- [1.0, 2.0, 3.0, 4.0]), zeros(4);
@@ -92,13 +92,13 @@ Full [API reference](api.md) and [internals](internals.md).
 
 ## Citation & references
 
-If you use NativeMinuit.jl in a publication, please cite **both** NativeMinuit.jl and
-the upstream Minuit algorithms it ports:
+Please cite the NativeMinuit.jl release you used and the original MINUIT paper.
+Use GitHub's **Cite this repository** button for APA or BibTeX.
+[`CITATION.cff`](https://github.com/fkguo/NativeMinuit.jl/blob/main/CITATION.cff)
 
-> F.-K. Guo, *NativeMinuit.jl: a native-Julia port of Minuit2*,
-> <https://github.com/fkguo/NativeMinuit.jl> (2026). A
-> [`CITATION.cff`](https://github.com/fkguo/NativeMinuit.jl/blob/main/CITATION.cff)
-> is provided (GitHub's "Cite this repository" → APA / BibTeX).
+> F.-K. Guo (2026). *NativeMinuit.jl: a native-Julia port of Minuit2*
+> (v0.8.0). Zenodo. [doi:10.5281/zenodo.24475298](https://doi.org/10.5281/zenodo.24475298).
+> [GitHub source for v0.8.0](https://github.com/fkguo/NativeMinuit.jl/tree/v0.8.0).
 
 > F. James and M. Roos, "MINUIT: A system for function minimization and
 > analysis of the parameter errors and correlations", Comput. Phys. Commun.

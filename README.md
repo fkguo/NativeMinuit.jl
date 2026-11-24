@@ -350,7 +350,8 @@ The [`CITATION.cff`](CITATION.cff) file supplies the software citation for
 GitHub's **Cite this repository** button in APA and BibTeX.
 
 > F.-K. Guo (2026). *NativeMinuit.jl: a native-Julia port of Minuit2*
-> (v0.8.0). Zenodo. [doi:10.5281/zenodo.24475298](https://doi.org/10.5281/zenodo.24475298)
+> (v0.8.0). Zenodo. [doi:10.5281/zenodo.24475298](https://doi.org/10.5281/zenodo.24475298).
+> [GitHub source for v0.8.0](https://github.com/fkguo/NativeMinuit.jl/tree/v0.8.0).
 >
 > F. James and M. Roos, "MINUIT: A system for function minimization and analysis
 > of the parameter errors and correlations", Comput. Phys. Commun. **10** (1975)

@@ -58,9 +58,10 @@ NativeMinuit.CovStatus
 
 ## MINOS (asymmetric errors)
 
-`minos_upper` and `minos_lower` add objective calls to `m.nfcn` without storing
-MINOS results. Their scalar returns carry no limit/validity flags; use the
-stored `MinosError` from `minos!` when interpreting uncertainty.
+Each call to `minos_upper` or `minos_lower` computes both sides, adds the
+objective calls to `m.nfcn` and returns the requested offset. Use
+`minos!` for both offsets and their limit and validity flags in a
+`MinosError`.
 
 ```@docs
 NativeMinuit.minos

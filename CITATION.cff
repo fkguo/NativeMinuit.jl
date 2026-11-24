@@ -15,7 +15,7 @@ authors:
     orcid: "https://orcid.org/0000-0002-2919-2064"
     website: "https://inspirehep.net/authors/1027513"
 repository-code: "https://github.com/fkguo/NativeMinuit.jl"
-url: "https://github.com/fkguo/NativeMinuit.jl"
+url: "https://github.com/fkguo/NativeMinuit.jl/tree/v0.8.0"
 license: LGPL-2.1-or-later
 version: "0.8.0"
 doi: "10.5281/zenodo.24475298"

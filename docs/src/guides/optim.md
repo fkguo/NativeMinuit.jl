@@ -52,7 +52,8 @@ dependency), [`simplex`](@ref)`(m)` runs NativeMinuit's own Nelder-Mead.
 
 ## Choosing the method
 
-Pass `method = …` a name (case / dash / underscore insensitive) from this table:
+Choose one of the symbols or strings in the table. The bridge lowercases names
+and maps spaces and dashes to underscores.
 
 | `method`                                   | Optim optimizer        | Order          |
 |:-------------------------------------------|:-----------------------|:---------------|
@@ -102,7 +103,7 @@ pass an optimizer object.
 | `method`           | —                 | optimizer selector (table above); default `:lbfgs` |
 | `ncall` / `maxcall`| `f_calls_limit`   | function-evaluation budget                    |
 | `tol`              | `g_tol`           | gradient-norm convergence tolerance           |
-| `options`          | `Optim.Options`   | full options object; overrides the three above |
+| `options`          | `Optim.Options`   | full options object; overrides `ncall`, `maxcall` and `tol` |
 
 ```julia
 optim(m; method = :bfgs, maxcall = 10_000, tol = 1e-9)
@@ -124,15 +125,15 @@ optim(m; method = :lbfgs, options = Optim.Options(g_tol = 1e-12, iterations = 5_
 [`optim`](@ref) / [`minimize_with`](@ref) **return `m`** and update it in place,
 just like [`migrad!`](@ref):
 
-- `m.values` / `m.fval` hold the converged point and FCN value.
+- `m.values` / `m.fval` report Optim's final point and objective value.
 - `m.valid` reflects whether Optim reported convergence.
-- the FCN-evaluation count Optim spent is surfaced as the minimum's `nfcn`.
-- any previously cached MINOS errors are cleared (they are stale at the new point).
+- The reported `nfcn` is the larger of Optim's objective-call count and
+  NativeMinuit's seed call count.
+- The bridge clears cached MINOS errors and initializes the covariance from
+  NativeMinuit's seed at the returned point.
 
-What it does **not** do by itself is produce a covariance — neither does iminuit's
-`m.scipy`. The optimum is seeded back the same way [`migrad`](@ref) constructs its
-minimum (a diagonal seed at the converged point), so the natural next step is to
-refine the errors with NativeMinuit's own machinery:
+After a valid fit, run HESSE to estimate the full covariance and MINOS for
+asymmetric errors.
 
 ```julia
 using NativeMinuit, Optim

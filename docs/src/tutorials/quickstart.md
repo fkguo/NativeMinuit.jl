@@ -152,6 +152,7 @@ on all calls made by `migrad!`. Seed/gradient/HESSE probes can finish beyond
 that threshold, and retries can run Simplex and MIGRAD with separate budgets.
 `m.nfcn` counts calls across the attempted passes; `m.n_passes` counts MIGRAD
 passes. MINOS and subsequent HESSE calls also add to the current fit’s count.
+The seed probe for `threaded_gradient=:auto` uses a separate counter.
 
 By default `migrad!` permits up to five MIGRAD passes. After an invalid pass
 without a call-limit exit, it can run Simplex followed by `Strategy(2)` MIGRAD.

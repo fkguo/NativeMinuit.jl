@@ -23,14 +23,14 @@ beside HESSE / MINOS / profile bands / the likelihood-ensemble MCMC.
 The posterior density is
 
 ```math
-\log p(θ \mid \text{data}) = -\,\frac{\text{fcn}(θ)}{2\,\text{up}} + \log\text{prior}(θ),
+\log p(θ \mid \text{data}) = -\frac{\text{fcn}(θ)}{2\,\text{up}} + \log\text{prior}(θ) + \text{constant},
 ```
 
 the faithful Minuit relation `-2 log L = fcn/up`. Keep `errordef` at its
 **statistical** value — `up = 1` for a χ² (`-2 log L`) cost, `up = 0.5` for a
-`-log L` cost — so the likelihood temperature is correct. Inflating `up` (e.g.
-to widen a MINOS interval) tempers the posterior by the same `√up`; put extra
-information in the **prior**, not in `errordef`.
+`-log L` cost — so the likelihood temperature is correct. Increasing `up`
+weakens the likelihood factor in the posterior. Express prior information
+through the prior.
 
 A flat prior is flat in NativeMinuit's **external** coordinates — a parameterization
 choice, not an "uninformative" / Jeffreys prior. Minuit `limits` are taken as
@@ -102,7 +102,7 @@ m = Minuit(χ², [0.1]; names = ["mu"], limits = [(0.0, nothing)])
 migrad!(m); hesse!(m)
 m.values[1]                                           # best fit pinned at the limit, μ = 0.0
 
-post = posterior_sample(m; prior = :flat, proposal = [0.5], seed = 2)  # flat on [0, ∞)
+post = posterior_sample(m; prior = :flat, seed = 2)   # flat on [0, ∞), default :stretch
 ul   = upper_limit(post, :mu; level = 0.90)           # 90 % credible upper limit
 ul.limit                                              # ≈ 0.65 (prior-dependent)
 ul.boundary_active                                    # true ⇒ posterior mass piles at μ = 0
@@ -332,12 +332,10 @@ affine invariance keeps it efficient even when the posterior is strongly correla
 It is the de-facto standard in HEP and astrophysics, which makes it the safe choice
 when you would rather not think about tuning a proposal.
 
-Switch to **`:metropolis`** for inexpensive, near-Gaussian posteriors, where a
-HESSE-preconditioned random walk is already adequate and its per-chain R̂ / split
-diagnostics are convenient. Switch to **`:nuts`** for higher-dimensional, smooth,
-**auto-differentiable** posteriors, where gradient information makes it the most
-efficient — but it errors (rather than silently degrading) on a non-differentiable
-FCN or a best fit sitting on a parameter limit.
+Use **`:metropolis`** for a random walk with a HESSE-based proposal and
+per-chain diagnostics. Use **`:nuts`** for smooth posteriors when both the
+objective and log prior support ForwardDiff and the starting point is inside
+the intersection of the fit limits and prior support.
 
 ### Enabling NUTS
 
@@ -354,19 +352,19 @@ post = posterior_sample(m; sampler = :nuts, prior = pr, seed = 1)
 
 Bounded parameters are mapped to unconstrained ℝ (log / logit) with the proper
 log-Jacobian, sampled by NUTS, and transformed back to external coordinates; the
-gradient comes from ForwardDiff. There is **no finite-difference fallback** — a
-non-differentiable FCN raises a clear error pointing you to `:stretch`.
+gradient comes from ForwardDiff. Choose the gradient-free `:stretch` sampler
+when the objective or log prior requires calls that ForwardDiff cannot
+differentiate.
 
 All built-in cost objects — including `BinnedNLL` / `ExtendedBinnedNLL` — are
 ForwardDiff-differentiable, so `:nuts` works on them as long as the model / pdf /
-cdf you supply is itself auto-differentiable. A user function that internally fixes
-its type to `Float64` (e.g. a complex-buffer χ² common in hadron physics) still
-needs the gradient-free `:stretch`.
+cdf and log prior you supply support ForwardDiff. Use storage that accepts the
+parameter element type for model and prior intermediates.
 
 ## Diagnostics and honesty checks
 
 ```julia
-post = posterior_sample(m; prior = pr, nchains = 4, seed = 1)
+post = posterior_sample(m; sampler = :metropolis, prior = pr, nchains = 4, seed = 1)
 maximum(post.rhat) < 1.01            # split-R̂ across chains/walkers (want ≈ 1)
 minimum(post.ess)                    # effective sample size per parameter
 post.warnings                        # boundary pile-up, etc.

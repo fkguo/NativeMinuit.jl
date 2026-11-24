@@ -38,11 +38,11 @@ There are two families, and the difference is **what is held fixed**.
 For a correctly-specified, near-Gaussian fit the two families **agree** — that
 agreement is itself a useful check. They **diverge** precisely when:
 
-- **the error model is wrong** (the per-point `σ` are mis-scaled or
-  mis-correlated). HESSE/MINOS/MC-Δχ² *trust* those `σ`; the bootstrap reads the
-  spread that is actually in the data and ignores the stated `σ` (nonparametric)
-  — so a bootstrap error much larger than the HESSE error is a red flag that the
-  quoted `σ` are too optimistic; and
+- **the error model is misspecified**. HESSE, MINOS and MC-Δχ² use the
+  fitted objective. The nonparametric bootstrap resamples observations and
+  retains their fit weights. A discrepancy motivates checking the error
+  model, sample size, and stability of the estimator; it has several
+  possible causes.
 - **the estimator is biased** (nonlinear model, boundary, small sample). The
   jackknife *measures* that bias; the curvature-based methods cannot see it.
 
@@ -53,13 +53,10 @@ or when you want a model-light cross-check before quoting a result.
 A **Bayesian** layer sits on top of the first family: `bayesian` /
 `posterior_sample` multiply that same likelihood by an explicit **prior** and
 sample the **posterior**, reporting **credible** intervals and one-sided
-credible **limits**. Mechanically it is the likelihood-ensemble chain (data
-fixed, parameters varied) — with `prior = :flat` the target is the pure
-likelihood (a single chain reproduces the `mcmc_sample` path exactly); what
-changes is the **interpretation** (a 68% credible interval is
-a probability statement about θ *given the prior*, not a coverage statement) and
-the **tooling** (priors, and a credible upper limit on a coupling pinned near a
-boundary). It is the eighth method, detailed after the MCMC section below.
+credible **limits**. A flat prior targets the likelihood over the allowed
+parameter range. The posterior sampler defaults to the affine-invariant
+ensemble sampler (`:stretch`). Use `:metropolis` with one chain, a flat prior,
+and the same seed and sampling settings to reproduce the `mcmc_sample` chain.
 
 ## The unified table
 
@@ -70,7 +67,7 @@ boundary). It is the eighth method, detailed after the MCMC section below.
 | **extremize / profile_band** | parameters (constrained extremization of a derived `f(θ)` over the `Δχ²` region) | a converged, valid fit; seeds covering every low-χ² corridor | an interval on a **derived quantity** (a scalar `f(θ)` that is not a parameter), or the pointwise **error band** of a curve family — "MINOS for a function" | likelihood method (trusts the error model); `extremize` floors/ceils by the directional endpoints by default (fixes ill-conditioned single-seed under-coverage; `profile_band` does not — use its `mode=:directional` there), but a *disconnected multi-corridor* region still needs `seeds` — audit `.diagnostics` |
 | **MC-Δχ² region** | parameters (fixed data), using the **true** `Δχ²` not a quadratic | the `χ²`/`−2lnL` plus a proposal (the fit covariance, or an explicit parameter range) | mapping a **non-Gaussian** confidence region, or a **joint** N-D region, where MINOS' 1-D profile is not enough | the proposal must **over-cover** when the covariance is unreliable, or the region is clipped; still *trusts the error model* (it is a likelihood method) |
 | **Likelihood-ensemble MCMC** | parameters (fixed data): a Metropolis chain on the **true** likelihood `∝ exp(−fcn/(2·up))` | a fit to start from (HESSE helps the proposal); an FCN cheap enough for ~10⁴–10⁵ evaluations | **marginal quantiles & pointwise bands of derived quantities** (curves, ratios, …) under non-Gaussianity or active parameter limits; a reusable, likelihood-weighted error set | the quantile band is a *marginal* construction: at an active limit it can legitimately exclude the best fit (mode ≠ median — a property, not a failure); single chain — watch the acceptance and mixing; trusts the error model |
-| **Bayesian posterior** | parameters (fixed data): the same Metropolis chain on `prior × exp(−fcn/(2·up))` | a fit to start from; an explicit **prior** (`:flat` ⇒ the likelihood path); FCN cheap enough for ~10⁴–10⁵ evals per chain | a **credible** interval or one-sided credible **limit** (e.g. an upper limit on a near-zero coupling), or any posterior summary under an informative prior | gives **credible** (prior-conditional), *not* confidence, statements; a flat prior is flat in **external** coords (parameterization-dependent, not "uninformative"); needs `nchains ≥ 2` for R̂; the posterior temperature follows `errordef` (keep `up` at 1 or ½) |
+| **Bayesian posterior** | parameters (fixed data), with likelihood weighted by a prior. The default sampler is `:stretch` | a fit and a prior (`:flat` by default) | credible intervals, one-sided credible limits and posterior summaries | a flat prior is defined in external coordinates. Split R-hat uses chains for Metropolis and NUTS, and walkers for the ensemble sampler. |
 | **Bootstrap** | **data** (resample with replacement, then re-fit) | a resamplable dataset and many cheap re-fits | the error model is **uncertain or misspecified**; you want the estimator's empirical sampling distribution and robust, possibly asymmetric, CIs | expensive (`nresample` full re-fits); needs enough independent points; weak for binned / heavily-aggregated / strongly-correlated data |
 | **Jackknife** | **data** (leave-one-out, then re-fit) | a dataset and `N` (delete-1) re-fits | a quick, almost assumption-free error **plus an explicit bias estimate** | coarser than the bootstrap; unreliable for highly nonlinear or non-smooth estimators; the delete-`d` block variant is coarser still |
 
@@ -175,7 +172,7 @@ correlations included). For `f(θ) = θ[i]` it reproduces the MINOS interval.
 along a grid for a curve family `f(x, θ)` (`x` first, `θ` the full parameter
 vector — the same callback shape as `quantile_band`) — the standard **pointwise**
 profile-likelihood error band for figures. Each `x` carries its own `cl`
-statement, and the band **contains the best-fit curve by construction** —
+statement, and the default `include_best=true` includes the best-fit curve —
 the marginal `quantile_band` need not, when a parameter sits on a limit and
 pushes the likelihood mass to one side (the two constructions are compared
 side-by-side in the MCMC section below). Warm starts plus forward/reverse
@@ -243,23 +240,24 @@ the `Δχ²` boundary on each side, and reports the *true* `f` there (its call c
 recommended procedure is **directional first, `:full` only if you suspect
 non-linearity or the two disagree**. On the `:full` path, cut cost with
 `rounds = 1`, `iterate = 1`, `strategy = 0`, and a modest `maxfcn`. For a long
-run on a shared/kill-prone machine, attach `on_unit = …` (fired once per
-penalty-MIGRAD unit) to checkpoint partial work externally. Finally, **`f` may
-throw or return a non-finite value at infeasible θ — both are safe** (the probe
-becomes a finite plateau the optimizer steers around, never a `NaN` into
-MIGRAD); a genuinely non-finite-`f` region may legitimately *narrow* the
-interval, which is safe — but do **not** return a sentinel like `0.0`, which
-*centres* the endpoint (a silent bias).
+run, use `on_unit` to checkpoint completed penalty-MIGRAD units. In full
+mode, infeasible probes can return a non-finite value. The search also
+treats `DomainError`, `BoundsError`, `SingularException`, `ArgumentError`,
+and `DivideError` from such probes as infeasible. Other errors propagate.
+Return the derived quantity only at points where it is defined.
 
 When the band goes into a figure, write **pointwise** in the caption: each
 `x` is its own 68 % statement. This does not give the whole true curve 68 %
 simultaneous coverage; the everywhere-at-once coverage is generally lower.
 
 ### MC-Δχ² region — `get_contours_samples(m; ...)` / `contour_df_samples`
-Samples trial parameter vectors (proposal = the fit covariance, or a user range),
-keeps those inside the true `Δχ² ≤ up·delta_chisq(cl, ndof)` shell — **the exact
-`χ²`/`−2lnL` re-evaluated at every sample** — and uses the surviving cloud to
-describe the confidence region. Unlike MINOS it captures **non-Gaussian** and
+Samples trial parameter vectors from the fit covariance or a user range.
+For the objective $F$, it accepts samples with
+$\Delta F \le \mathrm{up}\,\mathrm{delta\_chisq}(\mathrm{cl},\mathrm{ndof})$.
+The returned `delta` is the chi-square-equivalent threshold.
+`delta_chisq_values` gives $\Delta F/\mathrm{up}$ for each accepted sample,
+in the same units as `delta`.
+The accepted cloud describes **non-Gaussian** and
 **joint multi-parameter** regions directly. It is still a likelihood method (the
 data are fixed and the per-point `σ` are trusted), so its honesty rests on the
 error model just as HESSE's and MINOS' do. Returns a `NamedTuple` (kept
@@ -280,9 +278,9 @@ multivariate normal centred on the best fit `best` with covariance `Σ`)
 local Gaussian). Mitigations, all built in: an `inflate` factor; **adaptive
 widening** (auto-grow `inflate` until the region stops being clipped, with an
 `under_coverage` flag if it can't); a covariance-free **`proposal = :uniform`**
-box over explicit `ranges`; and a **warning** when the covariance looks unreliable
-— it never silently under-estimates. When in doubt, use the range proposal: it
-does not depend on `Σ` at all.
+box over explicit `ranges`; and a warning when the covariance looks unreliable.
+Check coverage by widening the proposal or using explicit ranges, especially
+for narrow or disconnected regions.
 
 **Joint vs single-parameter level — `delta_chisq(cl, ndof)`.** The acceptance
 threshold is `delta_chisq(cl, ndof)`, with two arguments:
@@ -328,15 +326,14 @@ own helper covers only 1–2 parameters.)
 # 1σ JOINT region for all 3 free parameters ⇒ Δχ² = 3.53 (NOT 1):
 r = get_contours_samples(m; nsamples = 30_000, cl = 1)   # ndof defaults to n_free = 3
 r.bounds          # asymmetric (min,max) per parameter
-r.under_coverage  # false ⇒ the proposal covered the region
+r.under_coverage  # whether the widening check detected possible clipping
 # Untrustworthy Σ → covariance-free box proposal:
 r = get_contours_samples(m; proposal = :uniform, ranges = [(0,0.8),(-0.05,0.05),(-15,0)])
 ```
 
-Related: `contour_parameter_sets(ce)` returns the full parameter vector at every
-`contour_exact` / `mncontour` boundary point (the 2 contour coordinates + the
-profiled rest) at no extra cost — the native analogue of IMinuit.jl's
-`get_contours`.
+Related: `contour_parameter_sets(ce)` retrieves full parameter vectors for
+the boundary points stored by the low-level `contour_exact` result.
+`mncontour` returns the two plotted coordinates for each point.
 
 ### Likelihood-ensemble MCMC — `mcmc_sample` / `quantiles` / `quantile_band`
 
@@ -393,7 +390,7 @@ parameter limit they legitimately differ:
 |---|---|---|
 | construction | pointwise `[min, max]` of `f` over `{Δχ² ≤ delta_chisq(cl, 1)}` (constrained extremization — [`profile_band`](@ref NativeMinuit.profile_band); explicit `delta = delta_chisq(cl, k)` only for joint statements) | pointwise 16–84% quantiles of `f` over the likelihood ensemble (`quantile_band`) |
 | nature | frequentist confidence band | likelihood/posterior-mass band |
-| best fit | **contained by construction** | **need not be contained** (mode ≠ median) |
+| best fit | included with the default `include_best=true` | included when it falls between the marginal quantiles |
 | needs | an optimizer reaching the region edge (`extremize`/`profile_band`; multi-start, seeds!) | likelihood-weighted samples (this section) |
 | agree when | near-Gaussian interior — the two coincide | same |
 | separate when | at an active parameter limit the envelope truncates at the boundary side | the truncation piles the mass on one side ⇒ the whole band shifts |
@@ -442,19 +439,18 @@ re-minimize (`find_deeper_minimum`) before quoting any errors.
 
 ### Bayesian posterior bridge — `bayesian` / `posterior_sample` / credible intervals
 
-`posterior_sample(m)` and the one-step `bayesian(m)` reuse the **same** Metropolis
-kernel as the likelihood ensemble, but multiply the likelihood by an explicit
-**prior** and interpret the result as a **posterior** in full external
-coordinates:
+`posterior_sample(m)` and `bayesian(m)` sample the likelihood weighted by
+a prior. Both default to `:stretch`, an affine-invariant ensemble sampler.
+In physical parameter coordinates the log posterior is
 
 ```math
-\log p(θ \mid \text{data}) = -\,\frac{\text{fcn}(θ)}{2\,\text{up}} + \log \text{prior}(θ).
+\log p(θ \mid \text{data}) = -\frac{\text{fcn}(θ)}{2\,\text{up}} + \log \text{prior}(θ) + \text{constant}.
 ```
 
-The result is a [`PosteriorSample`](@ref NativeMinuit.PosteriorSample) — a
-`LikelihoodEnsemble` plus Bayesian provenance (prior, kept log-likelihood /
-log-posterior, per-chain IDs, R̂ / ESS, boundary flags). Everything is
-**non-mutating**: the fit, `m.values`, `m.errors`, and `m.nfcn` are untouched.
+`posterior_sample` returns a [`PosteriorSample`](@ref NativeMinuit.PosteriorSample)
+with samples, log densities and diagnostics. `bayesian` returns a
+`BayesianReport` with the posterior and requested summaries. Both preserve the
+fit state.
 
 ```julia
 m = Minuit(chi2, x0; names = names, limits = limits)
@@ -465,7 +461,7 @@ report = bayesian(m; level = 0.6827)          # m is left completely untouched
 
 # Explicit prior + a reusable posterior sample (4 chains ⇒ split-R̂ / ESS).
 pr   = normal_prior(m, :mass, 3.8717, 0.0002) # Gaussian prior on one parameter
-post = posterior_sample(m; prior = pr, nchains = 4, seed = 11)
+post = posterior_sample(m; sampler = :metropolis, prior = pr, nchains = 4, seed = 11)
 maximum(post.rhat) < 1.01 && minimum(post.ess) > 400   # converged & well-mixed?
 
 ci   = credible_interval(post, :mass; level = 0.6827)            # (lo, hi)
@@ -485,11 +481,9 @@ half_normal_prior(m, :g, σ)      # half-normal above the lower limit (or above 
 combine_priors(p1, p2)           # add disjoint informative components (MVP: no overlap)
 ```
 
-`prior = :flat` makes `posterior_sample` reproduce the single-chain likelihood
-path **byte-for-byte** (`post.ensemble.samples == mcmc_sample(m; …).samples` at
-the same seed) — the Bayesian layer adds new tools, never silently changes the
-chain. Construction **fails loudly** if the best-fit point lies outside the
-prior × limits support, rather than starting a dead chain.
+Set `sampler=:metropolis, nchains=1, prior=:flat` to reproduce the
+`mcmc_sample` chain with the same seed and chain settings. The starting
+fit must lie within the prior support and the fit limits.
 
 > **Warning — Credible ≠ confidence, and three things to keep honest**
 >
@@ -502,22 +496,18 @@ prior × limits support, rather than starting a dead chain.
 >   flat prior changes.
 > - The posterior **temperature follows `errordef`**: the likelihood enters as
 >   `exp(-fcn/(2·up))`, so keep `up = 1` (χ² / `-2 log L`) or `up = 0.5`
->   (`-log L`). Inflating `up` to widen a MINOS interval tempers the posterior
->   by the same `√up` — put extra information in the **prior**, not in
->   `errordef`.
+>   (`-log L`). Increasing `up` weakens the likelihood factor in the
+>   posterior. Express prior information through the prior.
 
-**Diagnostics & mixing.** `nchains` defaults to 4, each started **over-dispersed**
-at `overdisperse` × the proposal/HESSE scale from the best fit (default `2`, i.e.
-≈2σ wider than the posterior — the spread that makes split-R̂ a real convergence
-test; a start landing on a non-finite posterior is retried, then warned).
-`rhat(post, par)` is the **basic split-R̂** (needs `nchains ≥ 2`, want `< 1.01`;
-not rank-normalized, so for a skewed or boundary-truncated marginal also check
-ESS and the trace) and `effective_sample_size(post, par)` the autocorrelation-
-adjusted ESS. A `boundary_active` warning means posterior mass piles against a
-parameter limit —
-the same one-sided boundary effect as the marginal quantile band above (mode ≠
-median), here a genuine feature for upper-limit reporting. Proposal tuning
-(`proposal`, `scale`, `target_accept`) is identical to `mcmc_sample`.
+**Diagnostics & mixing.** With `:metropolis`, `nchains` defaults to four.
+The first chain starts at the fit and the rest try dispersed starting points.
+Tune the Metropolis proposal with `proposal`, `scale` and `target_accept`.
+For `:stretch`, use `nwalkers` to set the number of walkers. Split R-hat treats
+each walker as a chain. Check split R-hat, effective sample size and the
+individual traces together. For `:metropolis` and `:nuts`, use an explicit
+`seed` and `threaded=true` to run independent chains concurrently on Julia
+threads. The objective and prior must support concurrent calls.
+See the [Bayesian analysis guide](bayesian.md) for sampler options.
 
 **When to use it.** Use the Bayesian posterior when the result you want is
 explicitly Bayesian — an upper limit on a coupling consistent with zero, a
@@ -530,12 +520,10 @@ and confidence intervals coincide; quote which one you computed.
 Resamples the dataset and re-fits `nresample` times, returning a
 [`BootstrapResult`](https://github.com/fkguo/NativeMinuit.jl/blob/main/src/resampling.jl):
 
-- **Nonparametric** (`kind = :nonparametric`, default): draws `N` data points
-  **with replacement** and re-fits. The spread of θ̂ over the resamples is the
-  bootstrap error; its percentiles give **asymmetric** CIs. Crucially this reads
-  the scatter that is *actually in the data*, so it does **not** depend on the
-  quoted `σ` being right — the key reason to use it when the error model is in
-  doubt.
+- **Nonparametric** (`kind = :nonparametric`, default): draws `N` observations
+  with replacement and refits. Least-squares refits retain the uncertainties
+  of the selected observations as weights. The spread of the estimates gives
+  the bootstrap error, and their percentiles give an asymmetric interval.
 - **Parametric** (`kind = :parametric`): regenerates `yᵢ* = model(xᵢ, θ̂) + σᵢ·zᵢ`
   from the best fit and the assumed Gaussian error model, then re-fits. This
   *does* trust `σ`, so it tracks the HESSE error closely — useful as a check that
@@ -799,9 +787,10 @@ prominently:
 The flag is exposed as `mode.new_min`. This connects directly to the IAM
 cold-start convergence gap (see [`IAM_CONVERGENCE_GAP.md`](https://github.com/fkguo/NativeMinuit.jl/blob/main/docs/dev/IAM_CONVERGENCE_GAP.md)):
 a separated cluster can be exactly the basin a stiff cold-start fit failed to
-reach. Per-mode re-fits are parallelized across threads when the fit opts into
-threading (`m.threaded_gradient`, honoring the same FCN thread-safety requirement as
-NativeMinuit's threaded gradient).
+reach. Set `parallel=true` or `parallel=false` to choose concurrent or
+serial execution of sample evaluations and mode refits. By default the
+choice follows the fit's threading settings. Concurrent execution requires
+a thread-safe objective.
 
 ### Expensive cost functions: control every FCN call
 
@@ -818,8 +807,9 @@ modes = find_solution_modes(samples, m; fvals = :none)
 # K FCN calls (one per cluster): full χ²/Δχ² report at medoid representatives.
 modes = find_solution_modes(samples, m; fvals = :lazy)
 
-# Or pass the per-sample χ² you already have (get_contours_samples keeps them).
-modes = find_solution_modes(samples, m; fvals = my_chi2s)
+# Recover absolute objective values from r = get_contours_samples(m; ...).
+fvals = m.fval .+ r.up .* r.delta_chisq_values
+modes = find_solution_modes(r.samples, m; fvals = fvals)
 
 # Budgeted refine: refine_maxfcn is the low-level call threshold per attempt,
 # not a hard cap on total calls; a completed probe and retries can exceed it.
@@ -866,14 +856,19 @@ Each round bootstrap-resamples the data and re-fits each resample; those drift
 toward whichever basin best explains that subset. The candidates are clustered
 with `find_solution_modes(...; refine = true)`, **re-evaluated on the ORIGINAL
 data** (so the χ² comparison is honest), and the deepest valid new basin is
-adopted; repeat. Fixed parameters are re-pinned during refinement and bounds are
-respected throughout:
+adopted; repeat. The original-objective refinement uses the fit's limits
+and fixed parameters. Apply those constraints in your `refit` callback
+as well when you want to constrain the bootstrap search.
 
 ```julia
-# refit(subdata, start) -> parameter vector (NaNs ⇒ invalid, dropped)
-refit = (sub, start) -> (fm = migrad(CostFunction(p -> chi2_on(sub, p)), start, errs);
-                         is_valid(fm) ? collect(values(fm)) : fill(NaN, length(start)))
-m_deep = find_deeper_minimum(m, refit, data)      # m may carry fixed/limits — honoured
+# refit(subdata, start) returns fitted parameters, or NaNs for an invalid fit
+function refit(sub, start)
+    fit = Minuit(p -> chi2_on(sub, p), start; errors = errs,
+                 limits = collect(m.limits), fixed = collect(m.fixed))
+    migrad!(fit)
+    return fit.valid ? collect(fit.values) : fill(NaN, length(start))
+end
+m_deep = find_deeper_minimum(m, refit, data)
 m_deep.valid || error("search failed")
 minos!(m_deep)                                    # now do error analysis HERE
 ```
@@ -984,9 +979,9 @@ usual. See [`src/plot_recipes.jl`](https://github.com/fkguo/NativeMinuit.jl/blob
    Cousins limit. A flat prior recovers the likelihood-ensemble quantiles. See
    the [Bayesian analysis guide](bayesian.md) for worked examples (upper limits,
    nuisance marginalization, derived quantities, EFT naturalness).
-5. **Doubt the error model** (don't trust the quoted `σ`, suspect correlations or
-   mis-scaling): cross-check with the **nonparametric bootstrap** — a bootstrap
-   error far from the HESSE error tells you the `σ` are wrong.
+5. **Doubt the error model**: compare the HESSE and nonparametric bootstrap
+   errors. Investigate a large discrepancy before assigning it to the quoted
+   uncertainties.
 6. **Suspect estimator bias** (nonlinear, boundary, small `N`): run the
    **jackknife** for an explicit bias estimate and a bias-corrected value.
 7. **Check** that the resampling estimate agrees with the curvature error:

@@ -27,30 +27,20 @@ NativeMinuit mirrors C++ Minuit2's module structure:
 ## Inner-MIGRAD loop
 
 `_migrad_loop` in `src/migrad.jl` implements the C++
-`VariableMetricBuilder::Minimum` do-while. Inner DFP iteration:
+`VariableMetricBuilder::Minimum` do-while. An inner DFP iteration performs
+the line search, evaluates the gradient at the accepted point, estimates the
+EDM from the previous inverse Hessian, and updates the inverse Hessian.
+For the loop test, the updated covariance-change estimate `dcovar` gives
+$\mathrm{EDM}_{\mathrm{corrected}}=\mathrm{EDM}(1+3\,\mathrm{dcovar})$.
+The loop compares this value with its EDM target and checks the objective
+call budget.
 
-```
-while EDM > tol && nfcn < maxfcn:
-    step = -V·∇
-    line-search → α*
-    accept new point
-    compute gradient
-    compute EDM from old V
-    DFP rank-2 update of V
-```
-
-Outer Strategy ≥ 1 wrapper (Phase 1):
-
-```
-do:
-    inner DFP
-    if Strategy == 2 OR (Strategy == 1 && Dcovar > 0.05):
-        call hesse(state)
-        if Hesse fails: break
-        if new EDM > tol: iterate (re-enter inner DFP)
-    if ipass == 0: bump maxfcn → maxfcn × 1.3
-while iterate
-```
+The outer loop exits before HESSE if the call budget is exhausted or a
+non-first DFP pass returns an invalid result. It refines the Hessian at
+strategy 2, or at strategy 1 when `dcovar > 0.05`. A failed HESSE ends the
+loop. After a valid HESSE, another DFP pass requires an EDM above the target
+and at least `abs(prec.eps2 * fval)`. After the first pass the call budget for
+subsequent passes is `floor(Int, 1.3 * maxfcn)`.
 
 ## Bound transforms
 
@@ -73,8 +63,10 @@ parameters (the chain-rule factor flips sign).
 The `_cross_core` in `function_cross.jl` ports C++
 `MnFunctionCross.cxx:117-507` step-by-step:
 
-1. Quadratic seed: `α₁ = sqrt(up / (f - fmin)) - 1` clamped to `[-0.5, 1]`.
-2. Inner MIGRAD at `α₁`. Compute `dfda = (f₁ - f₀) / (α₁ - 0)`.
+1. Run an inner fit at $\alpha=0$ and record its objective. For the quadratic
+   prediction, floor this value at the minimum plus $0.1\,u_{\mathrm{eff}}$.
+2. Predict the next $\alpha$ with the quadratic model, then run an inner fit
+   there. Use the first two profiled values to estimate the slope.
 3. **L300**: while `dfda < 0`, extend `α` outward.
 4. **L460**: linear extrapolation `α₂ = α₁ + (aim - f₁) / dfda`.
    Run inner MIGRAD at `α₂`, get 3rd point.
@@ -88,9 +80,11 @@ The `_cross_core` in `function_cross.jl` ports C++
    pick root with positive slope; window-clamp; re-probe; replace iout.
 7. Convergence: `|α - α[ibest]| < tla AND |f[ibest] - aim| < tlf`.
 
-Tolerances `tla = tlr = 0.01` and `tlf = 0.01·up` are hardcoded per C++
-(`MnFunctionCross.cxx:40`); the user's `tlr` controls only the inner-MIGRAD
-tolerance via `mgr_tlr = 0.5 · tlr`.
+The effective error definition $u_{\mathrm{eff}}=\mathrm{up}\,\mathrm{up\_scale}$
+sets the objective rise for the crossing. The value tolerance is
+$0.01\,u_{\mathrm{eff}}$ and the prediction check uses
+$0.01\max(1,|\alpha|)$ for the step tolerance. The caller's `tlr` sets
+the inner-MIGRAD tolerance via `mgr_tlr = 0.5 * tlr`.
 
 ## [Internal coordinate allocation](@id _internal_vector)
 

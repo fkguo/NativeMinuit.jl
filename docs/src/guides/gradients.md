@@ -12,18 +12,17 @@ NativeMinuit accepts `grad=` callbacks and provides two Julia integrations:
 - **Threaded numerical gradients** for objectives whose simultaneous calls keep
   mutable state private. Start Julia with `julia -t N` to enable parallel work.
 
-These choices also apply to MINOS and contour searches. For a cheap objective,
-threading overhead can outweigh its benefit. AD costs depend on the objective
-and ForwardDiff chunk size. Compare the actual supported workload when choosing
-a gradient; there is no universal crossover in parameter count or call time.
-Threading the per-coordinate numerical loop is a no-op when `grad=` is supplied.
+MINOS and MnContours use these gradient choices for their inner fits.
+`mnprofile` forwards `grad=` and uses serial gradients by default. A
+`contour_grid` evaluates the objective on a grid. Compare elapsed time for the
+actual fit when choosing between serial numerical, threaded numerical, and AD
+gradients.
 
 ## AD gradients via ForwardDiff
 
-Install the optional package with `Pkg.add("ForwardDiff")`, then load
-`using NativeMinuit, ForwardDiff`. Loading both activates the extension
-that supplies `CostFunctionAD`; installing ForwardDiff alone does not activate it.
-You can pass a gradient callback directly or use the gradient factory.
+Install ForwardDiff with `Pkg.add("ForwardDiff")` and load it alongside
+NativeMinuit. Pass a gradient with `grad=` or build a low-level cost with
+`CostFunctionAD`.
 
 A complete example:
 
@@ -69,16 +68,11 @@ cf  = CostFunctionAD(chi2, 1.0)      # up = 1 (χ²); 0.5 for an NLL
 fmin = migrad(cf, x0, errs)
 ```
 
-`CostFunctionAD(f, up)` is exactly `CostFunctionWithGradient(f, x ->
-ForwardDiff.gradient(f, x), up)` — see [`CostFunctionWithGradient`](@ref). For
-`n ≳ 12` you can pass `chunk_size = 4` (or so) to trade a little speed for lower
-memory pressure; the default lets ForwardDiff pick.
-
-> **Note — Calling `CostFunctionAD` without ForwardDiff**
->
-> `CostFunctionAD` is only a stub until `using ForwardDiff` is loaded — calling
-> it beforehand raises an informative error. ForwardDiff is a weak (optional)
-> dependency, so a plain `using NativeMinuit` install stays lightweight.
+`CostFunctionAD(f, up)` returns a [`CostFunctionWithGradient`](@ref) that
+differentiates `f` with ForwardDiff. For dense Float64 vectors it can reuse
+the gradient configuration within the owning task. ForwardDiff selects the
+default chunk size. Compare representative fits to tune `chunk_size` for
+your model.
 
 ### The genericity requirement
 
@@ -173,10 +167,12 @@ catch (worked failure case:
 NativeMinuit's internal gradient and transform buffers belong to the work unit
 or invocation using them. Your FCN must likewise avoid sharing mutable scratch. Two safety nets back it up:
 
-- **Automatic verification.** With `threaded_gradient=true` (and the default
-  `verify_threading=true`), the entry check runs the gradient both
-  sequentially and threaded at the seed and compares them; a mismatch raises
-  [`ThreadSafetyError`](@ref) with a diagnostic pointing at the likely cause.
+- **Automatic verification.** Constructing `Minuit` with
+  `threaded_gradient=true` enables `verify_threading` by default. To enable
+  both for a particular call on an otherwise serial fit, use
+  `migrad!(m; threaded_gradient=true, verify_threading=true)`. The entry
+  check compares serial and threaded gradients at the seed and raises
+  [`ThreadSafetyError`](@ref) on a detected mismatch.
 - **A standalone probe.** [`is_thread_safe(cf, x0)`](@ref) returns `true`/`false`
   on a completed probe, converting `ThreadSafetyError` to `false`; other
   exceptions propagate. Use it to gate the decision:
