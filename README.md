@@ -1,6 +1,7 @@
 # NativeMinuit.jl
 
 [![Dev docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://fkguo.github.io/NativeMinuit.jl/dev)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24475297.svg)](https://doi.org/10.5281/zenodo.24475297)
 [![License: LGPL v2.1+](https://img.shields.io/badge/License-LGPL%20v2.1%2B-blue.svg)](LICENSE)
 [![Julia General](https://img.shields.io/badge/Julia%20General-registered-9558B2.svg)](https://github.com/JuliaRegistries/General/tree/master/N/NativeMinuit)
 [![Pkg requests](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fpackages%2FNativeMinuit%2Fstats%3Ftimeframe%3Dall%26user_data%3Dtrue%26ci_data%3Dtrue%26missing_data%3Dtrue&query=timeframe_requests&label=Pkg%20requests&color=brightgreen)](https://juliapkgstats.com/pkg/NativeMinuit?timeframe=all&trendingPeriod=14d&userData=true&ciData=true&missingData=true)
@@ -344,13 +345,12 @@ The command creates the link at an unused destination. Request
 
 ## Citation
 
-If you use NativeMinuit.jl in a publication, please cite **both** NativeMinuit.jl and the
-upstream Minuit algorithms it ports. NativeMinuit.jl ships a
-[`CITATION.cff`](CITATION.cff) — use GitHub's **"Cite this repository"** button
-for APA / BibTeX, or:
+Please cite the NativeMinuit.jl release you used and the original MINUIT paper.
+The [`CITATION.cff`](CITATION.cff) file supplies the software citation for
+GitHub's **Cite this repository** button in APA and BibTeX.
 
-> F.-K. Guo, *NativeMinuit.jl: a native-Julia port of Minuit2*,
-> [NativeMinuit.jl](https://github.com/fkguo/NativeMinuit.jl) (2026).
+> F.-K. Guo (2026). *NativeMinuit.jl: a native-Julia port of Minuit2*
+> (v0.8.0). Zenodo. [doi:10.5281/zenodo.24475298](https://doi.org/10.5281/zenodo.24475298)
 >
 > F. James and M. Roos, "MINUIT: A system for function minimization and analysis
 > of the parameter errors and correlations", Comput. Phys. Commun. **10** (1975)
@@ -358,6 +358,11 @@ for APA / BibTeX, or:
 
 ## Acknowledgements
 
+NativeMinuit.jl is developed by Feng-Kun Guo and
+[contributors](https://github.com/fkguo/NativeMinuit.jl/graphs/contributors).
+
+- **Mikhail Mikhasenko** contributed support for structured parameter vectors
+  and HESSE errors.
 - **C++ Minuit2** by M. Winkler, F. James, L. Moneta, A. Zsenei (CERN PH/SFT,
   2003–) — the algorithmic basis. This Julia port is a derivative work.
 - **[IMinuit.jl](https://github.com/fkguo/IMinuit.jl)** (Feng-Kun Guo, Yu Zhang)

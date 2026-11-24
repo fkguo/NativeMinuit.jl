@@ -17,7 +17,9 @@ authors:
 repository-code: "https://github.com/fkguo/NativeMinuit.jl"
 url: "https://github.com/fkguo/NativeMinuit.jl"
 license: LGPL-2.1-or-later
-date-released: "2026-07-06"
+version: "0.8.0"
+doi: "10.5281/zenodo.24475298"
+date-released: "2026-11-23"
 keywords:
   - Julia
   - Minuit
