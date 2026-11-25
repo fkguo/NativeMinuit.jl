@@ -3,6 +3,33 @@
 using LinearAlgebra
 
 @testset "davidon.jl — DFP update" begin
+    @testset "Packed Davidon scratch preserves the dense update" begin
+        n = 16
+        original = [i == j ? 2.0 : (i < j ? (-1.0)^(i + j) / 97 : -0.0)
+                    for i in 1:n, j in 1:n]
+        dg = [(-1.0)^i * i / 13 for i in 1:n]
+        packed = NativeMinuit.MigradScratch(zeros(n), true).vUpd_work
+        @test packed isa Vector{Float64}
+        @test length(packed) == n * (n + 1) ÷ 2
+        @test NativeMinuit.MigradScratch(n).vUpd_work isa Symmetric
+        dense = Symmetric(zeros(n, n), :U)
+        for scale in (0.1, 10.0, -1.0)
+            dx = scale .* dg
+            reference = Symmetric(copy(original), :U)
+            actual = Symmetric(copy(original), :U)
+            dense_result = NativeMinuit.davidon_update!(reference, dx, dg, 0.125, zeros(n), dense)
+            packed_result = NativeMinuit.davidon_update!(actual, dx, dg, 0.125, zeros(n), packed)
+            @test dense_result[2] === packed_result[2] === :updated
+            @test bitstring(dense_result[1]) == bitstring(packed_result[1])
+            @test reinterpret(UInt64, vec(parent(reference))) == reinterpret(UInt64, vec(parent(actual)))
+        end
+        V = Symmetric(copy(original), :U)
+        @test_throws DimensionMismatch NativeMinuit.davidon_update!(V, dg, dg, 0.125, zeros(n), zeros(n))
+        @test_throws ArgumentError NativeMinuit.davidon_update!(Symmetric(copy(original), :L),
+                                                                dg, dg, 0.125, zeros(n), packed)
+        @test reinterpret(UInt64, vec(parent(V))) == reinterpret(UInt64, vec(original))
+    end
+
     @testset "Fused update preserves triangle sums and storage bits" begin
         # Entries span several magnitudes so changing either summation
         # order can change the result. The unused triangle must be untouched.

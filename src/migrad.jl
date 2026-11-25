@@ -38,7 +38,8 @@ struct is not part of the public API (no export).
 - `n::Int` — buffer length / matrix order.
 - `step, ls_work, grad_work, vg_work, dx_buf, dg_buf` — per-iteration
   scratch vectors (length `n`).
-- `vUpd_work` — DFP update scratch (Symmetric{Matrix{Float64}}, n×n).
+- `vUpd_work` — DFP scratch, storing the original upper triangle for a
+  private fit or the update in a symmetric matrix for a reusable pool.
 - `x_a, g_a, g2_a, gs_a, V_a` and `_b` ping-pong sets — alternating
   MinimumState buffer storage; one set wraps `s0`, the other receives
   the next iteration's values.
@@ -69,7 +70,7 @@ mutable struct MigradScratch{V<:AbstractVector{Float64}}
     ls_work::V
     grad_work::V
     vg_work::V
-    vUpd_work::Symmetric{Float64,Matrix{Float64}}
+    vUpd_work::Union{Symmetric{Float64,Matrix{Float64}},Vector{Float64}}
     dx_buf::V
     dg_buf::V
     x_a::V;  x_b::V
@@ -98,7 +99,8 @@ function MigradScratch(active::AbstractVector{Float64}, fit_private::Bool)
         makevec(),
         makevec(),
         makevec(),
-        Symmetric(Matrix{Float64}(undef, n_, n_), :U),
+        fit_private ? Vector{Float64}(undef, n_ * (n_ + 1) ÷ 2) :
+                      Symmetric(Matrix{Float64}(undef, n_, n_), :U),
         # The Davidon update runs after the search direction's last use.
         fit_private ? step : makevec(),
         makevec(),
@@ -742,8 +744,7 @@ function _migrad_loop(
     #
     # Note on `undef` initialization: `step` is fully written by
     # `sym_mul!(step, V, g, -1.0, 0.0)` (β=0 → step is not read) before
-    # each use. `vUpd_work` is `fill!(parent(vUpd_work), 0.0)`-zeroed
-    # by `davidon_update!` itself (davidon.jl:123). Ping-pong V_a / V_b
+    # each use. `davidon_update!` initializes its own scratch. Ping-pong V_a / V_b
     # have their lower triangles overwritten via `copyto!(parent(...), ...)`
     # before any read; subsequent in-place DFP / make_posdef ops preserve
     # the upper-triangle authoritative semantics. So `undef` everywhere

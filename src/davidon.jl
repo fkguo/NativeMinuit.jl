@@ -57,8 +57,11 @@ The summation `∑M` is over the authoritative triangle plus diagonal
 - `vg_work::AbstractVector{Float64}` — preallocated workspace of
   length `n`. Used to hold `V·dg`, then later (during the rank-1
   branch) overwritten with `dx/δ − vg/γ`.
-- `vUpd_work::Symmetric{Float64,Matrix{Float64}}` — preallocated
-  workspace symmetric matrix of size `n×n`, same `uplo` as `V`.
+- `vUpd_work` — a preallocated symmetric matrix of size `n×n` with the
+  same `uplo` as `V`. For a fit-owned upper-triangle `V`, a vector of length
+  `n*(n+1)÷2` can hold the original triangle while `V` holds the update.
+  In that case `V` and the packed buffer must be private and disjoint from
+  `dx`, `dg`, and `vg_work`.
 
 # Returns
 
@@ -79,7 +82,7 @@ function davidon_update!(
     dg::AbstractVector{Float64},
     prev_dcovar::Real,
     vg_work::AbstractVector{Float64},
-    vUpd_work::Symmetric{Float64,Matrix{Float64}},
+    vUpd_work::Union{Symmetric{Float64,Matrix{Float64}},Vector{Float64}},
 )
     n = LinearAlgebra.checksquare(parent(V))
     length(dx) == n ||
@@ -88,10 +91,7 @@ function davidon_update!(
         throw(DimensionMismatch("dg length $(length(dg)) != V size $n"))
     length(vg_work) == n ||
         throw(DimensionMismatch("vg_work length $(length(vg_work)) != V size $n"))
-    LinearAlgebra.checksquare(parent(vUpd_work)) == n ||
-        throw(DimensionMismatch("vUpd_work size != V size"))
-    V.uplo == vUpd_work.uplo ||
-        throw(ArgumentError("V and vUpd_work must share triangle convention"))
+    _check_davidon_workspace(V, vUpd_work, n)
 
     prev_dc_f = Float64(prev_dcovar)
 
@@ -118,11 +118,11 @@ function davidon_update!(
         return (prev_dc_f, :unchanged_gvg_nonpositive)
     end
 
-    # ── Step 3: rank-2 base in vUpd_work ─────────────────────────────
+    # ── Step 3: rank-2 base in the cleared triangle ─────────────────
     # vUpd = (dx ⊗ dx)/δ − (vg ⊗ vg)/γ
-    fill!(parent(vUpd_work), 0.0)        # zero authoritative + non-auth
-    sym_rank1_update!(vUpd_work,  1.0 / delgam, dx)
-    sym_rank1_update!(vUpd_work, -1.0 / gvg,    vg_work)
+    delta = _davidon_workspace!(V, vUpd_work, n)
+    sym_rank1_update!(delta,  1.0 / delgam, dx)
+    sym_rank1_update!(delta, -1.0 / gvg,    vg_work)
 
     # ── Step 4: optional rank-1 additive correction ──────────────────
     # When δ > γ: vUpd += γ · ((dx/δ − vg/γ) ⊗ (dx/δ − vg/γ))
@@ -131,13 +131,47 @@ function davidon_update!(
         @inbounds for i in 1:n
             vg_work[i] = dx[i] / delgam - vg_work[i] / gvg
         end
-        sym_rank1_update!(vUpd_work, gvg, vg_work)
+        sym_rank1_update!(delta, gvg, vg_work)
     end
 
     sum_upd, sum_new = _davidon_add_and_sum!(V, vUpd_work, n)
     new_dcov = 0.5 * (prev_dc_f + sum_upd / sum_new)
 
     return (new_dcov, :updated)
+end
+
+function _check_davidon_workspace(V, work::Symmetric, n)
+    LinearAlgebra.checksquare(parent(work)) == n ||
+        throw(DimensionMismatch("vUpd_work size != V size"))
+    V.uplo == work.uplo ||
+        throw(ArgumentError("V and vUpd_work must share triangle convention"))
+    return nothing
+end
+
+function _check_davidon_workspace(V, work::Vector{Float64}, n)
+    length(work) == n * (n + 1) ÷ 2 ||
+        throw(DimensionMismatch("vUpd_work length != packed triangle size"))
+    V.uplo == 'U' ||
+        throw(ArgumentError("packed Davidon workspace requires the upper triangle"))
+    return nothing
+end
+
+function _davidon_workspace!(V, work::Symmetric, n)
+    fill!(parent(work), 0.0)
+    return work
+end
+
+function _davidon_workspace!(V, work::Vector{Float64}, n)
+    # Save the original triangle and use V as the destination for the same
+    # BLAS.syr! calls. BLAS.spr! can round differently on some backends.
+    matrix = parent(V)
+    k = 0
+    @inbounds for j in 1:n, i in 1:j
+        k += 1
+        work[k] = matrix[i, j]
+        matrix[i, j] = 0.0
+    end
+    return V
 end
 
 # The caller checks the sizes and triangle convention. Keep the order of each
@@ -162,6 +196,23 @@ function _davidon_add_and_sum!(V::Symmetric{Float64,Matrix{Float64}},
             sum_upd += abs(entry)
             sum_new += abs(value)
         end
+    end
+    return sum_upd, sum_new
+end
+
+function _davidon_add_and_sum!(V::Symmetric{Float64,Matrix{Float64}},
+                               original::Vector{Float64}, n::Int)
+    matrix = parent(V)
+    sum_upd = 0.0
+    sum_new = 0.0
+    k = 0
+    @inbounds for j in 1:n, i in 1:j
+        k += 1
+        entry = matrix[i, j]
+        value = original[k] + entry
+        matrix[i, j] = value
+        sum_upd += abs(entry)
+        sum_new += abs(value)
     end
     return sum_upd, sum_new
 end
